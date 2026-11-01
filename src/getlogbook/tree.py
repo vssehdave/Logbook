@@ -15,6 +15,7 @@ from . import git as g
 from .store import atomic_write, user_id
 
 SPINE_LIMIT = 500
+MERGE_SHOWN = 40  # children listed per merge card; the rest are counted
 _PR = re.compile(r"\(#(\d+)\)")
 _LAYERS = [("raw", ("raw_", "src_", "source_")), ("staging", ("stg_", "staging_")), ("intermediate", ("int_",)),
            ("mart", ("fct_", "dim_", "mart_", "rpt_"))]
@@ -49,8 +50,42 @@ def spine(repo, limit=SPINE_LIMIT):
     rows = []
     for line in out.splitlines() if rc == 0 else []:
         h, t, p, an, ad, s, ae = (line.split("\x1f") + [""] * 7)[:7]
-        rows.append({"sha": h, "tree": t, "parent": p.split()[0] if p else "", "author": an, "date": ad, "subject": s, "email": ae})
+        rows.append({"sha": h, "tree": t, "parent": p.split()[0] if p else "", "parents": p.split(), "author": an, "date": ad,
+                     "subject": s, "email": ae})
     return rows
+
+
+SIDE_SCAN = 3000  # newest commits scanned for merge side branches; older merges just show no children
+_MERGED = re.compile(r"Merge (?:branch|remote-tracking branch) '([^']+)'|Merge pull request #\d+ from (?:[^/\s]+/)?(\S+)")
+
+
+def merged_branch(subject):
+    m = _MERGED.match(subject)
+    return (m.group(1) or m.group(2)) if m else ""
+
+
+def merge_sides(repo, sp):
+    """{merge sha: [commits it brought in, newest first]} for merges on the spine, from one git log (no per-merge subprocess)."""
+    merges = [c for c in sp if len(c["parents"]) > 1]
+    if not merges:
+        return {}
+    rc, out, _ = g.try_run(["log", f"-n{SIDE_SCAN}", "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s"], repo.root)
+    rows = {}
+    for line in out.splitlines() if rc == 0 else []:
+        h, p, an, ad, s = (line.split("\x1f") + [""] * 5)[:5]
+        rows[h] = {"sha": h, "parents": p.split(), "author": an, "date": ad, "subject": s}
+    spine_shas, claimed, sides = {c["sha"] for c in sp}, set(), {}
+    for m in merges:  # newest merge first, so a commit belongs to the merge that brought it in
+        stack, got = list(m["parents"][1:]), []
+        while stack:
+            sha = stack.pop()
+            if sha in spine_shas or sha in claimed or sha not in rows:
+                continue
+            claimed.add(sha)
+            got.append(rows[sha])
+            stack.extend(rows[sha]["parents"])
+        sides[m["sha"]] = sorted(got, key=lambda r: r["date"], reverse=True)
+    return sides
 
 
 def get_derived(repo, head=None):
@@ -223,18 +258,29 @@ def all_views(repo):
 
 def build(repo):
     views, anch = all_views(repo)
+    sides = merge_sides(repo, anch.sp)
+    on_side = {s["sha"] for cs in sides.values() for s in cs}
     by_commit, loose = {}, {}
     for v in views:
-        if v["placed"] in anch.by_sha:
+        if v["placed"] in anch.by_sha or v["placed"] in on_side:
             by_commit.setdefault(v["placed"], []).append(v)
         else:
             loose.setdefault(v["branch"] or "(no branch)", []).append(v)
+
+    def card(c):
+        ents = sorted(by_commit.get(c["sha"], []), key=lambda v: v["id"])
+        return {**c, "short": c["sha"][:8], "entries": ents, "layers": sorted({l for v in ents for l in v["layers"]})}
+
     commits = []
     for c in anch.sp:
-        ents = sorted(by_commit.get(c["sha"], []), key=lambda v: v["id"])
-        if ents or len(commits) < 30:
-            commits.append({**c, "short": c["sha"][:8], "entries": ents,
-                            "layers": sorted({l for v in ents for l in v["layers"]})})
+        ents = by_commit.get(c["sha"])
+        if ents or c["sha"] in sides or len(commits) < 30:
+            row = card(c)
+            if c["sha"] in sides:
+                kids = sides[c["sha"]]
+                row["merge"] = {"branch": merged_branch(c["subject"]), "commits": [card(s) for s in kids[:MERGE_SHOWN]],
+                                "more": max(0, len(kids) - MERGE_SHOWN)}
+            commits.append(row)
     loose_list = [{"branch": b, "entries": sorted(es, key=lambda v: v["id"])} for b, es in sorted(loose.items())]
-    return {"head": g.head_sha(repo.root) or "", "branch": g.branch(repo.root), "shallow": anch.shallow,
+    return {"repo": repo.root.name, "head": g.head_sha(repo.root) or "", "branch": g.branch(repo.root), "shallow": anch.shallow,
             "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views)}
