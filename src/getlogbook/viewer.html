@@ -66,12 +66,17 @@ p.sub{margin:0 0 14px;color:var(--muted);max-width:70ch}
 .cl{position:absolute;right:calc(100% + 44px);top:3px;width:110px;text-align:right;line-height:1.25;white-space:nowrap}
 .cl .cd{display:block;font-size:12px;color:var(--ink)}
 .cl .sha{display:block;font-size:11.5px}
-.mergebox{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:14px;padding:4px 14px 10px;margin:8px 0}
-.mhead{display:flex;gap:10px;align-items:center;width:100%;border:0;background:transparent;padding:8px 0;text-align:left}
+.mergebox{background:color-mix(in srgb,var(--accent) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-left:4px solid var(--accent);border-radius:14px;margin:8px 0}
+.mhead{display:flex;gap:10px;align-items:center;width:100%;border:0;background:transparent;padding:11px 15px;text-align:left;border-radius:14px}
 .mhead svg:first-child{color:var(--accent)}
-.rail.sub{margin:4px 0 2px 112px}
-.rail.sub .cl{width:96px}
+.rail.sub{margin:8px 0 2px 112px}
+.rail.sub .cl{width:96px;top:10px}
+.rail.sub .commit{background:var(--panel);border:1px solid var(--line);border-left:3px solid color-mix(in srgb,var(--accent) 55%,var(--line));border-radius:14px;padding:8px 14px 10px;margin-bottom:12px}
+.rail.sub .commit::before{top:15px}
+.rail.sub .commit::after{top:27px;bottom:-13px}
 .rail.sub .commit:last-child{margin-bottom:6px}
+.rail.sub .note{background:var(--panel2)}
+.mmore{margin:0 0 6px 112px}
 .chead{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:3px 0}
 .sha{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted)}
 .subject{font-weight:600}
@@ -250,9 +255,9 @@ function viewTimeline(){
       m&&h("div",{class:"mergebox"},
         h("button",{class:"mhead","aria-expanded":String(open),onclick:()=>{open?COLLAPSED.add(c.sha):COLLAPSED.delete(c.sha);render();}},
           ico("merge"),h("b",{},m.branch?["Merged ",h("span",{class:"mono"},m.branch)]:"Merge"),
-          h("span",{class:"meta"},n+(n===1?" commit":" commits")+" brought in"),h("span",{class:"spacer"}),ico(open?"down":"right")),
-        open&&kids.length>0&&h("div",{class:"rail sub"},kids),
-        open&&m.more>0&&h("div",{class:"meta"},"+ "+m.more+" older commits not shown")),
+          h("span",{class:"meta"},n+(n===1?" commit":" commits")+" brought in"),h("span",{class:"spacer"}),ico(open?"down":"right"))),
+      open&&kids.length>0&&h("div",{class:"rail sub"},kids),
+      m&&open&&m.more>0&&h("div",{class:"meta mmore"},"+ "+m.more+" older commits not shown"),
       es.length?es.map(noteCard):(m?null:h("div",{class:"gaptext"},ico("alert"),"No reason recorded for this commit")));}
   for(const c of TREE.commits){const b=block(c,false);if(b)rail.append(b);}
   const loose=TREE.unplaced.map(g=>({branch:g.branch,es:g.entries.filter(pass)})).filter(g=>g.es.length);
@@ -310,8 +315,9 @@ function renderTop(){
 
 function render(){
   if(!TREE)return;renderTop();
-  const body=RESULTS?viewResults():({timeline:viewTimeline,models:viewModels,recent:viewRecent,gaps:viewGaps}[VIEW]||viewTimeline)();
-  $("#main").replaceChildren(...[body].flat(Infinity).filter(Boolean));renderDrawer();}
+  try{const body=RESULTS?viewResults():({timeline:viewTimeline,models:viewModels,recent:viewRecent,gaps:viewGaps}[VIEW]||viewTimeline)();
+    $("#main").replaceChildren(...[body].flat(Infinity).filter(Boolean));renderDrawer();}
+  catch(e){console.error(e);$("#main").replaceChildren(empty("alert","Could not draw this view",String(e&&e.message||e)));}}
 
 function setView(v){VIEW=v;RESULTS=null;QTEXT="";$("#q").value="";writeHash();render();window.scrollTo(0,0);}
 function writeHash(){const h2=VIEW+(SEL?"?e="+SEL:"");if(location.hash.slice(1)!==h2)history.replaceState(null,"","#"+h2);}
