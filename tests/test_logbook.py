@@ -395,5 +395,28 @@ class TestServer(Base):
         self.assertEqual(req("GET", "/api/search?q=alert", cookie)[0], 200)
 
 
+class TestMergeCards(Base):
+    def test_merge_lists_side_commits_and_places_their_notes(self):
+        d = make_repo(self.root, "alice", "a@example.com")
+        commit(d, "base", {"a.sql": "1"})
+        sh("git", "checkout", "-q", "-b", "feature/x", cwd=d)
+        s1 = commit(d, "side one", {"b.sql": "1"})
+        s2 = commit(d, "side two", {"c.sql": "1"})
+        sh("git", "checkout", "-q", "-", cwd=d)
+        sh("git", "merge", "-q", "--no-ff", "-m", "Merge branch 'feature/x'", "feature/x", cwd=d)
+        r = Repo(d)
+        r.init()
+        e = capture.make_entry(r, "change", "side note", {"summary": "s", "why": "w"}, paths=["c.sql"])
+        e.anchor = tree.anchor_for(r, sha=s2)
+        r.add_private(e)
+        t = tree.build(r)
+        m = next(c for c in t["commits"] if c.get("merge"))
+        self.assertEqual(m["merge"]["branch"], "feature/x")
+        self.assertEqual({c["sha"] for c in m["merge"]["commits"]}, {s1, s2})
+        self.assertEqual([x["id"] for c in m["merge"]["commits"] if c["sha"] == s2 for x in c["entries"]], [e.id])
+        self.assertEqual(t["unplaced"], [])
+        self.assertEqual(tree.merged_branch("Merge pull request #7 from acme/fix-refunds"), "fix-refunds")
+
+
 if __name__ == "__main__":
     unittest.main()

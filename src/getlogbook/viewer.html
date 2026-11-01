@@ -3,98 +3,370 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>logbook</title>
+<title>Logbook</title>
 <style nonce="{{NONCE}}">
-:root{--bg:#f4efe6;--surface:#fbf8f2;--ink:#2a2622;--muted:#6d655a;--line:#ddd4c3;--clay:#c4603c;--raw:#8c4a37;--stg:#b48a2e;--int:#6c8767;--mart:#4d6577;--ok:#5c8a62;--warn:#b48a2e;--bad:#b13e2d;
---serif:Georgia,"Times New Roman",serif;--sans:system-ui,-apple-system,"Segoe UI",sans-serif;--mono:ui-monospace,Consolas,monospace}
-@media (prefers-color-scheme:dark){:root{--bg:#1d1b18;--surface:#262320;--ink:#ece5d8;--muted:#a39a8a;--line:#3a362f;--clay:#e5865f;--raw:#c7765b;--stg:#d3a54c;--int:#8fae8a;--mart:#7d9db3;--ok:#7fb086;--warn:#d9a441;--bad:#e0705c;color-scheme:dark}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans)}
-header{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--surface)}
-h1{font:500 20px var(--serif);margin:0 auto 0 0}
-input,select,button{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:5px 9px}
-input{width:min(320px,100%)}button{cursor:pointer}button:focus-visible,input:focus-visible,summary:focus-visible,.row:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-#status{padding:6px 16px;color:var(--muted);font-size:12.5px;border-bottom:1px solid var(--line)}
-main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);min-height:70vh}
-#left{border-right:1px solid var(--line);padding:10px 14px;overflow:auto;max-height:calc(100vh - 100px)}#right{padding:14px 18px;overflow:auto;max-height:calc(100vh - 100px)}
-details{margin:2px 0}summary{cursor:pointer;padding:3px 0}.sha{font-family:var(--mono);color:var(--muted);margin-right:6px}
-.row{display:block;padding:4px 8px;margin:2px 0 2px 16px;border-radius:6px;border:1px solid transparent;cursor:pointer}
-.row:hover{border-color:var(--line)}.row.sel{border-color:var(--clay);background:var(--surface)}.row.priv{border-style:dashed;border-color:var(--line)}
-.b{display:inline-block;font-size:11.5px;padding:0 7px;margin-right:4px;border:1px solid var(--line);border-radius:99px;color:var(--muted)}
-.b.finding{color:var(--clay);border-color:var(--clay)}.b.ok{color:var(--ok);border-color:var(--ok)}.b.warn{color:var(--warn);border-color:var(--warn)}.b.bad{color:var(--bad);border-color:var(--bad)}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px}.raw{background:var(--raw)}.staging{background:var(--stg)}.intermediate{background:var(--int)}.mart{background:var(--mart)}
-h2{font:500 22px var(--serif);margin:0 0 8px}h3{font:500 15px var(--serif);margin:14px 0 2px;text-transform:capitalize}
-p.f{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px;max-height:260px;overflow:auto}
-.muted{color:var(--muted)}.chip{font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin:0 4px 4px 0;display:inline-block}
-@media (max-width:820px){main{grid-template-columns:minmax(0,1fr)}#left{border-right:0;max-height:none}}
+:root{color-scheme:light dark;
+  --bg:#f6f5f1;--panel:#ffffff;--panel2:#f2f0ea;--line:#e3e0d8;--ink:#1c1b19;--muted:#6d6a62;--accent:#2f6fed;
+  --green:#1d8a4c;--amber:#a8700f;--red:#c0392b;--raw:#a8553a;--staging:#a77f1f;--intermediate:#4f7f55;--mart:#3f6384;--other:#8a867c}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0c0d10;--panel:#14161a;--panel2:#1a1d22;--line:#262a31;--ink:#e9eaee;--muted:#8c919b;--accent:#6ea0ff;
+  --green:#3ecf8e;--amber:#e5a93d;--red:#ef6a5b;--raw:#d9805f;--staging:#d9b04a;--intermediate:#7fb184;--mart:#6f9bc4;--other:#7b7f88}}
+*{box-sizing:border-box}
+html,body{min-height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button{font:inherit;color:inherit;cursor:pointer}
+input{font:inherit;color:inherit}
+.mono{font-family:ui-monospace,"Cascadia Code",Consolas,monospace}
+svg.i{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.top{position:sticky;top:0;z-index:10;display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:10px 22px;
+  background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.brand{display:flex;gap:9px;align-items:center;font-weight:700;font-size:16px;letter-spacing:-.01em}
+.brand svg{width:22px;height:22px;color:var(--accent)}
+.crumb{color:var(--muted);font-size:13px}
+.crumb b{color:var(--ink);font-weight:600}
+.search{flex:1;min-width:200px;max-width:520px;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:7px 12px;color:var(--muted)}
+.search:focus-within{border-color:var(--accent)}
+.search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--ink)}
+kbd{font:11px ui-monospace,Consolas,monospace;border:1px solid var(--line);border-radius:5px;padding:0 5px;color:var(--muted)}
+.tabs{display:flex;gap:2px;margin-left:auto}
+.tab{display:flex;gap:7px;align-items:center;border:0;background:transparent;padding:7px 12px;border-radius:10px;color:var(--muted)}
+.tab:hover{color:var(--ink)}
+.tab[aria-current=page]{background:var(--panel2);color:var(--ink)}
+.count{font-size:11px;line-height:16px;padding:0 6px;border-radius:99px;background:var(--panel2);color:var(--muted)}
+.count.red{background:color-mix(in srgb,var(--red) 18%,transparent);color:var(--red)}
+.count.green{background:color-mix(in srgb,var(--green) 18%,transparent);color:var(--green)}
+
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:14px 22px 4px}
+.seg{display:inline-flex;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:2px}
+.seg button{border:0;background:transparent;padding:4px 11px;border-radius:8px;color:var(--muted);font-size:13px}
+.seg button[aria-pressed=true]{background:var(--panel2);color:var(--ink)}
+.chip{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:3px 10px;font-size:12.5px;color:var(--muted)}
+button.chip:hover{color:var(--ink);border-color:var(--muted)}
+.spacer{flex:1}
+.status{color:var(--muted);font-size:12.5px;display:flex;gap:8px;align-items:center}
+
+.shell{display:grid;grid-template-columns:minmax(0,1fr)}
+.shell.open{grid-template-columns:minmax(0,1fr) 460px}
+.main{padding:8px 22px 80px;min-width:0}
+h2.title{font-size:22px;letter-spacing:-.01em;margin:14px 0 2px}
+p.sub{margin:0 0 14px;color:var(--muted);max-width:70ch}
+
+.rail{position:relative;margin:10px 0 40px 128px;padding-left:30px}
+.commit{position:relative;margin:0 0 20px}
+.commit::before{content:"";position:absolute;left:-30px;top:9px;width:12px;height:12px;border-radius:50%;background:var(--bg);border:2px solid var(--muted);z-index:1}
+.commit::after{content:"";position:absolute;left:-25px;top:21px;bottom:-20px;width:2px;background:var(--line)}
+.commit.has::before{border-color:var(--green);background:var(--green)}
+.commit.gap::before{border-color:var(--red)}
+.commit.has::after{background:color-mix(in srgb,var(--green) 45%,var(--line))}
+.commit.gap::after{background:color-mix(in srgb,var(--red) 45%,var(--line))}
+.commit.merge::before{border-radius:4px;border-color:var(--accent);background:var(--accent)}
+.rail>.commit:last-child::after{display:none}
+.cl{position:absolute;right:calc(100% + 44px);top:3px;width:110px;text-align:right;line-height:1.25;white-space:nowrap}
+.cl .cd{display:block;font-size:12px;color:var(--ink)}
+.cl .sha{display:block;font-size:11.5px}
+.mergebox{background:color-mix(in srgb,var(--accent) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));border-left:4px solid var(--accent);border-radius:14px;margin:8px 0}
+.mhead{display:flex;gap:10px;align-items:center;width:100%;border:0;background:transparent;padding:11px 15px;text-align:left;border-radius:14px}
+.mhead svg:first-child{color:var(--accent)}
+.rail.sub{margin:8px 0 2px 112px}
+.rail.sub .cl{width:96px;top:10px}
+.rail.sub .commit{background:var(--panel);border:1px solid var(--line);border-left:3px solid color-mix(in srgb,var(--accent) 55%,var(--line));border-radius:14px;padding:8px 14px 10px;margin-bottom:12px}
+.rail.sub .commit::before{top:15px}
+.rail.sub .commit::after{top:27px;bottom:-13px}
+.rail.sub .commit:last-child{margin-bottom:6px}
+.rail.sub .note{background:var(--panel2)}
+.mmore{margin:0 0 6px 112px}
+.chead{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:3px 0}
+.sha{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted)}
+.subject{font-weight:600}
+.meta{color:var(--muted);font-size:12.5px}
+.gaptext{color:var(--red);font-size:12.5px;display:flex;gap:6px;align-items:center;margin:2px 0}
+
+.note{display:block;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 15px;margin:8px 0;
+  transition:border-color .15s,box-shadow .15s}
+.note:hover{border-color:var(--muted)}
+.note.sel{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+.note.priv{border-style:dashed}
+.nrow{display:flex;gap:10px;align-items:center}
+.kind{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;flex:none}
+.kind.change{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)}
+.kind.finding{background:color-mix(in srgb,var(--amber) 16%,transparent);color:var(--amber)}
+.ntitle{font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nsum{margin:7px 0 0 36px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.nfoot{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:9px 0 0 36px}
+.b{display:inline-flex;gap:5px;align-items:center;font-size:11.5px;line-height:18px;padding:0 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted);background:var(--panel2)}
+.b.ok{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,transparent)}
+.b.warn{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent)}
+.b.bad{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
+.avatar{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;font-size:9.5px;font-weight:700;color:#fff;
+  background:hsl(var(--hue,200) 45% 45%);flex:none}
+.d{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
+.d.raw{background:var(--raw)}.d.staging{background:var(--staging)}.d.intermediate{background:var(--intermediate)}.d.mart{background:var(--mart)}.d.other{background:var(--other)}
+.lc{display:inline-flex;gap:5px;align-items:center;font-size:12px;color:var(--muted)}
+
+.layers{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,330px));gap:22px;margin-top:10px}
+.lhead{display:flex;gap:8px;align-items:center;font-weight:600;text-transform:capitalize;margin-bottom:8px}
+.model{display:block;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:0 0 10px}
+.model:hover{border-color:var(--muted)}
+.model .mn{font-family:ui-monospace,Consolas,monospace;font-weight:600;overflow-wrap:anywhere}
+.model .ms{color:var(--muted);font-size:12.5px;margin-top:3px}
+
+.gsec{margin:18px 0}
+.gsec h3{display:flex;gap:8px;align-items:center;margin:0 0 4px;font-size:15px}
+.hint{color:var(--muted);font-size:12.5px;margin:0 0 8px}
+.hint code{font-family:ui-monospace,Consolas,monospace;background:var(--panel2);border-radius:5px;padding:1px 5px}
+.grow{display:flex;gap:10px;align-items:center;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 13px;margin:6px 0;width:100%;text-align:left}
+.grow:hover{border-color:var(--muted)}
+
+.empty{display:grid;place-items:center;text-align:center;color:var(--muted);padding:70px 20px}
+.empty svg{width:34px;height:34px;margin-bottom:10px}
+.empty code{font-family:ui-monospace,Consolas,monospace;background:var(--panel2);border-radius:6px;padding:2px 7px}
+
+.drawer{position:sticky;top:58px;height:calc(100vh - 58px);overflow:auto;background:var(--panel);border-left:1px solid var(--line);padding:20px 22px 60px}
+.dtop{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.ibtn{border:1px solid var(--line);background:var(--panel2);border-radius:9px;width:30px;height:30px;display:grid;place-items:center;color:var(--muted)}
+.ibtn:hover{color:var(--ink)}
+.drawer h3{font-size:19px;line-height:1.3;margin:6px 0 8px;letter-spacing:-.01em}
+.badges{display:flex;gap:6px;flex-wrap:wrap}
+.sec{border:1px solid var(--line);border-left-width:3px;border-radius:12px;padding:11px 14px;margin:12px 0;background:var(--panel2)}
+.sec.why{border-left-color:var(--accent)}.sec.wrong{border-left-color:var(--red)}.sec.fix{border-left-color:var(--green)}.sec.sum{border-left-color:var(--muted)}.sec.ev{border-left-color:var(--amber)}
+.sec h4{margin:0 0 4px;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);display:flex;gap:7px;align-items:center}
+.sec p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.sec h4 .sha{text-transform:none;letter-spacing:0;font-size:12px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+button.mchip{border:1px solid var(--line);background:var(--panel2);border-radius:8px;padding:2px 9px;font:12px ui-monospace,Consolas,monospace}
+button.mchip:hover{border-color:var(--accent);color:var(--accent)}
+pre.diff{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,Consolas,monospace;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px;max-height:260px;overflow:auto;margin:8px 0 0}
+.btn{border:1px solid var(--line);background:var(--panel2);border-radius:9px;padding:5px 12px}
+.btn:hover{border-color:var(--muted)}
+.foot{color:var(--muted);font-size:12px;margin-top:18px}
+
+@media (max-width:980px){
+  .shell.open{grid-template-columns:minmax(0,1fr)}
+  .drawer{position:fixed;inset:58px 0 0 0;height:auto;z-index:20;border-left:0}
+  .tabs{margin-left:0;order:3;width:100%;overflow:auto}
+}
+@media (max-width:760px){
+  .rail,.rail.sub{margin-left:8px}
+  .cl,.rail.sub .cl{position:static;width:auto;text-align:left;display:flex;gap:8px;align-items:baseline}
+  .cl .cd,.cl .sha{display:inline}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
-<header>
-  <h1>logbook</h1>
-  <input id="q" type="search" placeholder="Search a model, path or word" aria-label="Search" autocomplete="off">
-  <select id="kind" aria-label="Kind"><option value="">all kinds</option><option>finding</option><option>change</option></select>
-  <select id="scope" aria-label="Scope"><option value="">everyone</option><option value="mine">mine</option><option value="shared">shared</option><option value="private">private (unpublished)</option></select>
+<header class="top">
+  <div class="brand" id="brand"></div>
+  <div class="crumb" id="crumb"></div>
+  <label class="search"><span id="sicon"></span><input id="q" type="search" placeholder="Search a model, file or word" aria-label="Search" autocomplete="off"><kbd>/</kbd></label>
+  <nav class="tabs" id="tabs" aria-label="Views"></nav>
 </header>
-<div id="status">loading…</div>
-<main><section id="left" aria-label="History"></section><section id="right" aria-label="Detail"><p class="muted">Pick an entry to see what was wrong, why, and what fixed it.</p></section></main>
+<div class="bar" id="bar"></div>
+<div class="shell" id="shell"><main class="main" id="main"></main><aside class="drawer" id="drawer" hidden aria-label="Note details"></aside></div>
 <script nonce="{{NONCE}}">
 "use strict";
 const $=s=>document.querySelector(s);
-function h(tag,attrs,...kids){const e=document.createElement(tag);for(const k in attrs||{}){if(k==='class')e.className=attrs[k];else if(k.startsWith('on'))e.addEventListener(k.slice(2),attrs[k]);else e.setAttribute(k,attrs[k]);}
-  for(const c of kids.flat()){if(c==null||c===false)continue;e.append(c.nodeType?c:document.createTextNode(String(c)));}return e;}
-let TREE=null,SEL=null,VER=null,RESULTS=null;
-const filt=v=>{const k=$('#kind').value,s=$('#scope').value;return (!k||v.kind===k)&&(!s||(s==='mine'?v.mine:v.scope===s));};
+const NS="http://www.w3.org/2000/svg";
+const P={
+  logo:"M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3V4zM5 17a3 3 0 0 1 3-3h11M9 8h6",
+  commit:"M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zM3 12h5.5M15.5 12H21",
+  find:"M10.5 4a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.8-4.8",
+  change:"M4 20l4-1 11-11-3-3L5 16l-1 4zM14 6l3 3",
+  alert:"M12 4l9 16H3L12 4zM12 10v4M12 17v.5",
+  clock:"M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2",
+  cube:"M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4 7.5l8 4.5 8-4.5M12 12v9",
+  layers:"M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5",
+  file:"M7 3h7l4 4v14H7V3zM14 3v4h4",
+  x:"M6 6l12 12M18 6L6 18",
+  left:"M14 6l-6 6 6 6",right:"M10 6l6 6-6 6",
+  list:"M5 6h14M5 12h14M5 18h14",
+  grid:"M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
+  spark:"M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z",
+  shield:"M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3zM12 9v4M12 16v.5",
+  why:"M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.5",
+  fix:"M5 12l4 4 10-10",
+  inbox:"M4 13l2-8h12l2 8M4 13v6h16v-6M4 13h5l1 2h4l1-2h5",
+  merge:"M6 5v14M6 9c0 5 4 6 10 6M6 5h.01M6 19h.01M18 15h.01",
+  down:"M6 9l6 6 6-6"
+};
+function ico(n,cls){const s=document.createElementNS(NS,"svg");s.setAttribute("viewBox","0 0 24 24");s.setAttribute("class","i"+(cls?" "+cls:""));
+  s.setAttribute("aria-hidden","true");const p=document.createElementNS(NS,"path");p.setAttribute("d",P[n]||P.file);s.appendChild(p);return s;}
+function h(tag,attrs,...kids){const e=document.createElement(tag);
+  for(const k in attrs||{}){const v=attrs[k];if(v==null||v===false)continue;
+    if(k==="class")e.className=v;else if(k.startsWith("on"))e.addEventListener(k.slice(2),v);else e.setAttribute(k,v===true?"":v);}
+  (function add(list){for(const c of list){if(c==null||c===false)continue;if(Array.isArray(c))add(c);else e.append(c.nodeType?c:document.createTextNode(String(c)));}})(kids);
+  return e;}
+const cap=s=>s?s[0].toUpperCase()+s.slice(1):s;
+function ago(iso){const t=Date.parse(iso);if(!t)return"";const s=(Date.now()-t)/1000;
+  if(s<60)return"just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";
+  if(s<86400*30)return Math.floor(s/86400)+"d ago";return new Date(t).toLocaleDateString();}
+function avatar(id){const a=h("span",{class:"avatar",title:"writer "+id},(id||"?").slice(0,2).toUpperCase());
+  a.style.setProperty("--hue",String(parseInt((id||"0").slice(0,4),16)%360));return a;}
+const LAYERS=["raw","staging","intermediate","mart","other"];
+const layerOf=v=>v.layers&&v.layers[0]||"other";
+const dot=l=>h("i",{class:"d "+l,title:l});
+const reason=v=>!!(v.body.why||v.body.wrong);
+
+let TREE=null,ALL=[],SEL=null,VIEW="timeline",VER=null,RESULTS=null,QTEXT="";
+const FILT={kind:"",scope:"",model:""};
+const pass=v=>(!FILT.kind||v.kind===FILT.kind)&&(!FILT.scope||(FILT.scope==="mine"?v.mine:v.scope===FILT.scope))&&(!FILT.model||v.models.includes(FILT.model));
+
+function badge(text,cls,icon){return h("span",{class:"b"+(cls?" "+cls:"")},icon&&ico(icon),text);}
 function anchorBadge(v){
-  const m={exact:['ok','anchor ok'],rewritten:['warn','re-anchored by '+v.rung],orphaned:['bad','anchor commit gone'],unknown:['warn','anchor unverified (shallow clone)'],unanchored:['warn','no commit']}[v.state];
-  return h('span',{class:'b '+m[0]},m[1]+(v.behind!=null&&v.state!=='unknown'?', '+v.behind+' behind HEAD':''));
-}
-function badges(v){return [h('span',{class:'b '+v.kind},v.kind),h('span',{class:'b '+(v.provenance==='inferred'?'warn':'')},v.provenance),
-  h('span',{class:'b'},v.scope==='private'?'private, unpublished':'shared'),h('span',{class:'b'},'by '+v.author),
-  !v.trusted&&h('span',{class:'b warn'},'not trusted: never auto-injected'),anchorBadge(v),v.age_days!=null&&h('span',{class:'b'},v.age_days+'d old')];}
-function row(v){
-  const r=h('a',{class:'row'+(SEL===v.id?' sel':'')+(v.scope==='private'?' priv':''),tabindex:'0',role:'button',
-    onclick:()=>select(v.id),onkeydown:e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(v.id);}}},
-    v.layers.map(l=>h('i',{class:'dot '+l,title:l})),h('strong',{},v.topic||'(untitled)'),' ',h('span',{class:'muted'},v.kind+' · '+v.author+(v.score!=null?' · score '+v.score:'')));
-  return r;
-}
-function renderTree(){
-  const L=$('#left');L.replaceChildren();
-  if(RESULTS){
-    const groups={};RESULTS.filter(filt).forEach(v=>{const g=v.layers[0]||'other';(groups[g]=groups[g]||[]).push(v);});
-    const order=['raw','staging','intermediate','mart','other'];
-    if(!RESULTS.length)L.append(h('p',{class:'muted'},'Nothing recorded for that. Silence here means no one wrote anything down, not that nothing is wrong.'));
-    order.filter(g=>groups[g]).forEach(g=>L.append(h('h3',{},g),groups[g].map(row)));return;}
-  if(!TREE)return;
-  const mk=(c)=>{const es=c.entries.filter(filt);if(!es.length&&c.entries.length)return null;
-    return h('details',{open:es.length?'':null},h('summary',{},h('span',{class:'sha'},c.short),c.subject,' ',c.layers.map(l=>h('i',{class:'dot '+l})),es.length?h('span',{class:'b'},es.length+''):''),es.map(row));};
-  L.append(h('h3',{},'branch '+TREE.branch),TREE.commits.map(mk));
-  TREE.unplaced.forEach(g=>{const es=g.entries.filter(filt);if(es.length)L.append(h('h3',{},'branch '+g.branch+' (commits not on this line)'),es.map(row));});
-}
-async function select(id){
-  SEL=id;renderTree();
-  const all=RESULTS||[...TREE.commits.flatMap(c=>c.entries),...TREE.unplaced.flatMap(g=>g.entries)];
-  const v=all.find(x=>x.id===id);const R=$('#right');R.replaceChildren();if(!v)return;
-  R.append(h('h2',{},v.topic||'(untitled)'),h('div',{},badges(v)));
-  ['summary','what','why','wrong','fix','evidence'].forEach(k=>{if(v.body[k])R.append(h('h3',{},k==='wrong'?'how it was wrong':k),h('p',{class:'f'},v.body[k]));});
-  if(v.models.length)R.append(h('h3',{},'models'),v.models.map(m=>h('span',{class:'chip'},m)));
-  if(v.paths.length)R.append(h('h3',{},'files'),v.paths.slice(0,30).map(p=>h('span',{class:'chip'},p)));
-  if(v.sha){const out=h('pre',{class:'muted'},'');out.hidden=true;
-    R.append(h('h3',{},'commit '+v.sha.slice(0,8)),h('p',{class:'f muted'},v.subject),
-      h('button',{onclick:async()=>{if(!out.hidden){out.hidden=true;return;}const r=await fetch('/api/commit/'+v.sha);const j=await r.json();out.textContent=j.text||j.error;out.hidden=false;}},'show commit'),out);}
-  R.append(h('p',{class:'muted'},'Notes are written by people or agents. Verify against the code before relying on them.'));
-}
+  const m={exact:["ok","anchor ok"],rewritten:["warn","re-anchored by "+v.rung],orphaned:["bad","commit not found"],unknown:["warn","anchor unverified"],unanchored:["warn","no commit"]}[v.state]||["","?"];
+  return badge(m[1]+(v.behind!=null&&v.state!=="unknown"&&v.behind>0?" · "+v.behind+" behind":""),m[0]);}
+function noteBadges(v){return [
+  v.provenance==="inferred"?badge("inferred from commit","warn"):badge(v.provenance,"ok"),
+  v.scope==="private"?badge("private","") :badge("shared",""),
+  !reason(v)&&badge("no reason recorded","bad","alert"),
+  !v.trusted&&badge("not auto-injected","warn"),
+  anchorBadge(v)];}
+
+function noteCard(v){
+  const el=h("button",{class:"note"+(SEL===v.id?" sel":"")+(v.scope==="private"?" priv":""),"data-id":v.id,onclick:()=>openEntry(v.id)},
+    h("div",{class:"nrow"},h("span",{class:"kind "+v.kind,title:v.kind},ico(v.kind==="change"?"change":"find")),
+      h("span",{class:"ntitle"},v.topic||"(untitled)"),h("span",{class:"meta"},ago(v.created)),avatar(v.author==="you"?TREE.me:v.author)),
+    (v.body.summary||v.body.why)&&h("div",{class:"nsum"},v.body.why||v.body.summary),
+    h("div",{class:"nfoot"},noteBadges(v),v.layers.map(l=>h("span",{class:"lc"},dot(l),l)),v.models.slice(0,3).map(m=>h("span",{class:"b mono"},m))));
+  return el;}
+
+function empty(icon,title,text,cmd){return h("div",{class:"empty"},ico(icon),h("b",{},title),h("div",{},text),cmd&&h("div",{},h("code",{},cmd)));}
+
+function stamp(iso){const d=new Date(iso);if(isNaN(d))return"";
+  const day=d.toLocaleDateString(undefined,{month:"short",day:"numeric",...(d.getFullYear()!==new Date().getFullYear()?{year:"numeric"}:{})});
+  return day+", "+d.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit",hour12:false});}
+const COLLAPSED=new Set();
+
+function viewTimeline(){
+  const rail=h("div",{class:"rail"});let shown=0;
+  const filtering=FILT.kind||FILT.scope||FILT.model;
+  function block(c,sub){
+    const es=c.entries.filter(pass),m=c.merge;
+    const kids=m?m.commits.map(s=>block(s,true)).filter(Boolean):[];
+    if(!sub&&!es.length&&!kids.length&&(filtering||(!m&&shown>14)))return null;
+    if(sub&&!es.length&&filtering)return null;
+    if(!sub)shown++;
+    const open=!COLLAPSED.has(c.sha),n=m?m.commits.length+m.more:0;
+    return h("div",{class:"commit "+(es.length?"has":"gap")+(m?" merge":"")},
+      h("div",{class:"cl",title:c.sha+" · "+c.date},h("span",{class:"cd"},stamp(c.date)),h("span",{class:"sha"},c.short)),
+      h("div",{class:"chead"},h("span",{class:"subject"},c.subject),
+        h("span",{class:"meta"},c.author+" · "+ago(c.date)),c.layers.map(l=>h("span",{class:"lc"},dot(l),l))),
+      m&&h("div",{class:"mergebox"},
+        h("button",{class:"mhead","aria-expanded":String(open),onclick:()=>{open?COLLAPSED.add(c.sha):COLLAPSED.delete(c.sha);render();}},
+          ico("merge"),h("b",{},m.branch?["Merged ",h("span",{class:"mono"},m.branch)]:"Merge"),
+          h("span",{class:"meta"},n+(n===1?" commit":" commits")+" brought in"),h("span",{class:"spacer"}),ico(open?"down":"right"))),
+      open&&kids.length>0&&h("div",{class:"rail sub"},kids),
+      m&&open&&m.more>0&&h("div",{class:"meta mmore"},"+ "+m.more+" older commits not shown"),
+      es.length?es.map(noteCard):(m?null:h("div",{class:"gaptext"},ico("alert"),"No reason recorded for this commit")));}
+  for(const c of TREE.commits){const b=block(c,false);if(b)rail.append(b);}
+  const loose=TREE.unplaced.map(g=>({branch:g.branch,es:g.entries.filter(pass)})).filter(g=>g.es.length);
+  const out=[rail];
+  for(const g of loose)out.push(h("div",{class:"gsec"},h("h3",{},ico("layers"),"Branch "+g.branch+" — commits not on this line"),
+    h("p",{class:"hint"},"These notes belong to commits that were rewritten or never fetched, so they cannot sit on the timeline."),g.es.map(noteCard)));
+  if(!shown&&!loose.length)return empty("inbox","Nothing matches","Try clearing the filters, or record the first note:","logbook note --kind finding --summary \"...\" --why \"...\"");
+  return out;}
+
+function viewModels(){
+  const by={};for(const v of ALL.filter(pass))for(const m of v.models){(by[m]=by[m]||{name:m,es:[],layer:null}).es.push(v);}
+  const models=Object.values(by);
+  if(!models.length)return empty("cube","No models yet","Models appear once a note touches a .sql or .py file.");
+  for(const m of models){m.layer=m.es.map(layerOf).find(l=>l!=="other")||"other";m.es.sort((a,b)=>b.id.localeCompare(a.id));}
+  const cols=LAYERS.map(l=>({l,ms:models.filter(m=>m.layer===l).sort((a,b)=>b.es.length-a.es.length)})).filter(c=>c.ms.length);
+  return [h("h2",{class:"title"},"Models"),h("p",{class:"sub"},"Every model that has a note, grouped by layer. Open one to see its whole history."),
+    h("div",{class:"layers"},cols.map(c=>h("section",{},h("div",{class:"lhead"},dot(c.l),c.l,h("span",{class:"count"},String(c.ms.length))),
+      c.ms.map(m=>h("button",{class:"model",onclick:()=>{FILT.model=m.name;setView("timeline");}},
+        h("div",{class:"mn"},m.name),h("div",{class:"ms"},m.es.length+(m.es.length===1?" note":" notes")+" · last: "+(m.es[0].topic||"")))))))];}
+
+function viewRecent(){
+  const list=ALL.filter(pass).sort((a,b)=>b.id.localeCompare(a.id)).slice(0,30);
+  if(!list.length)return empty("spark","No notes yet","When you or your agent record a note it shows up here, newest first.","logbook note --kind finding --summary \"...\" --why \"...\"");
+  return [h("h2",{class:"title"},"Recent"),h("p",{class:"sub"},"The latest notes across all commits, newest first."),list.map(noteCard)];}
+
+function gapData(){return{noNotes:TREE.commits.filter(c=>!c.entries.length),noReason:ALL.filter(v=>!reason(v)),unanch:ALL.filter(v=>v.state==="orphaned"||v.state==="unknown")};}
+function viewGaps(){const g=gapData();
+  const sec=(icon,title,hint,items,row)=>h("section",{class:"gsec"},h("h3",{},ico(icon),title,h("span",{class:"count "+(items.length?"red":"green")},String(items.length))),
+    h("p",{class:"hint"},hint),items.length?items.map(row):h("div",{class:"meta"},"Nothing to fix here."));
+  return [h("h2",{class:"title"},"Gaps"),h("p",{class:"sub"},"Where the memory is thin. A note without a reason is not shown to agents."),
+    sec("commit","Commits with no note",[ "Ask your agent to record why, or run ",h("code",{},"logbook note --kind change --before-commit")," before committing." ],g.noNotes,
+      c=>h("div",{class:"grow"},h("span",{class:"sha"},c.short),h("span",{class:"subject"},c.subject),h("span",{class:"spacer"}),h("span",{class:"meta"},ago(c.date)))),
+    sec("alert","Notes with no reason",["These were copied from a commit message or a transcript. Add ",h("code",{},"--why"), " and ",h("code",{},"--wrong")," so agents can use them."],g.noReason,
+      v=>h("button",{class:"grow",onclick:()=>openEntry(v.id)},h("span",{class:"subject"},v.topic),h("span",{class:"spacer"}),badge(v.provenance,"warn"))),
+    sec("shield","Unverified anchors","The commit these notes point to is missing here (shallow clone, or rewritten history).",g.unanch,
+      v=>h("button",{class:"grow",onclick:()=>openEntry(v.id)},h("span",{class:"subject"},v.topic),h("span",{class:"spacer"}),anchorBadge(v)))];}
+
+function viewResults(){
+  const by={};for(const v of RESULTS.filter(pass)){(by[layerOf(v)]=by[layerOf(v)]||[]).push(v);}
+  const head=[h("h2",{class:"title"},"Results for “"+QTEXT+"”"),h("p",{class:"sub"},RESULTS.length+" matching "+(RESULTS.length===1?"note":"notes")+", grouped by layer.")];
+  if(!RESULTS.length)return head.concat(empty("find","Nothing recorded for that","Silence here means nobody wrote anything down, not that nothing is wrong."));
+  return head.concat(LAYERS.filter(l=>by[l]).map(l=>h("section",{class:"gsec"},h("div",{class:"lhead"},dot(l),l,h("span",{class:"count"},String(by[l].length))),by[l].map(noteCard))));}
+
+function renderTop(){
+  $("#brand").replaceChildren(ico("logo"),"Logbook");
+  $("#crumb").replaceChildren(h("b",{},TREE.repo||"repo"),"  /  "+TREE.branch);
+  $("#sicon").replaceChildren(ico("find"));
+  const g=gapData(),gapN=g.noNotes.length+g.noReason.length+g.unanch.length;
+  const tabs=[["timeline","list","Timeline",ALL.length,"green"],["models","grid","Models",null],["recent","spark","Recent",null],["gaps","shield","Gaps",gapN,gapN?"red":"green"]];
+  $("#tabs").replaceChildren(...tabs.map(t=>h("button",{class:"tab","aria-current":VIEW===t[0]&&!RESULTS?"page":null,onclick:()=>setView(t[0])},ico(t[1]),t[2],t[3]!=null&&h("span",{class:"count "+(t[4]||"")},String(t[3])))));
+  const seg=(key,opts)=>h("div",{class:"seg",role:"group","aria-label":key},opts.map(o=>h("button",{"aria-pressed":String(FILT[key]===o[0]),onclick:()=>{FILT[key]=o[0];render();}},o[1])));
+  $("#bar").replaceChildren(seg("kind",[["","All"],["change","Changes"],["finding","Findings"]]),seg("scope",[["","Everyone"],["mine","Mine"],["shared","Shared"],["private","Private"]]),
+    FILT.model&&h("button",{class:"chip",onclick:()=>{FILT.model="";render();}},ico("cube"),FILT.model,ico("x")),h("span",{class:"spacer"}),
+    h("span",{class:"status"},TREE.entry_count+" notes",TREE.shallow&&badge("shallow clone","warn"),h("span",{},"dashed = yours, unpublished")));}
+
+function render(){
+  if(!TREE)return;renderTop();
+  try{const body=RESULTS?viewResults():({timeline:viewTimeline,models:viewModels,recent:viewRecent,gaps:viewGaps}[VIEW]||viewTimeline)();
+    $("#main").replaceChildren(...[body].flat(Infinity).filter(Boolean));renderDrawer();}
+  catch(e){console.error(e);$("#main").replaceChildren(empty("alert","Could not draw this view",String(e&&e.message||e)));}}
+
+function setView(v){VIEW=v;RESULTS=null;QTEXT="";$("#q").value="";writeHash();render();window.scrollTo(0,0);}
+function writeHash(){const h2=VIEW+(SEL?"?e="+SEL:"");if(location.hash.slice(1)!==h2)history.replaceState(null,"","#"+h2);}
+function readHash(){const [v,q]=location.hash.slice(1).split("?");if(["timeline","models","recent","gaps"].includes(v))VIEW=v;const m=/e=([0-9a-f-]+)/.exec(q||"");if(m)SEL=m[1];}
+function openEntry(id){SEL=id;writeHash();render();}
+function closeEntry(){SEL=null;writeHash();render();}
+function neighbours(){const l=[...document.querySelectorAll(".note")].map(n=>n.dataset.id);const i=l.indexOf(SEL);return{prev:l[i-1],next:l[i+1]};}
+
+function renderDrawer(){
+  const d=$("#drawer"),sh=$("#shell"),v=SEL&&ALL.find(x=>x.id===SEL);
+  if(!v){d.hidden=true;sh.classList.remove("open");return;}
+  d.hidden=false;sh.classList.add("open");
+  const nb=neighbours(),b=v.body;
+  const sec=(cls,icon,label,text)=>text?h("div",{class:"sec "+cls},h("h4",{},ico(icon),label),h("p",{},text)):null;
+  const out=h("pre",{class:"diff"},"");out.hidden=true;
+  d.replaceChildren(...[
+    h("div",{class:"dtop"},h("button",{class:"ibtn","aria-label":"Previous note",disabled:nb.prev?null:true,onclick:()=>nb.prev&&openEntry(nb.prev)},ico("left")),
+      h("button",{class:"ibtn","aria-label":"Next note",disabled:nb.next?null:true,onclick:()=>nb.next&&openEntry(nb.next)},ico("right")),
+      h("span",{class:"spacer"}),h("button",{class:"ibtn","aria-label":"Close",onclick:closeEntry},ico("x"))),
+    h("div",{class:"badges"},badge(v.kind,v.kind==="change"?"ok":"warn",v.kind==="change"?"change":"find"),badge("by "+v.author),badge(ago(v.created)||"","", "clock")),
+    h("h3",{},v.topic||"(untitled)"),h("div",{class:"badges"},noteBadges(v)),
+    sec("sum","file","Summary",b.summary),sec("why","why","Why",b.why),sec("wrong","alert","How it was wrong",b.wrong),sec("fix","fix","Fix",b.fix),sec("ev","find","Evidence",b.evidence),
+    !reason(v)&&h("div",{class:"sec wrong"},h("h4",{},ico("alert"),"No reason recorded"),h("p",{},"This note only repeats what the commit or transcript said. Add why and how it was wrong so agents can use it.")),
+    v.models.length>0&&h("div",{class:"sec"},h("h4",{},ico("cube"),"Models"),h("div",{class:"chips"},v.models.map(m=>h("button",{class:"mchip",onclick:()=>{FILT.model=m;setView("timeline");}},m)))),
+    v.paths.length>0&&h("div",{class:"sec"},h("h4",{},ico("file"),"Files"),h("div",{class:"chips"},v.paths.slice(0,24).map(p=>h("span",{class:"b mono"},p)))),
+    v.sha&&h("div",{class:"sec"},h("h4",{},ico("commit"),"Commit",h("span",{class:"sha"},v.sha.slice(0,8))),h("p",{},v.subject),
+      h("div",{class:"chips"},h("button",{class:"btn",onclick:async()=>{if(!out.hidden){out.hidden=true;return;}
+        try{const r=await fetch("/api/commit/"+v.sha);const j=await r.json();out.textContent=j.text||j.error||"";}catch(e){out.textContent="could not load";}out.hidden=false;}},"Show commit")),out),
+    h("div",{class:"foot"},"Written by a person or an agent. Check it against the code before relying on it.")].flat(Infinity).filter(Boolean));}
+
 async function loadTree(){
-  const r=await fetch('/api/tree');TREE=await r.json();
-  $('#status').textContent=TREE.entry_count+' entries · branch '+TREE.branch+(TREE.shallow?' · shallow clone: some anchors unverified':'')+' · private entries have a dashed outline and are visible only to you';
-  if(!RESULTS)renderTree();
-}
+  const r=await fetch("/api/tree");TREE=await r.json();
+  ALL=[...TREE.commits.flatMap(c=>[...c.entries,...(c.merge?c.merge.commits.flatMap(s=>s.entries):[])]),...TREE.unplaced.flatMap(g=>g.entries)];
+  const seen=new Set();ALL=ALL.filter(v=>seen.has(v.id)?false:seen.add(v.id));
+  readHash();render();}
 async function search(){
-  const q=$('#q').value.trim();if(!q){RESULTS=null;renderTree();return;}
-  const r=await fetch('/api/search?q='+encodeURIComponent(q));RESULTS=await r.json();renderTree();
-}
-async function poll(){try{const r=await fetch('/api/version');const j=await r.json();if(j.v!==VER){VER=j.v;await loadTree();if($('#q').value.trim())await search();}}catch(e){$('#status').textContent='viewer lost contact with the local server';}}
-$('#q').addEventListener('input',()=>{clearTimeout(window._t);window._t=setTimeout(search,200);});
-$('#kind').addEventListener('change',renderTree);$('#scope').addEventListener('change',renderTree);
+  const q=$("#q").value.trim();QTEXT=q;
+  if(!q){RESULTS=null;render();return;}
+  try{const r=await fetch("/api/search?q="+encodeURIComponent(q));RESULTS=await r.json();}catch(e){RESULTS=[];}render();}
+async function poll(){try{const r=await fetch("/api/version");const j=await r.json();if(j.v!==VER){VER=j.v;await loadTree();}}
+  catch(e){$("#crumb").textContent="lost contact with the local server";}}
+
+$("#q").addEventListener("input",()=>{clearTimeout(window._t);window._t=setTimeout(search,200);});
+document.addEventListener("keydown",e=>{
+  if(e.key==="/"&&document.activeElement!==$("#q")){e.preventDefault();$("#q").focus();return;}
+  if(e.key==="Escape"){if(document.activeElement===$("#q")){$("#q").value="";search();$("#q").blur();}else if(SEL)closeEntry();return;}
+  if(document.activeElement&&document.activeElement.tagName==="INPUT")return;
+  if(e.key==="j"||e.key==="k"){const nb=neighbours();const t=e.key==="j"?nb.next:nb.prev;if(t)openEntry(t);else if(!SEL){const f=document.querySelector(".note");if(f)openEntry(f.dataset.id);}}});
+window.addEventListener("hashchange",()=>{readHash();render();});
 poll();setInterval(poll,3000);
 </script>
 </body>
