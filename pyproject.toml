@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "getlogbook"
-version = "0.0.1"
+version = "0.0.1rc1"
 description = "Commit-anchored shared memory for AI-assisted repos (stdlib only)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,8 +27,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/VS3hdav3/Logbook"
-Issues = "https://github.com/VS3hdav3/Logbook/issues"
+Homepage = "https://github.com/vssehdave/Logbook"
+Issues = "https://github.com/vssehdave/Logbook/issues"
 
 [project.scripts]
 logbook = "getlogbook.cli:main"

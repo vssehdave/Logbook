@@ -19,3 +19,5 @@ Thumbs.db
 .env
 *.log
 .claude/settings.local.json
+
+.playwright-cli/
