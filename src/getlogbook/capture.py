@@ -4,7 +4,7 @@ Design rules (from the review panels):
   * A hook only writes a small spool file and (maybe) spawns a detached worker. No model, no network, < 100 ms.
   * A hook never fails the agent: everything is caught, logged to errors.log, exit code 0.
   * `reconcile()` is the one sweep: spool -> transcript slices -> drafts; crash recovery; commits with no entry.
-  * Drafts built without a model are provenance=inferred and are never injected (no 'why').
+  * Drafts built without a model are provenance=auto-copied and are never injected (no 'why').
 """
 from __future__ import annotations
 
@@ -223,7 +223,7 @@ def _finalize(repo, sid, d, st, agent, head, branch):
     first_line = lambda s, n: (s.splitlines() or [""])[0][:n]
     e = Entry(id=new_id(), kind="finding", topic=(first_line(user[0], 80) if user else f"session {sid[:8]}"),
               body={"summary": assistant[-1][:300], "what": "\n".join("- " + first_line(a, 120) for a in assistant[:5])},
-              provenance="inferred", captured_via=agent or "agent", created=now())
+              provenance="auto-copied", captured_via=agent or "agent", created=now())
     a = tree.anchor_for(repo, sha=head or None, paths=st["paths"][:40], dirty=bool(st["paths"]))
     a["branch"] = branch or a["branch"]
     e.anchor = a
@@ -295,7 +295,7 @@ def _commit_floor(repo):
         body = g.try_run(["show", "-s", "--format=%b", sha], repo.root)[1].strip()
         e = Entry(id=new_id(), kind="change", topic=info.get("subject", "")[:200],
                   body={"summary": info.get("subject", ""), "what": (body + f"\nfiles: {len(paths)}").strip()},
-                  provenance="inferred", captured_via="reconcile", created=now())
+                  provenance="auto-copied", captured_via="reconcile", created=now())
         e.anchor = tree.anchor_for(repo, sha=sha, paths=paths)
         repo.add_private(e)
         n += 1

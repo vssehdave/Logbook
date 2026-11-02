@@ -19,7 +19,7 @@ os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs lo
 
 from getlogbook import capture, cli, recall, safety, server, sync, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
-from getlogbook.entry import Entry, from_dict, new_id  # noqa: E402
+from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
 
 
@@ -95,7 +95,7 @@ class TestEntry(unittest.TestCase):
             from_dict({"id": "../../etc/passwd"})
         e = from_dict({"id": new_id(), "kind": "weird", "topic": "t" * 999, "provenance": "trust-me", "user": "alice", "author": "root",
                        "body": {"why": "w" * 99999, "evil": "x"}, "anchor": {"paths": ["a"] * 500, "sha": 5}, "supersedes": ["nope"]})
-        self.assertEqual((e.kind, e.provenance), ("finding", "inferred"))
+        self.assertEqual((e.kind, e.provenance), ("finding", "auto-copied"))
         self.assertLessEqual(len(e.topic), 200)
         self.assertLessEqual(len(e.body["why"]), 2000)
         self.assertNotIn("evil", e.body)
@@ -239,7 +239,7 @@ class TestCapture(Base):
         self.assertNotIn("no reason", txt)
         self.assertLessEqual(len(txt), recall.DEFAULT_CAP)
 
-    def test_reconcile_builds_inferred_draft_from_transcript_and_commit_floor(self):
+    def test_reconcile_builds_auto_copied_draft_from_transcript_and_commit_floor(self):
         d, r = self.repo()
         capture.install_git_hook(r)
         tr = self.root / "t.jsonl"
@@ -254,7 +254,7 @@ class TestCapture(Base):
         self.assertEqual(res["drafts"], 1)
         self.assertEqual(res["floor"], 1)
         es = {l.entry.captured_via: l.entry for l in r.load_private() and r.all_entries()}
-        self.assertEqual(es["claude-code"].provenance, "inferred")
+        self.assertEqual(es["claude-code"].provenance, "auto-copied")
         self.assertIn("why is fct_x low", es["claude-code"].topic)
         self.assertEqual(es["reconcile"].kind, "change")
         self.assertEqual(capture.reconcile(r)["floor"], 0, "idempotent")
@@ -316,6 +316,35 @@ class TestPolicyAndTrust(Base):
         e = capture.make_entry(r, "finding", "t", {"summary": "s"})
         with self.assertRaises(SystemExit):
             cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False})())
+
+
+class TestRichNotes(Base):
+    def test_new_fields_round_trip_and_bad_values_are_dropped(self):
+        src = new_id()
+        e = Entry(id=new_id(), body={"context": "c", "decided": "d", "open": "o", "scale": "3 of 40 rows"}, level="branch", sources=[src])
+        back = from_dict(json.loads(e.to_json()))
+        self.assertEqual((back.body["context"], back.body["decided"], back.body["open"], back.body["scale"]),
+                         ("c", "d", "o", "3 of 40 rows"))
+        self.assertEqual((back.level, back.sources), ("branch", [src]))
+        junk = from_dict({"id": new_id(), "level": "galaxy", "sources": ["../x", src], "provenance": "inferred"})
+        self.assertEqual((junk.level, junk.sources, junk.provenance), ("", [src], "auto-copied"))
+
+    def test_every_field_survives_publish_and_a_maximal_note_fits_the_default_cap(self):
+        d = make_repo(self.root, "r", "a@x.io")
+        commit(d, "b", {"a.txt": "x"})
+        r = Repo(d)
+        r.init()
+        self.cd(d)
+        e = capture.make_entry(r, "finding", "t" * 200, {k: "word " * 400 for k in BODY_FIELDS if k != "evidence"},
+                               paths=["f%d/g.txt" % i for i in range(40)])
+        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False})())
+        shared, _ = r.load_shared()
+        pub = next(l.entry for l in shared if l.entry.id == e.id)
+        for k in BODY_FIELDS:
+            if k != "evidence":
+                self.assertTrue(pub.body.get(k), f"{k} was dropped when publishing")
+        self.assertLessEqual(len(pub.body["summary"]), 1000)
+        self.assertLessEqual(len(pub.body["scale"]), 300)
 
 
 class TestCli(Base):

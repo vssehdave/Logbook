@@ -24,7 +24,7 @@ _REF_RE = re.compile(r"/(?:branch)?log/([0-9a-f]{6,16})/([0-9a-f]{2,16})$")
 MAX_BLOB = 65536
 MAX_PER_REF = 5000
 DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "pseudonym",
-                  "max_entry_bytes": 16384, "retention_days": 0}
+                  "max_entry_bytes": 32768, "retention_days": 0}
 
 
 def user_id(email):

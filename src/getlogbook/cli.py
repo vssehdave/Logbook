@@ -7,12 +7,12 @@ import sys
 
 from . import capture, recall, sync, tree
 from . import git as g
-from .entry import BODY_FIELDS, ID_RE
+from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
 from .safety import sanitize as safety_sanitize
 from .store import Repo
 
-SHARE_FIELDS = ("summary", "what", "why", "wrong", "fix")  # allowlist: evidence is opt-in
+SHARE_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale")  # allowlist: evidence is opt-in
 
 
 def out(s=""):
@@ -85,7 +85,7 @@ def cmd_note(a):
     r = need_repo()
     body = {k: getattr(a, k) for k in BODY_FIELDS if getattr(a, k, None)}
     if a.from_stdin:
-        body["summary"] = sys.stdin.read().strip()[:600]
+        body["summary"] = sys.stdin.read().strip()[:MAX_SUMMARY]
     if not body.get("summary"):
         raise SystemExit("logbook: --summary is required (what happened, in a sentence)")
     if a.kind == "finding" and not (body.get("why") or body.get("wrong")):
@@ -243,7 +243,7 @@ def cmd_doctor(a):
         bad |= level == "fail"
     out("capture matrix (what is covered):")
     out("  claude-code : " + ("hooks installed" if _claude_installed(r) else "NOT installed: `logbook install --agent claude-code --write`"))
-    out("  other agents: NOT captured by hooks (tier 2/3). They are covered only by the git post-commit floor (inferred entries),")
+    out("  other agents: NOT captured by hooks (tier 2/3). They are covered only by the git post-commit floor (auto-copied entries),")
     out("                or by `logbook note` / `logbook note --from-stdin` run by the agent or you.")
     return 1 if bad else 0
 
