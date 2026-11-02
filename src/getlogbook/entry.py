@@ -32,7 +32,7 @@ class Entry:
                  supersedes=None, display="", created="", redacted=False, v=1):
         self.id, self.kind, self.topic = id, kind, topic
         self.body = dict(body or {})
-        self.anchor = dict(anchor or {})  # sha tree parent patch_id branch subject date pr paths models dirty
+        self.anchor = dict(anchor or {})  # sha tree parent patch_id branch subject date pr paths names dirty
         self.provenance, self.captured_via = provenance, captured_via
         self.supersedes = list(supersedes or [])
         self.display, self.created, self.redacted, self.v = display, created, redacted, v  # created: display only
@@ -51,7 +51,7 @@ class Entry:
     def text(self):
         parts = [self.topic, *(self.body.get(k, "") for k in BODY_FIELDS)]
         a = self.anchor
-        parts += [a.get("subject", ""), a.get("branch", ""), *a.get("paths", []), *a.get("models", [])]
+        parts += [a.get("subject", ""), a.get("branch", ""), *a.get("paths", []), *a.get("names", [])]
         return " ".join(p for p in parts if p)
 
 
@@ -70,8 +70,9 @@ def from_dict(d):
     body = d.get("body") if isinstance(d.get("body"), dict) else {}
     a = d.get("anchor") if isinstance(d.get("anchor"), dict) else {}
     anchor = {k: _s(a.get(k), 300) for k in ("sha", "tree", "parent", "patch_id", "branch", "subject", "date", "pr")}
-    anchor.update(paths=_strs(a.get("paths")), models=_strs(a.get("models")), old_paths=_strs(a.get("old_paths")),
-                  dirty=bool(a.get("dirty")))
+    # "models" is the 0.0.1 spelling of "names"; those files are already on people's refs
+    anchor.update(paths=_strs(a.get("paths")), names=_strs(a.get("names") or a.get("models")),
+                  old_paths=_strs(a.get("old_paths")), dirty=bool(a.get("dirty")))
     kind = d.get("kind") if d.get("kind") in KINDS else "finding"
     prov = d.get("provenance") if d.get("provenance") in PROVENANCE else "inferred"
     return Entry(id=d["id"], kind=kind, topic=_s(d.get("topic"), 200),

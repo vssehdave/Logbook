@@ -113,7 +113,7 @@ def run(dir=None, serve=False):
     capture.post_commit(ra)
     capture.reconcile(ra)
     chg = [v for v in views(ra)[0] if v["kind"] == "change" and v["provenance"] == "agent-written"]
-    check(len(chg) == 1 and chg[0]["state"] == "exact" and chg[0]["models"] == ["fct_revenue"], "change entry attached to the new commit, model detected")
+    check(len(chg) == 1 and chg[0]["state"] == "exact" and chg[0]["names"] == ["fct_revenue"], "change entry attached to the new commit, file name detected")
     cs, _ = share_copy(ra, ra.get_private(chg[0]["id"]), False, False)
     ra.publish([cs])
     sh("git", "push", "-q", "origin", "HEAD", cwd=alice)
@@ -141,7 +141,7 @@ def run(dir=None, serve=False):
     head("5. History rewriting: a rename and a squash merge")
     sh("git", "mv", "models/staging/stg_orders.sql", "models/staging/stg_orders_v2.sql", cwd=alice)
     sh("git", "commit", "-q", "-m", "rename stg_orders to v2", cwd=alice)
-    check({"stg_orders", "stg_orders_v2"} <= tree.aliases_for(ra, "stg_orders_v2"), "rename detected: old and new model names resolve to each other")
+    check({"stg_orders", "stg_orders_v2"} <= tree.aliases_for(ra, "stg_orders_v2"), "rename detected: old and new file names resolve to each other")
     base = g.branch(alice)
     sh("git", "checkout", "-q", "-b", "feature/refund-fix", cwd=alice)
     commit(alice, "wip refunds 1", {"models/marts/fct_revenue.sql": "select sum(amount) as revenue from stg_payments where status != 'refunded' -- 1"})

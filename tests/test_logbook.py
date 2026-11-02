@@ -103,6 +103,16 @@ class TestEntry(unittest.TestCase):
         self.assertEqual(e.supersedes, [])
         self.assertFalse(hasattr(e, "user"))  # authorship comes from the ref path, never from the file
 
+    def test_0_0_1_entry_still_loads(self):
+        """Files written by 0.0.1 carry anchor.models; they must load with the same names under the new key."""
+        old = {"id": new_id(), "kind": "finding", "topic": "late payments", "body": {"summary": "s", "why": "w"},
+               "anchor": {"sha": "a" * 40, "paths": ["models/marts/fct_x.sql"], "models": ["fct_x"], "layers": ["mart"]},
+               "provenance": "agent-written"}
+        e = from_dict(old)
+        self.assertEqual(e.anchor["names"], ["fct_x"])
+        self.assertNotIn("models", e.anchor)
+        self.assertNotIn("layers", e.anchor)
+
 
 class TestSync(Base):
     def setup_alice(self):
@@ -196,8 +206,8 @@ class TestAnchor(Base):
         sh("git", "mv", "models/staging/stg_o.sql", "models/staging/stg_orders.sql", cwd=d)
         sh("git", "commit", "-q", "-m", "rename", cwd=d)
         self.assertEqual(tree.aliases_for(repo, "stg_orders"), {"stg_o", "stg_orders"})
-        self.assertEqual(tree.layer_of("models/marts/x.sql"), "mart")
-        self.assertEqual(tree.layer_of("stg_orders"), "staging")
+        self.assertEqual(tree.names_of(["src/app/orders.py", "docs/README.md", "pkg/__init__.py", "a.c", "src/orders.js"]),
+                         ["orders", "README"])
         self.assertEqual(sha, an.sp[0]["sha"])
 
 

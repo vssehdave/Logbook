@@ -17,31 +17,16 @@ from .store import atomic_write, user_id
 SPINE_LIMIT = 500
 MERGE_SHOWN = 40  # children listed per merge card; the rest are counted
 _PR = re.compile(r"\(#(\d+)\)")
-_LAYERS = [("raw", ("raw_", "src_", "source_")), ("staging", ("stg_", "staging_")), ("intermediate", ("int_",)),
-           ("mart", ("fct_", "dim_", "mart_", "rpt_"))]
-_DIRS = {"raw": "raw", "sources": "raw", "staging": "staging", "intermediate": "intermediate", "marts": "mart", "mart": "mart"}
 
 
-def layer_of(name_or_path):
-    p = PurePosixPath(str(name_or_path).replace("\\", "/"))
-    for part in p.parts[:-1]:
-        if part.lower() in _DIRS:
-            return _DIRS[part.lower()]
-    stem = p.stem.lower()
-    for layer, prefixes in _LAYERS:
-        if stem.startswith(prefixes):
-            return layer
-    return None
-
-
-def models_of(paths):
-    """dbt-style model names: stems of .sql/.py files. Works for any repo; non-model files just yield stems too."""
+def names_of(paths):
+    """File names (stems) of changed paths: what a prompt or a note is likely to call a thing. Dunder and tiny stems are noise."""
     seen, out = set(), []
     for p in paths:
-        pp = PurePosixPath(p.replace("\\", "/"))
-        if pp.suffix.lower() in (".sql", ".py") and pp.stem not in seen:
-            seen.add(pp.stem)
-            out.append(pp.stem)
+        stem = PurePosixPath(p.replace("\\", "/")).stem
+        if len(stem) >= 3 and not stem.startswith("__") and stem not in seen:
+            seen.add(stem)
+            out.append(stem)
     return out
 
 
@@ -188,7 +173,7 @@ def anchor_for(repo, sha=None, paths=None, dirty=None, pr=""):
         if paths is None:
             paths = g.changed_paths(repo.root, sha)
     a["paths"] = list(paths or [])
-    a["models"] = models_of(a["paths"])
+    a["names"] = names_of(a["paths"])
     return a
 
 
@@ -215,7 +200,7 @@ def renames(repo, limit=SPINE_LIMIT):
 
 
 def aliases_for(repo, name):
-    """All historical names for a model (stems), for query expansion."""
+    """All historical names for a file (stems), for query expansion."""
     al = renames(repo)
     stems = {PurePosixPath(k).stem: PurePosixPath(v).stem for k, v in al.items()}
     names = {name}
@@ -237,14 +222,12 @@ def view(repo, loaded, anch):
     e, a = loaded.entry, loaded.entry.anchor
     sha, state, rung = anch.place(a)
     behind = anch.behind(sha) if sha else None
-    layers = sorted({l for l in (layer_of(p) for p in a.get("paths", [])) if l} |
-                    {l for l in (layer_of(m) for m in a.get("models", [])) if l})
     return {"id": e.id, "kind": e.kind, "topic": e.topic, "body": e.body, "provenance": e.provenance,
             "scope": loaded.scope, "author": repo.label(loaded), "mine": loaded.user == repo.user,
             "trusted": loaded.user in repo.trusted(), "state": state, "rung": rung, "behind": behind,
             "age_days": age_days(e.created), "created": e.created, "captured_via": e.captured_via,
             "branch": a.get("branch", ""), "subject": a.get("subject", ""), "sha": a.get("sha", ""), "placed": sha or "",
-            "paths": a.get("paths", []), "models": a.get("models", []), "layers": layers, "dirty": a.get("dirty", False),
+            "paths": a.get("paths", []), "names": a.get("names", []), "dirty": a.get("dirty", False),
             "supersedes": e.supersedes, "redacted": e.redacted}
 
 
@@ -269,7 +252,7 @@ def build(repo):
 
     def card(c):
         ents = sorted(by_commit.get(c["sha"], []), key=lambda v: v["id"])
-        return {**c, "short": c["sha"][:8], "entries": ents, "layers": sorted({l for v in ents for l in v["layers"]})}
+        return {**c, "short": c["sha"][:8], "entries": ents}
 
     commits = []
     for c in anch.sp:

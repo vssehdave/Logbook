@@ -34,7 +34,7 @@ def line(v):
 
 def detail(v):
     rows = [line(v), f"    branch {txt(v, v['branch'], 100)}  commit {v['sha'][:8]} {txt(v, v['subject'], 150)}",
-            f"    models {txt(v, ', '.join(v['models']), 200) or '-'}  layers {', '.join(v['layers']) or '-'}  captured via {txt(v, v['captured_via'], 40)}"]
+            f"    names {txt(v, ', '.join(v['names']), 200) or '-'}  captured via {txt(v, v['captured_via'], 40)}"]
     for k in BODY_FIELDS:
         if v["body"].get(k):
             rows.append(f"    {k}: {txt(v, v['body'][k])}")
@@ -176,21 +176,21 @@ def cmd_explain(a):
         if by_prefix:
             out(detail(by_prefix[0]))
             return 0
-    models = {a.target.lower()}
-    cands = {m.lower() for v in vs for m in v["models"] if a.target.lower() in m.lower()}
+    names = {a.target.lower()}
+    cands = {m.lower() for v in vs for m in v["names"] if a.target.lower() in m.lower()}
     exact = {m for m in cands if m == a.target.lower()}
     if not exact and len(cands) > 1:
         out("ambiguous: " + ", ".join(sorted(cands)))
         return 3
     if not exact and cands:
-        models = cands
-    ranked = recall.rank(r, models=models, files=[a.target], views=vs, anch=an)
+        names = cands
+    ranked = recall.rank(r, names=names, files=[a.target], views=vs, anch=an)
     if not ranked:
         out(f"nothing recorded for {a.target}")
         return 4
-    names = sorted({n for m in models for n in tree.aliases_for(r, m)})
-    if len(names) > 1:
-        out("known under names: " + ", ".join(names) + "  (rename detection is heuristic)")
+    known = sorted({n for m in names for n in tree.aliases_for(r, m)})
+    if len(known) > 1:
+        out("known under names: " + ", ".join(known) + "  (rename detection is heuristic)")
     for _, v in ranked:
         out(detail(v))
         out("")

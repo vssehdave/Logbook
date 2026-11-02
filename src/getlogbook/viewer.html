@@ -7,10 +7,10 @@
 <style nonce="{{NONCE}}">
 :root{color-scheme:light dark;
   --bg:#f6f5f1;--panel:#ffffff;--panel2:#f2f0ea;--line:#e3e0d8;--ink:#1c1b19;--muted:#6d6a62;--accent:#2f6fed;
-  --green:#1d8a4c;--amber:#a8700f;--red:#c0392b;--raw:#a8553a;--staging:#a77f1f;--intermediate:#4f7f55;--mart:#3f6384;--other:#8a867c}
+  --green:#1d8a4c;--amber:#a8700f;--red:#c0392b;--c0:#a8553a;--c1:#a77f1f;--c2:#4f7f55;--c3:#3f6384;--c4:#8a867c}
 @media (prefers-color-scheme:dark){:root{
   --bg:#0c0d10;--panel:#14161a;--panel2:#1a1d22;--line:#262a31;--ink:#e9eaee;--muted:#8c919b;--accent:#6ea0ff;
-  --green:#3ecf8e;--amber:#e5a93d;--red:#ef6a5b;--raw:#d9805f;--staging:#d9b04a;--intermediate:#7fb184;--mart:#6f9bc4;--other:#7b7f88}}
+  --green:#3ecf8e;--amber:#e5a93d;--red:#ef6a5b;--c0:#d9805f;--c1:#d9b04a;--c2:#7fb184;--c3:#6f9bc4;--c4:#7b7f88}}
 *{box-sizing:border-box}
 html,body{min-height:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -102,7 +102,7 @@ p.sub{margin:0 0 14px;color:var(--muted);max-width:70ch}
 .avatar{width:20px;height:20px;border-radius:50%;display:inline-grid;place-items:center;font-size:9.5px;font-weight:700;color:#fff;
   background:hsl(var(--hue,200) 45% 45%);flex:none}
 .d{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none}
-.d.raw{background:var(--raw)}.d.staging{background:var(--staging)}.d.intermediate{background:var(--intermediate)}.d.mart{background:var(--mart)}.d.other{background:var(--other)}
+.d.a0{background:var(--c0)}.d.a1{background:var(--c1)}.d.a2{background:var(--c2)}.d.a3{background:var(--c3)}.d.a4{background:var(--c4)}
 .lc{display:inline-flex;gap:5px;align-items:center;font-size:12px;color:var(--muted)}
 
 .layers{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,330px));gap:22px;margin-top:10px}
@@ -159,7 +159,7 @@ pre.diff{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,
 <header class="top">
   <div class="brand" id="brand"></div>
   <div class="crumb" id="crumb"></div>
-  <label class="search"><span id="sicon"></span><input id="q" type="search" placeholder="Search a model, file or word" aria-label="Search" autocomplete="off"><kbd>/</kbd></label>
+  <label class="search"><span id="sicon"></span><input id="q" type="search" placeholder="Search a file, topic or word" aria-label="Search" autocomplete="off"><kbd>/</kbd></label>
   <nav class="tabs" id="tabs" aria-label="Views"></nav>
 </header>
 <div class="bar" id="bar"></div>
@@ -203,21 +203,21 @@ function ago(iso){const t=Date.parse(iso);if(!t)return"";const s=(Date.now()-t)/
   if(s<86400*30)return Math.floor(s/86400)+"d ago";return new Date(t).toLocaleDateString();}
 function avatar(id){const a=h("span",{class:"avatar",title:"writer "+id},(id||"?").slice(0,2).toUpperCase());
   a.style.setProperty("--hue",String(parseInt((id||"0").slice(0,4),16)%360));return a;}
-const LAYERS=["raw","staging","intermediate","mart","other"];
-const layerOf=v=>v.layers&&v.layers[0]||"other";
-const dot=l=>h("i",{class:"d "+l,title:l});
+const areaOf=v=>{const p=(v.paths&&v.paths[0])||"",i=p.indexOf("/");return i>0?p.slice(0,i):"(root)";};
+const areasOf=es=>[...new Set(es.map(areaOf))];
+const dot=a=>h("i",{class:"d a"+([...a].reduce((x,c)=>x+c.charCodeAt(0),0)%5),title:a});
 const reason=v=>!!(v.body.why||v.body.wrong);
 
 let TREE=null,ALL=[],SEL=null,VIEW="timeline",VER=null,RESULTS=null,QTEXT="";
-const FILT={kind:"",scope:"",model:""};
-const pass=v=>(!FILT.kind||v.kind===FILT.kind)&&(!FILT.scope||(FILT.scope==="mine"?v.mine:v.scope===FILT.scope))&&(!FILT.model||v.models.includes(FILT.model));
+const FILT={kind:"",scope:"",name:""};
+const pass=v=>(!FILT.kind||v.kind===FILT.kind)&&(!FILT.scope||(FILT.scope==="mine"?v.mine:v.scope===FILT.scope))&&(!FILT.name||v.names.includes(FILT.name));
 
 function badge(text,cls,icon){return h("span",{class:"b"+(cls?" "+cls:"")},icon&&ico(icon),text);}
 function anchorBadge(v){
   const m={exact:["ok","anchor ok"],rewritten:["warn","re-anchored by "+v.rung],orphaned:["bad","commit not found"],unknown:["warn","anchor unverified"],unanchored:["warn","no commit"]}[v.state]||["","?"];
   return badge(m[1]+(v.behind!=null&&v.state!=="unknown"&&v.behind>0?" · "+v.behind+" behind":""),m[0]);}
 function noteBadges(v){return [
-  v.provenance==="inferred"?badge("inferred from commit","warn"):badge(v.provenance,"ok"),
+  v.provenance==="auto-copied"?badge("copied from git, no reason","warn"):badge(v.provenance,"ok"),
   v.scope==="private"?badge("private","") :badge("shared",""),
   !reason(v)&&badge("no reason recorded","bad","alert"),
   !v.trusted&&badge("not auto-injected","warn"),
@@ -228,7 +228,7 @@ function noteCard(v){
     h("div",{class:"nrow"},h("span",{class:"kind "+v.kind,title:v.kind},ico(v.kind==="change"?"change":"find")),
       h("span",{class:"ntitle"},v.topic||"(untitled)"),h("span",{class:"meta"},ago(v.created)),avatar(v.author==="you"?TREE.me:v.author)),
     (v.body.summary||v.body.why)&&h("div",{class:"nsum"},v.body.why||v.body.summary),
-    h("div",{class:"nfoot"},noteBadges(v),v.layers.map(l=>h("span",{class:"lc"},dot(l),l)),v.models.slice(0,3).map(m=>h("span",{class:"b mono"},m))));
+    h("div",{class:"nfoot"},noteBadges(v),[areaOf(v)].map(l=>h("span",{class:"lc"},dot(l),l)),v.names.slice(0,3).map(m=>h("span",{class:"b mono"},m))));
   return el;}
 
 function empty(icon,title,text,cmd){return h("div",{class:"empty"},ico(icon),h("b",{},title),h("div",{},text),cmd&&h("div",{},h("code",{},cmd)));}
@@ -240,7 +240,7 @@ const COLLAPSED=new Set();
 
 function viewTimeline(){
   const rail=h("div",{class:"rail"});let shown=0;
-  const filtering=FILT.kind||FILT.scope||FILT.model;
+  const filtering=FILT.kind||FILT.scope||FILT.name;
   function block(c,sub){
     const es=c.entries.filter(pass),m=c.merge;
     const kids=m?m.commits.map(s=>block(s,true)).filter(Boolean):[];
@@ -251,7 +251,7 @@ function viewTimeline(){
     return h("div",{class:"commit "+(es.length?"has":"gap")+(m?" merge":"")},
       h("div",{class:"cl",title:c.sha+" · "+c.date},h("span",{class:"cd"},stamp(c.date)),h("span",{class:"sha"},c.short)),
       h("div",{class:"chead"},h("span",{class:"subject"},c.subject),
-        h("span",{class:"meta"},c.author+" · "+ago(c.date)),c.layers.map(l=>h("span",{class:"lc"},dot(l),l))),
+        h("span",{class:"meta"},c.author+" · "+ago(c.date)),areasOf(c.entries||[]).map(l=>h("span",{class:"lc"},dot(l),l))),
       m&&h("div",{class:"mergebox"},
         h("button",{class:"mhead","aria-expanded":String(open),onclick:()=>{open?COLLAPSED.add(c.sha):COLLAPSED.delete(c.sha);render();}},
           ico("merge"),h("b",{},m.branch?["Merged ",h("span",{class:"mono"},m.branch)]:"Merge"),
@@ -267,15 +267,15 @@ function viewTimeline(){
   if(!shown&&!loose.length)return empty("inbox","Nothing matches","Try clearing the filters, or record the first note:","logbook note --kind finding --summary \"...\" --why \"...\"");
   return out;}
 
-function viewModels(){
-  const by={};for(const v of ALL.filter(pass))for(const m of v.models){(by[m]=by[m]||{name:m,es:[],layer:null}).es.push(v);}
-  const models=Object.values(by);
-  if(!models.length)return empty("cube","No models yet","Models appear once a note touches a .sql or .py file.");
-  for(const m of models){m.layer=m.es.map(layerOf).find(l=>l!=="other")||"other";m.es.sort((a,b)=>b.id.localeCompare(a.id));}
-  const cols=LAYERS.map(l=>({l,ms:models.filter(m=>m.layer===l).sort((a,b)=>b.es.length-a.es.length)})).filter(c=>c.ms.length);
-  return [h("h2",{class:"title"},"Models"),h("p",{class:"sub"},"Every model that has a note, grouped by layer. Open one to see its whole history."),
+function viewFiles(){
+  const by={};for(const v of ALL.filter(pass))for(const m of v.names){(by[m]=by[m]||{name:m,es:[],area:"(root)"}).es.push(v);}
+  const files=Object.values(by);
+  if(!files.length)return empty("cube","No files yet","Files appear once a note is tied to a changed file.");
+  for(const m of files){m.area=areaOf(m.es[0]);m.es.sort((a,b)=>b.id.localeCompare(a.id));}
+  const cols=[...new Set(files.map(m=>m.area))].sort().map(l=>({l,ms:files.filter(m=>m.area===l).sort((a,b)=>b.es.length-a.es.length)}));
+  return [h("h2",{class:"title"},"Files"),h("p",{class:"sub"},"Every file name that has a note, grouped by top-level folder. Open one to see its whole history."),
     h("div",{class:"layers"},cols.map(c=>h("section",{},h("div",{class:"lhead"},dot(c.l),c.l,h("span",{class:"count"},String(c.ms.length))),
-      c.ms.map(m=>h("button",{class:"model",onclick:()=>{FILT.model=m.name;setView("timeline");}},
+      c.ms.map(m=>h("button",{class:"model",onclick:()=>{FILT.name=m.name;setView("timeline");}},
         h("div",{class:"mn"},m.name),h("div",{class:"ms"},m.es.length+(m.es.length===1?" note":" notes")+" · last: "+(m.es[0].topic||"")))))))];}
 
 function viewRecent(){
@@ -296,32 +296,32 @@ function viewGaps(){const g=gapData();
       v=>h("button",{class:"grow",onclick:()=>openEntry(v.id)},h("span",{class:"subject"},v.topic),h("span",{class:"spacer"}),anchorBadge(v)))];}
 
 function viewResults(){
-  const by={};for(const v of RESULTS.filter(pass)){(by[layerOf(v)]=by[layerOf(v)]||[]).push(v);}
-  const head=[h("h2",{class:"title"},"Results for “"+QTEXT+"”"),h("p",{class:"sub"},RESULTS.length+" matching "+(RESULTS.length===1?"note":"notes")+", grouped by layer.")];
+  const by={};for(const v of RESULTS.filter(pass)){(by[areaOf(v)]=by[areaOf(v)]||[]).push(v);}
+  const head=[h("h2",{class:"title"},"Results for “"+QTEXT+"”"),h("p",{class:"sub"},RESULTS.length+" matching "+(RESULTS.length===1?"note":"notes")+", grouped by top-level folder.")];
   if(!RESULTS.length)return head.concat(empty("find","Nothing recorded for that","Silence here means nobody wrote anything down, not that nothing is wrong."));
-  return head.concat(LAYERS.filter(l=>by[l]).map(l=>h("section",{class:"gsec"},h("div",{class:"lhead"},dot(l),l,h("span",{class:"count"},String(by[l].length))),by[l].map(noteCard))));}
+  return head.concat(Object.keys(by).sort().map(l=>h("section",{class:"gsec"},h("div",{class:"lhead"},dot(l),l,h("span",{class:"count"},String(by[l].length))),by[l].map(noteCard))));}
 
 function renderTop(){
   $("#brand").replaceChildren(ico("logo"),"Logbook");
   $("#crumb").replaceChildren(h("b",{},TREE.repo||"repo"),"  /  "+TREE.branch);
   $("#sicon").replaceChildren(ico("find"));
   const g=gapData(),gapN=g.noNotes.length+g.noReason.length+g.unanch.length;
-  const tabs=[["timeline","list","Timeline",ALL.length,"green"],["models","grid","Models",null],["recent","spark","Recent",null],["gaps","shield","Gaps",gapN,gapN?"red":"green"]];
+  const tabs=[["timeline","list","Timeline",ALL.length,"green"],["files","grid","Files",null],["recent","spark","Recent",null],["gaps","shield","Gaps",gapN,gapN?"red":"green"]];
   $("#tabs").replaceChildren(...tabs.map(t=>h("button",{class:"tab","aria-current":VIEW===t[0]&&!RESULTS?"page":null,onclick:()=>setView(t[0])},ico(t[1]),t[2],t[3]!=null&&h("span",{class:"count "+(t[4]||"")},String(t[3])))));
   const seg=(key,opts)=>h("div",{class:"seg",role:"group","aria-label":key},opts.map(o=>h("button",{"aria-pressed":String(FILT[key]===o[0]),onclick:()=>{FILT[key]=o[0];render();}},o[1])));
   $("#bar").replaceChildren(seg("kind",[["","All"],["change","Changes"],["finding","Findings"]]),seg("scope",[["","Everyone"],["mine","Mine"],["shared","Shared"],["private","Private"]]),
-    FILT.model&&h("button",{class:"chip",onclick:()=>{FILT.model="";render();}},ico("cube"),FILT.model,ico("x")),h("span",{class:"spacer"}),
+    FILT.name&&h("button",{class:"chip",onclick:()=>{FILT.name="";render();}},ico("cube"),FILT.name,ico("x")),h("span",{class:"spacer"}),
     h("span",{class:"status"},TREE.entry_count+" notes",TREE.shallow&&badge("shallow clone","warn"),h("span",{},"dashed = yours, unpublished")));}
 
 function render(){
   if(!TREE)return;renderTop();
-  try{const body=RESULTS?viewResults():({timeline:viewTimeline,models:viewModels,recent:viewRecent,gaps:viewGaps}[VIEW]||viewTimeline)();
+  try{const body=RESULTS?viewResults():({timeline:viewTimeline,files:viewFiles,recent:viewRecent,gaps:viewGaps}[VIEW]||viewTimeline)();
     $("#main").replaceChildren(...[body].flat(Infinity).filter(Boolean));renderDrawer();}
   catch(e){console.error(e);$("#main").replaceChildren(empty("alert","Could not draw this view",String(e&&e.message||e)));}}
 
 function setView(v){VIEW=v;RESULTS=null;QTEXT="";$("#q").value="";writeHash();render();window.scrollTo(0,0);}
 function writeHash(){const h2=VIEW+(SEL?"?e="+SEL:"");if(location.hash.slice(1)!==h2)history.replaceState(null,"","#"+h2);}
-function readHash(){const [v,q]=location.hash.slice(1).split("?");if(["timeline","models","recent","gaps"].includes(v))VIEW=v;const m=/e=([0-9a-f-]+)/.exec(q||"");if(m)SEL=m[1];}
+function readHash(){const [v,q]=location.hash.slice(1).split("?");if(["timeline","files","recent","gaps"].includes(v))VIEW=v;const m=/e=([0-9a-f-]+)/.exec(q||"");if(m)SEL=m[1];}
 function openEntry(id){SEL=id;writeHash();render();}
 function closeEntry(){SEL=null;writeHash();render();}
 function neighbours(){const l=[...document.querySelectorAll(".note")].map(n=>n.dataset.id);const i=l.indexOf(SEL);return{prev:l[i-1],next:l[i+1]};}
@@ -339,9 +339,10 @@ function renderDrawer(){
       h("span",{class:"spacer"}),h("button",{class:"ibtn","aria-label":"Close",onclick:closeEntry},ico("x"))),
     h("div",{class:"badges"},badge(v.kind,v.kind==="change"?"ok":"warn",v.kind==="change"?"change":"find"),badge("by "+v.author),badge(ago(v.created)||"","", "clock")),
     h("h3",{},v.topic||"(untitled)"),h("div",{class:"badges"},noteBadges(v)),
-    sec("sum","file","Summary",b.summary),sec("why","why","Why",b.why),sec("wrong","alert","How it was wrong",b.wrong),sec("fix","fix","Fix",b.fix),sec("ev","find","Evidence",b.evidence),
+    sec("sum","file","Summary",b.summary),sec("ctx","file","Context",b.context),sec("why","why","Why",b.why),sec("wrong","alert","How it was wrong",b.wrong),sec("fix","fix","Fix",b.fix),
+    sec("dec","fix","Decided",b.decided),sec("open","alert","Still open",b.open),sec("scale","spark","How much",b.scale),sec("ev","find","Evidence",b.evidence),
     !reason(v)&&h("div",{class:"sec wrong"},h("h4",{},ico("alert"),"No reason recorded"),h("p",{},"This note only repeats what the commit or transcript said. Add why and how it was wrong so agents can use it.")),
-    v.models.length>0&&h("div",{class:"sec"},h("h4",{},ico("cube"),"Models"),h("div",{class:"chips"},v.models.map(m=>h("button",{class:"mchip",onclick:()=>{FILT.model=m;setView("timeline");}},m)))),
+    v.names.length>0&&h("div",{class:"sec"},h("h4",{},ico("cube"),"Names"),h("div",{class:"chips"},v.names.map(m=>h("button",{class:"mchip",onclick:()=>{FILT.name=m;setView("timeline");}},m)))),
     v.paths.length>0&&h("div",{class:"sec"},h("h4",{},ico("file"),"Files"),h("div",{class:"chips"},v.paths.slice(0,24).map(p=>h("span",{class:"b mono"},p)))),
     v.sha&&h("div",{class:"sec"},h("h4",{},ico("commit"),"Commit",h("span",{class:"sha"},v.sha.slice(0,8))),h("p",{},v.subject),
       h("div",{class:"chips"},h("button",{class:"btn",onclick:async()=>{if(!out.hidden){out.hidden=true;return;}

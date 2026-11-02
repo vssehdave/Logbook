@@ -83,9 +83,9 @@ def make_handler(repo, token, port):
                 if u.path == "/api/search":
                     vs, an = tree.all_views(repo)
                     qs = q.get("q", [""])[0][:200]
-                    known = recall.known_models(repo, vs)
-                    models = {m for m in known if m in recall.tokens(qs)}
-                    res = recall.rank(repo, query=qs, models=models, views=vs, anch=an)[:40]
+                    known = recall.known_names(vs)
+                    names = {m for m in known if m in recall.tokens(qs)}
+                    res = recall.rank(repo, query=qs, names=names, views=vs, anch=an)[:40]
                     return self._send(200, json.dumps([{**v, "score": round(s, 1)} for s, v in res]))
                 m = re.match(r"^/api/commit/([0-9a-f]{7,40})$", u.path)
                 if m and SHA_RE.match(m.group(1)):

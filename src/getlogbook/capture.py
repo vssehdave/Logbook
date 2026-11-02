@@ -293,10 +293,8 @@ def _commit_floor(repo):
         info = g.commit_info(repo.root, sha) or {}
         paths = g.changed_paths(repo.root, sha)
         body = g.try_run(["show", "-s", "--format=%b", sha], repo.root)[1].strip()
-        layers = sorted({l for l in (tree.layer_of(p) for p in paths) if l})
         e = Entry(id=new_id(), kind="change", topic=info.get("subject", "")[:200],
-                  body={"summary": info.get("subject", ""), "what": (body + f"\nfiles: {len(paths)}" +
-                                                                     (f" ({', '.join(layers)})" if layers else "")).strip()},
+                  body={"summary": info.get("subject", ""), "what": (body + f"\nfiles: {len(paths)}").strip()},
                   provenance="inferred", captured_via="reconcile", created=now())
         e.anchor = tree.anchor_for(repo, sha=sha, paths=paths)
         repo.add_private(e)
