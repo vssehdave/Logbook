@@ -9,6 +9,12 @@ last person left off. Works for any repo; dbt-style repos get layer awareness (`
   (`refs/logbook/log/<user>/<device>`, one writer per ref, so no merge conflicts). Sharing is opt-in per entry.
 - A live local viewer (`logbook serve`) shows the shared tree with your private entries overlaid.
 
+**Status: alpha (0.0.1).** The engine, git-ref storage, sharing and the viewer work and are tested on Linux, macOS and Windows.
+Not built yet: nothing prompts an agent to write a note, so real reasons exist only when someone runs `logbook note`;
+notes written on a branch before its first commit are not followed through a merge; there are no summaries above commits;
+setup is three separate commands; Claude Code is the only host. Entries marked `inferred` are copied from the commit message
+or a truncated transcript. They carry no reason and are never injected into an agent's prompt.
+
 ## Try it (no credentials, about 30 seconds)
 
     pip install getlogbook   # from a clone: pip install .   (or: PYTHONPATH=src python -m getlogbook ...)
@@ -19,7 +25,7 @@ last person left off. Works for any repo; dbt-style repos get layer awareness (`
 ## Daily use
 
     logbook init                              # once per clone (git config user.email must be set)
-    logbook install-hook                      # git floor: records your commits even without an agent
+    logbook install-hook                      # git floor: copies each of your commits into an `inferred` entry (no reason)
     logbook install --agent claude-code --write   # merges hooks into .claude/settings.local.json (dry run without --write)
     logbook note --kind finding --topic "late payments" --summary "revenue dip" --why "export stalled" --wrong "1 day under"
     logbook note --kind change --before-commit --summary "..." --why "..." --wrong "..." --fix "..."   # then commit as usual
