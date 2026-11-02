@@ -1,8 +1,9 @@
 # Logbook
 
-Commit-anchored shared memory for AI-assisted repos. It records **why** code and warehouse models changed
-(what was wrong, how wrong, the fix) next to the git history, so a teammate or an AI agent can pick up where the
-last person left off. Works for any repo; dbt-style repos get layer awareness (`stg_`, `int_`, `fct_`, `dim_`).
+Commit-anchored shared memory for AI-assisted repos. It records **why** code changed
+(what was wrong, how wrong, the fix) next to the git history, and keeps findings that never became a commit, so a
+teammate or an AI agent can pick up where the last person left off. It works for any repo and knows nothing about any
+particular stack.
 
 - Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, no model calls (`backend none`).
 - Two logs: a **private** one under `.git/logbook/` (never tracked), and a **shared** one on git refs
@@ -31,7 +32,7 @@ or a truncated transcript. They carry no reason and are never injected into an a
     logbook note --kind change --before-commit --summary "..." --why "..." --wrong "..." --fix "..."   # then commit as usual
     logbook publish <id>                      # preview + redaction, you confirm; evidence is opt-in
     logbook sync                              # fetch teammates' entries, push yours
-    logbook query "refunds" | explain fct_revenue | path <rev> <rev>   # exit 0 found, 3 ambiguous, 4 no match
+    logbook query "refunds" | explain orders.py | path <rev> <rev>   # exit 0 found, 3 ambiguous, 4 no match
     logbook serve --open
     logbook doctor                            # setup + what is NOT captured
 
@@ -41,7 +42,7 @@ CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/
 ## How an agent consults it first
 
 Hooks (Claude Code is the only adapter shipped): `SessionStart` and `UserPromptSubmit` inject a digest of at most ~1,500
-characters, only when the prompt names a known model or path, only from people who have commits on this history (or whom you
+characters, only when the prompt names a file or a topic a note was written about, only from people who have commits on this history (or whom you
 ran `logbook trust` on), only entries that say *why* or
 *how wrong*, finding first, each labelled with author, provenance, age, commits behind HEAD and "verify first". Each note
 is shown once per session. Agents without hooks: `logbook snippet` prints text for CLAUDE.md / AGENTS.md. Injection
