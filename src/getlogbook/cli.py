@@ -81,27 +81,44 @@ def cmd_join(a):
         out(f"  writer {u}{'  (you)' if u == r.user else '  [not trusted: searchable, never auto-injected; `logbook trust ' + u + '`]' if u not in r.trusted() else '  [trusted]'}")
 
 
+def _note_input(a):
+    """The note as (kind, topic, body, paths, commit, before_commit, level), from flags or from JSON on stdin."""
+    if not a.json:
+        body = {k: getattr(a, k) for k in BODY_FIELDS if getattr(a, k, None)}
+        if a.from_stdin:
+            body["summary"] = sys.stdin.read().strip()[:MAX_SUMMARY]
+        return a.kind, a.topic, body, (a.paths.split(",") if a.paths else None), a.commit, a.before_commit, ""
+    try:
+        obj = json.loads(sys.stdin.read())
+    except ValueError as ex:
+        raise SystemExit(f"logbook: --json needs a JSON object on stdin ({ex})")
+    if not isinstance(obj, dict):
+        raise SystemExit("logbook: --json needs a JSON object on stdin")
+    body = {k: str(obj[k]) for k in BODY_FIELDS if obj.get(k)}
+    paths = obj.get("paths")
+    paths = [str(p) for p in paths] if isinstance(paths, list) else (str(paths).split(",") if paths else None)
+    return (obj.get("kind") if obj.get("kind") in ("finding", "change") else "finding", str(obj.get("topic") or ""), body, paths,
+            str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""))
+
+
 def cmd_note(a):
     r = need_repo()
-    body = {k: getattr(a, k) for k in BODY_FIELDS if getattr(a, k, None)}
-    if a.from_stdin:
-        body["summary"] = sys.stdin.read().strip()[:MAX_SUMMARY]
+    kind, topic, body, paths, commit, before_commit, level = _note_input(a)
     if not body.get("summary"):
-        raise SystemExit("logbook: --summary is required (what happened, in a sentence)")
-    if a.kind == "finding" and not (body.get("why") or body.get("wrong")):
-        out("note: no --why/--wrong given; this entry will be searchable but never injected into agent context")
-    paths = a.paths.split(",") if a.paths else None
+        raise SystemExit("logbook: a summary is required (what happened, in a few sentences)")
+    if kind == "finding" and not (body.get("why") or body.get("wrong")):
+        out("note: no why/wrong given; this entry will be searchable but never injected into agent context")
     sha = None
-    if a.commit:
-        if a.before_commit:
+    if commit:
+        if before_commit:
             raise SystemExit("logbook: --commit and --before-commit cannot be used together")
-        rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", a.commit + "^{commit}"], r.root)
+        rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], r.root)
         if rc != 0 or not full.strip():
-            raise SystemExit(f"logbook: no commit {a.commit!r} in this repo")
+            raise SystemExit(f"logbook: no commit {commit!r} in this repo")
         sha = full.strip()
-    e = capture.make_entry(r, a.kind, a.topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha,
-                           pending=(a.kind == "change" and a.before_commit))
-    out(f"recorded {e.id} ({'pending: attaches to your next commit' if a.before_commit and a.kind == 'change' else 'private'})")
+    e = capture.make_entry(r, kind, topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha, level=level,
+                           pending=(kind == "change" and before_commit))
+    out(f"recorded {e.id} ({'pending: attaches to your next commit' if before_commit and kind == 'change' else 'private'})")
 
 
 def share_copy(r, e, include_evidence, allow_table):
@@ -249,16 +266,14 @@ def cmd_doctor(a):
     for level, msg in sync.doctor(r, a.remote):
         out(f"[{level:<4}] {msg}")
         bad |= level == "fail"
-    out("capture matrix (what is covered):")
-    out("  claude-code : " + ("hooks installed" if _claude_installed(r) else "NOT installed: `logbook install --agent claude-code --write`"))
-    out("  other agents: NOT captured by hooks (tier 2/3). They are covered only by the git post-commit floor (auto-copied entries),")
-    out("                or by `logbook note` / `logbook note --from-stdin` run by the agent or you.")
+    from . import install as ins
+    out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
+    out(f"  git hook    : {'installed' if ins.git_hook_installed(r) else 'missing'}")
+    for t, st in ins.status(r).items():
+        out(f"  {t:<12}: {st}")
+    out("  Only Claude Code has hooks (it captures sessions and shows notes automatically). The other agents get the rules")
+    out("  file only, so they rely on the agent following it; the git hook is the same for everyone.")
     return 1 if bad else 0
-
-
-def _claude_installed(r):
-    p = r.root / ".claude" / "settings.local.json"
-    return p.exists() and "getlogbook capture" in p.read_text(encoding="utf-8", errors="ignore")
 
 
 def cmd_reconcile(a):
@@ -294,17 +309,62 @@ def cmd_install_hook(a):
     out(f"{'removed from' if a.remove else 'installed in'} {f}")
 
 
+def _targets(a, default):
+    from . import install as ins
+    picked = list(a.agent or [])
+    if not picked or "auto" in picked:
+        return default
+    bad = [t for t in picked if t not in ins.TARGETS]
+    if bad:
+        raise SystemExit(f"logbook: unknown agent {bad[0]!r}; choose from {', '.join(ins.TARGETS)} or auto")
+    return picked
+
+
+def _confirm(a, lines):
+    if a.dry_run:
+        out("(dry run: nothing written)")
+        return False
+    if a.yes or a.write:
+        return True
+    if sys.stdin.isatty():
+        try:
+            return input("Apply these changes? [y/N] ").strip().lower() == "y"
+        except EOFError:
+            return False
+    out("(not applied: run again with --yes to apply)")
+    return False
+
+
 def cmd_install(a):
-    r = need_repo()
-    if a.agent != "claude-code":
-        out(f"{a.agent}: no hook adapter yet (tier 2/3). Use `logbook note` from the agent's instructions file; the git floor still applies.")
+    """One command: init if needed, the git hook, and for each agent its hooks, skill and always-on rules."""
+    from . import install as ins
+    r = Repo(".")
+    targets = _targets(a, ins.detect(r.root))
+    out("logbook will make these changes (existing files are backed up to .git/logbook/backups):")
+    lines = ins.describe(r, targets, pretool=not a.no_pretool)
+    for line in lines:
+        out(line)
+    if not _confirm(a, lines):
         return 0
-    path, cur = capture.install_claude(r, a.path, a.pretool, a.write, a.remove)
-    if a.write:
-        out(f"{'removed from' if a.remove else 'merged into'} {path} (existing hooks preserved)")
-    else:
-        out(json.dumps(cur, indent=2))
-        out(f"\n(dry run: nothing written. Add --write to merge into {path})")
+    if not r.cfg().get("user"):
+        r.init()
+    ins.apply(r, targets, pretool=not a.no_pretool)
+    out("done. `logbook doctor` shows what is installed; `logbook uninstall` reverses it.")
+    return 0
+
+
+def cmd_uninstall(a):
+    from . import install as ins
+    r = Repo(".")
+    targets = _targets(a, list(ins.TARGETS))
+    out("logbook will remove its own changes (your notes are kept; files are backed up first):")
+    for line in ins.describe(r, targets, remove=True):
+        out(line)
+    if not _confirm(a, None):
+        return 0
+    ins.apply(r, targets, remove=True)
+    out("done.")
+    return 0
 
 
 def cmd_purge(a):
@@ -370,6 +430,11 @@ def cmd_stats(a):
     p = r.cdir / "injections.log"
     rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
     out(f"injections: {len(rows)}, entries shown: {sum(len(x['ids']) for x in rows)}, chars injected: {sum(x['chars'] for x in rows)}")
+    nl = r.cdir / "nudges.log"
+    nudges = len([x for x in nl.read_text(encoding="utf-8").splitlines() if x.strip()]) if nl.exists() else 0
+    mine = [l.entry for l in r.all_entries() if l.user == r.user]
+    out(f"nudges sent: {nudges}; your notes: {sum(1 for e in mine if e.provenance != 'auto-copied')} written, "
+        f"{sum(1 for e in mine if e.provenance == 'auto-copied')} auto-copied")
     out("model calls: 0 (backend none)")
 
 
@@ -405,6 +470,7 @@ def build_parser():
     s.add_argument("--before-commit", action="store_true", help="change entry: attach to the next commit")
     s.add_argument("--commit", help="write the note about this earlier commit instead of HEAD")
     s.add_argument("--from-stdin", action="store_true", help="read the summary from stdin (for agents without hooks)")
+    s.add_argument("--json", action="store_true", help="read the whole note as a JSON object on stdin (safest for agents)")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="+")
     s.add_argument("--yes", action="store_true")
@@ -434,12 +500,17 @@ def build_parser():
     add("post-commit", cmd_post_commit, "git hook entry point")
     s = add("install-hook", cmd_install_hook, "chain a post-commit hook (never overwrites yours)")
     s.add_argument("--remove", action="store_true")
-    s = add("install", cmd_install, "install agent hooks (dry run unless --write)")
-    s.add_argument("--agent", default="claude-code")
+    s = add("install", cmd_install, "set everything up: git hook, agent hooks, skill and rules (asks first)")
+    s.add_argument("--agent", nargs="+", metavar="AGENT", help="claude-code agents-md copilot gemini cursor, or auto (default)")
+    s.add_argument("--yes", action="store_true", help="apply without asking")
+    s.add_argument("--write", action="store_true", help="same as --yes")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--no-pretool", action="store_true", help="do not add the before-read/edit note lookup")
+    s = add("uninstall", cmd_uninstall, "remove what install added (notes are kept)")
+    s.add_argument("--agent", nargs="+", metavar="AGENT")
+    s.add_argument("--yes", action="store_true")
     s.add_argument("--write", action="store_true")
-    s.add_argument("--remove", action="store_true")
-    s.add_argument("--pretool", action="store_true", help="also inject before edits")
-    s.add_argument("--path")
+    s.add_argument("--dry-run", action="store_true")
     s = add("purge", cmd_purge, "remove a published entry from your ref")
     s.add_argument("id")
     s.add_argument("--push", action="store_true")

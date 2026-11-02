@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from . import git as g
-from .entry import BODY_FIELDS, Entry, from_json, new_id
+from .entry import BODY_FIELDS, LEVELS, Entry, from_json, new_id
 from .store import Repo, atomic_write
 
 MARK_BEGIN, MARK_END = "# >>> logbook >>>", "# <<< logbook <<<"
@@ -29,11 +29,11 @@ def now():
 
 
 # ---- entries made by people/agents ---------------------------------------------------------------------------
-def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=(), sha=None):
+def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=(), sha=None, level=""):
     from . import tree
     body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
     e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance, captured_via=via,
-              supersedes=list(supersedes), created=now(),
+              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "",
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
     if pending:  # change entries are written before the commit exists; post-commit attaches the sha
         e.anchor = {"paths": list(paths or [])}
@@ -52,7 +52,7 @@ def post_commit(repo):
     for p in sorted(pdir.glob("*.json")) if pdir.exists() else []:
         try:
             e = from_json(p.read_text(encoding="utf-8"))
-            e.anchor = tree.anchor_for(repo)  # paths come from the commit itself
+            e.anchor = tree.anchor_for(repo, with_base=True)  # paths come from the commit itself
             repo.add_private(e)
             p.unlink()
             n += 1
@@ -134,7 +134,12 @@ def handle_hook(event, agent, raw):
                     files = [Path(ti["file_path"]).resolve().relative_to(repo.root.resolve()).as_posix()]
                 except (ValueError, OSError):
                     files = []
-            out = recall.hook_json(event, recall.digest(repo, event, payload.get("prompt", ""), files, str(payload.get("session_id", ""))))
+            sid = str(payload.get("session_id", ""))
+            text = recall.digest(repo, event, payload.get("prompt", ""), files, sid)
+            if event == "UserPromptSubmit":
+                from . import nudge
+                text = nudge.join(text, nudge.nudge_text(repo, sid))
+            out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
         if event in ("SessionStart", "PreCompact", "SessionEnd"):
@@ -174,6 +179,7 @@ def _load(d):
 
 
 def _copy_slice(d, st, transcript):
+    """Copy transcript bytes added since the last checkpoint into the session folder; returns them (b'' if none)."""
     if transcript and Path(transcript).is_file():
         size = Path(transcript).stat().st_size
         if size < st["offset"]:
@@ -185,6 +191,8 @@ def _copy_slice(d, st, transcript):
             d.mkdir(parents=True, exist_ok=True)
             (d / f"slice-{st['offset']:012d}.jsonl").write_bytes(data)
             st["offset"] = size
+            return data
+    return b""
 
 
 def checkpoint(repo, sid, transcript, paths=(), meta=None):
@@ -194,7 +202,10 @@ def checkpoint(repo, sid, transcript, paths=(), meta=None):
         if not got:
             return None
         st = _load(d)
-        _copy_slice(d, st, transcript)
+        data = _copy_slice(d, st, transcript)
+        if data:
+            from . import nudge
+            st["turn"] = nudge.turn_stats(data)
         st["paths"] = sorted(set(st["paths"]) | set(paths))[:200]
         st["last"] = time.time()
         st.update(meta or {})
@@ -341,7 +352,7 @@ def claude_snippet(repo, pretool=False):
     mk = lambda ev: [{"hooks": [{"type": "command", "command": f'"{py}" -m getlogbook capture --event {ev} --agent claude-code'}]}]
     hooks = {ev: mk(ev) for ev in CLAUDE_EVENTS}
     if pretool:
-        hooks["PreToolUse"] = [{"matcher": "Edit|Write|MultiEdit", **mk("PreToolUse")[0]}]
+        hooks["PreToolUse"] = [{"matcher": "Read|Edit|Write|MultiEdit", **mk("PreToolUse")[0]}]
     return {"hooks": hooks}
 
 

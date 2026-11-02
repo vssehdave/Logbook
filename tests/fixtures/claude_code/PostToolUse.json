@@ -1,0 +1,20 @@
+{
+  "cwd": "<REPO>",
+  "duration_ms": 17,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "00000000-0000-0000-0000-000000000001",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "tool_input": {
+    "file_path": "<REPO>/notes.txt"
+  },
+  "tool_name": "Read",
+  "tool_response": {
+    "truncated": true
+  },
+  "tool_use_id": "toolu_FIXTURE",
+  "transcript_path": "<TRANSCRIPT>"
+}

@@ -1,0 +1,9 @@
+{
+  "cwd": "<REPO>",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "Use the Read tool on notes.txt, then reply with just: ok",
+  "prompt_id": "00000000-0000-0000-0000-000000000001",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "transcript_path": "<TRANSCRIPT>"
+}

@@ -347,6 +347,168 @@ class TestRichNotes(Base):
         self.assertLessEqual(len(pub.body["scale"]), 300)
 
 
+class TestRealPayloads(Base):
+    """Payloads recorded from a real headless Claude Code session (paths and ids replaced)."""
+
+    def test_every_recorded_event_is_handled_without_errors(self):
+        d = make_repo(self.root, "r", "a@x.io")
+        commit(d, "b", {"notes.txt": "hello"})
+        r = Repo(d)
+        r.init()
+        t = self.root / "t.jsonl"
+        t.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "read notes.txt"}}) + "\n"
+                     + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}}) + "\n")
+        fixtures = sorted((Path(__file__).parent / "fixtures" / "claude_code").glob("*.json"))
+        self.assertGreaterEqual(len(fixtures), 6)
+        for f in fixtures:
+            raw = f.read_text(encoding="utf-8").replace("<REPO>", str(d).replace("\\", "/")).replace("<TRANSCRIPT>", str(t).replace("\\", "/"))
+            out = capture.handle_hook(json.loads(raw)["hook_event_name"], "claude-code", raw)
+            self.assertIsInstance(out, str, f.name)
+            if out:
+                self.assertIn("hookSpecificOutput", json.loads(out), f.name)
+        self.assertFalse((r.cdir / "errors.log").exists() and (r.cdir / "errors.log").read_text().strip(), "no hook logged an error")
+        self.assertTrue(list((r.cdir / "spool").glob("*.json")), "Stop and SessionEnd were spooled")
+
+
+class TestInstaller(Base):
+    def setUp(self):
+        super().setUp()
+        self.d = make_repo(self.root, "r", "a@x.io")
+        commit(self.d, "b", {"a.txt": "x"})
+        self.cd(self.d)
+
+    def run_cli(self, *args):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = cli.main(list(args))
+        return code, buf.getvalue()
+
+    def test_one_command_sets_up_and_is_idempotent_and_reversible(self):
+        (self.d / "CLAUDE.md").write_bytes(b"# Mine\r\n\r\nKeep this.\r\n")
+        (self.d / ".claude").mkdir()
+        (self.d / ".claude" / "settings.local.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}))
+        code, text = self.run_cli("install", "--yes")
+        self.assertEqual(code, 0, text)
+        md = (self.d / "CLAUDE.md").read_bytes().decode()
+        self.assertIn("# Mine\r\n\r\nKeep this.", md)
+        self.assertIn("logbook:start", md)
+        self.assertNotIn("\r\n\r\n\r\n", md)
+        self.assertTrue(md.count("\n") == md.count("\r\n"), "CRLF file stays CRLF")
+        skill = (self.d / ".claude" / "skills" / "logbook" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("managed-by: logbook", skill)
+        hooks = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
+        self.assertIn("mine", json.dumps(hooks["Stop"]), "existing hooks are kept")
+        self.assertIn("getlogbook capture", json.dumps(hooks["UserPromptSubmit"]))
+        self.assertIn("Read|Edit", json.dumps(hooks["PreToolUse"]))
+        self.assertTrue(list((self.d / ".git" / "logbook" / "backups").glob("*CLAUDE.md.bak")), "originals are backed up")
+        self.assertTrue(Repo(self.d).cfg().get("user"), "install runs init")
+        _, again = self.run_cli("install", "--yes")
+        self.assertNotIn("create", again)
+        self.assertNotIn("update", again)
+        self.run_cli("uninstall", "--yes")
+        self.assertEqual((self.d / "CLAUDE.md").read_bytes(), b"# Mine\r\n\r\nKeep this.\r\n")
+        self.assertFalse((self.d / ".claude" / "skills" / "logbook").exists())
+        left = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
+        self.assertEqual(list(left), ["Stop"])
+        self.assertIn("mine", json.dumps(left))
+
+    def test_dry_run_and_non_interactive_write_nothing(self):
+        code, text = self.run_cli("install", "--dry-run")
+        self.assertIn("create", text)
+        self.assertFalse((self.d / "CLAUDE.md").exists())
+        self.run_cli("install")
+        self.assertFalse((self.d / "CLAUDE.md").exists(), "without --yes and without a terminal nothing is applied")
+
+    def test_other_agents_get_a_rules_block_and_a_foreign_skill_is_never_touched(self):
+        code, _ = self.run_cli("install", "--yes", "--agent", "agents-md", "copilot", "gemini", "cursor")
+        self.assertEqual(code, 0)
+        for rel in ("AGENTS.md", ".github/copilot-instructions.md", "GEMINI.md", ".cursor/rules/logbook.mdc"):
+            self.assertIn("logbook:start", (self.d / rel).read_text(encoding="utf-8"), rel)
+        self.assertIn("alwaysApply: true", (self.d / ".cursor" / "rules" / "logbook.mdc").read_text(encoding="utf-8"))
+        sk = self.d / ".claude" / "skills" / "logbook"
+        sk.mkdir(parents=True)
+        (sk / "SKILL.md").write_text("someone else's skill")
+        with self.assertRaises(SystemExit):
+            self.run_cli("install", "--yes", "--agent", "claude-code")
+        self.run_cli("uninstall", "--yes")
+        self.assertEqual((sk / "SKILL.md").read_text(), "someone else's skill")
+
+    def test_symlinked_rules_file_is_written_through(self):
+        real = self.root / "shared-claude.md"
+        real.write_text("# shared\n")
+        link = self.d / "CLAUDE.md"
+        try:
+            os.symlink(real, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("cannot create symlinks here")
+        self.run_cli("install", "--yes", "--agent", "claude-code")
+        self.assertTrue(link.is_symlink())
+        self.assertIn("logbook:start", real.read_text())
+
+    def test_doctor_reports_install_state(self):
+        self.run_cli("init")
+        _, before = self.run_cli("doctor")
+        self.assertRegex(before, r"claude-code\s*: missing")
+        self.run_cli("install", "--yes")
+        _, after = self.run_cli("doctor")
+        self.assertRegex(after, r"claude-code\s*: installed")
+        self.assertRegex(after, r"git hook\s*: installed")
+
+
+class TestNudge(Base):
+    def setUp(self):
+        super().setUp()
+        self.d = make_repo(self.root, "r", "a@x.io")
+        commit(self.d, "b", {"a.txt": "x"})
+        self.r = Repo(self.d)
+        self.r.init()
+        self.cd(self.d)
+        self.tpath = self.root / "t.jsonl"
+        self.tpath.write_text("")
+
+    def turn(self, *tools):
+        """Append one assistant turn made of (tool name, input) pairs, in Claude Code's real transcript shape."""
+        with open(self.tpath, "a", encoding="utf-8") as f:
+            for name, inp in tools:
+                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_x", "name": name, "input": inp}]}}) + "\n")
+
+    def hook(self, event, **extra):
+        payload = {"session_id": "s1", "transcript_path": str(self.tpath), "cwd": str(self.d), **extra}
+        return capture.handle_hook(event, "claude-code", json.dumps(payload))
+
+    def test_nudge_after_an_investigation_turn_without_a_note_once(self):
+        self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(7)])
+        self.hook("Stop", last_assistant_message="done")
+        first = self.hook("UserPromptSubmit", prompt="ok next")
+        self.assertIn("recorded no note", json.loads(first)["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="and then?"), "", "said once per turn")
+
+    def test_no_nudge_when_a_note_was_written_or_the_turn_was_short(self):
+        self.turn(*[("Grep", {"pattern": "x"}) for _ in range(7)], ("Bash", {"command": "echo '{}' | logbook note --json"}))
+        self.hook("Stop")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
+        self.turn(("Read", {"file_path": "a.py"}), ("Bash", {"command": "git log --oneline"}))
+        self.hook("Stop")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
+
+    def test_config_switch_and_session_cap(self):
+        c = self.r.cfg()
+        c["nudge"] = False
+        self.r.save_cfg(c)
+        self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(7)])
+        self.hook("Stop")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
+        c["nudge"] = True
+        self.r.save_cfg(c)
+        sent = 0
+        for _ in range(5):
+            self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(7)])
+            self.hook("Stop")
+            sent += bool(self.hook("UserPromptSubmit", prompt="next"))
+        self.assertEqual(sent, 3, "at most three nudges per session")
+
+
 class TestBranchPoint(Base):
     def setUp(self):
         super().setUp()
