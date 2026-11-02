@@ -29,7 +29,7 @@ def now():
 
 
 # ---- entries made by people/agents ---------------------------------------------------------------------------
-def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=()):
+def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=(), sha=None):
     from . import tree
     body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
     e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance, captured_via=via,
@@ -39,7 +39,7 @@ def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", 
         e.anchor = {"paths": list(paths or [])}
         atomic_write(repo.cdir / "pending" / f"{e.id}.json", e.to_json())
     else:
-        e.anchor = tree.anchor_for(repo, paths=paths)
+        e.anchor = tree.anchor_for(repo, sha=sha, paths=paths, with_base=True)  # sha: note about an earlier commit
         repo.add_private(e)
     return e
 

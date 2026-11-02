@@ -347,6 +347,48 @@ class TestRichNotes(Base):
         self.assertLessEqual(len(pub.body["scale"]), 300)
 
 
+class TestBranchPoint(Base):
+    def setUp(self):
+        super().setUp()
+        self.d = make_repo(self.root, "r", "a@x.io")
+        self.base_sha = commit(self.d, "base", {"a.txt": "1\n"})
+        self.main = sh("git", "branch", "--show-current", cwd=self.d)
+        self.r = Repo(self.d)
+        self.r.init()
+        self.cd(self.d)
+
+    def test_note_off_the_main_line_records_where_the_branch_started(self):
+        sh("git", "switch", "-q", "-c", "feat", cwd=self.d)
+        commit(self.d, "work", {"b.txt": "2\n"})
+        a = capture.make_entry(self.r, "finding", "t", {"summary": "s"}).anchor
+        self.assertEqual((a["branch"], a["merge_base"], a["base"]), ("feat", self.base_sha, self.main))
+
+    def test_note_on_the_main_line_records_no_branch_point(self):
+        a = capture.make_entry(self.r, "finding", "t", {"summary": "s"}).anchor
+        self.assertEqual((a["merge_base"], a["base"]), ("", ""))
+        self.assertEqual(tree.default_branch(self.r), self.main)
+
+    def test_note_commit_targets_an_earlier_commit(self):
+        later = commit(self.d, "later", {"b.txt": "2\n"})
+        a = capture.make_entry(self.r, "finding", "t", {"summary": "s"}, sha=self.base_sha).anchor
+        self.assertEqual((a["sha"], a["paths"], a["branch"]), (self.base_sha, ["a.txt"], self.main))
+        self.assertNotEqual(a["sha"], later)
+
+    def test_commit_that_is_not_behind_head_does_not_claim_the_current_branch(self):
+        sh("git", "switch", "-q", "-c", "side", cwd=self.d)
+        side = commit(self.d, "side work", {"s.txt": "x\n"})
+        sh("git", "switch", "-q", self.main, cwd=self.d)
+        a = capture.make_entry(self.r, "finding", "t", {"summary": "s"}, sha=side).anchor
+        self.assertEqual((a["sha"], a["branch"]), (side, ""))
+
+    def test_cli_rejects_bad_commit_and_the_before_commit_combination(self):
+        with self.assertRaises(SystemExit):
+            cli.main(["note", "--summary", "s", "--commit", "deadbeefdead"])
+        with self.assertRaises(SystemExit):
+            cli.main(["note", "--kind", "change", "--summary", "s", "--commit", "HEAD", "--before-commit"])
+        self.assertEqual(cli.main(["note", "--summary", "s", "--commit", "HEAD"]) or 0, 0)
+
+
 class TestCli(Base):
     def test_exit_codes(self):
         d = make_repo(self.root, "r", "a@x.io")

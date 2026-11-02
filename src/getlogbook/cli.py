@@ -91,7 +91,15 @@ def cmd_note(a):
     if a.kind == "finding" and not (body.get("why") or body.get("wrong")):
         out("note: no --why/--wrong given; this entry will be searchable but never injected into agent context")
     paths = a.paths.split(",") if a.paths else None
-    e = capture.make_entry(r, a.kind, a.topic or body["summary"][:80], body, paths=paths, via="cli",
+    sha = None
+    if a.commit:
+        if a.before_commit:
+            raise SystemExit("logbook: --commit and --before-commit cannot be used together")
+        rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", a.commit + "^{commit}"], r.root)
+        if rc != 0 or not full.strip():
+            raise SystemExit(f"logbook: no commit {a.commit!r} in this repo")
+        sha = full.strip()
+    e = capture.make_entry(r, a.kind, a.topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha,
                            pending=(a.kind == "change" and a.before_commit))
     out(f"recorded {e.id} ({'pending: attaches to your next commit' if a.before_commit and a.kind == 'change' else 'private'})")
 
@@ -395,6 +403,7 @@ def build_parser():
         s.add_argument(f"--{k}")
     s.add_argument("--paths", help="comma-separated; defaults to the commit's files / working tree")
     s.add_argument("--before-commit", action="store_true", help="change entry: attach to the next commit")
+    s.add_argument("--commit", help="write the note about this earlier commit instead of HEAD")
     s.add_argument("--from-stdin", action="store_true", help="read the summary from stdin (for agents without hooks)")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="+")

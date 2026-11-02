@@ -161,10 +161,33 @@ class Anchorer:
         return int(out.strip()) if rc == 0 and out.strip().isdigit() else None
 
 
-def anchor_for(repo, sha=None, paths=None, dirty=None, pr=""):
+def default_branch(repo):
+    """Local name of the repo's main line: origin's HEAD if known, else main, else master, else ''."""
+    rc, out, _ = g.try_run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repo.root)
+    if rc == 0 and out.strip().startswith("origin/"):
+        return out.strip()[len("origin/"):]
+    for name in ("main", "master"):
+        if g.try_run(["rev-parse", "--verify", "--quiet", f"refs/heads/{name}"], repo.root)[0] == 0:
+            return name
+    return ""
+
+
+def branch_point(repo, sha, branch):
+    """(merge-base with the main line, main line name) for a note written off the main line, else ('', '').
+    Only the note path calls this: it costs two git calls, which hooks and the commit sweep must not pay."""
+    base = default_branch(repo)
+    if not base or not branch or branch == base or not sha:
+        return "", ""
+    rc, out, _ = g.try_run(["merge-base", sha, f"refs/heads/{base}"], repo.root)
+    return (out.strip(), base) if rc == 0 and out.strip() else ("", "")
+
+
+def anchor_for(repo, sha=None, paths=None, dirty=None, pr="", with_base=False):
     """Snapshot of an anchor. Denormalised on purpose: it must still render when the commit is gone."""
     head, br, _, is_dirty = g.state(repo.root)
     sha = sha or head
+    if sha and sha != head and g.try_run(["merge-base", "--is-ancestor", sha, head or "HEAD"], repo.root)[0] != 0:
+        br = ""  # an old commit that is not behind HEAD: do not claim it belongs to the branch we are standing on
     a = {"sha": sha or "", "branch": br, "pr": pr, "dirty": is_dirty if dirty is None else dirty}
     if sha:
         info = g.commit_info(repo.root, sha) or {}
@@ -174,6 +197,8 @@ def anchor_for(repo, sha=None, paths=None, dirty=None, pr=""):
             paths = g.changed_paths(repo.root, sha)
     a["paths"] = list(paths or [])
     a["names"] = names_of(a["paths"])
+    if with_base:
+        a["merge_base"], a["base"] = branch_point(repo, sha, br)
     return a
 
 
@@ -228,7 +253,8 @@ def view(repo, loaded, anch):
             "age_days": age_days(e.created), "created": e.created, "captured_via": e.captured_via,
             "branch": a.get("branch", ""), "subject": a.get("subject", ""), "sha": a.get("sha", ""), "placed": sha or "",
             "paths": a.get("paths", []), "names": a.get("names", []), "dirty": a.get("dirty", False),
-            "supersedes": e.supersedes, "redacted": e.redacted}
+            "supersedes": e.supersedes, "redacted": e.redacted, "level": e.level, "sources": e.sources,
+            "merge_base": a.get("merge_base", ""), "base": a.get("base", "")}
 
 
 def all_views(repo):
