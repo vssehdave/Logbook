@@ -59,8 +59,10 @@ p.sub{margin:0 0 14px;color:var(--muted);max-width:70ch}
 .commit::after{content:"";position:absolute;left:-25px;top:21px;bottom:-20px;width:2px;background:var(--line)}
 .commit.has::before{border-color:var(--green);background:var(--green)}
 .commit.gap::before{border-color:var(--red)}
+.commit.triv::before{border-color:var(--line);background:var(--line)}.commit.triv{opacity:.62}
 .commit.has::after{background:color-mix(in srgb,var(--green) 45%,var(--line))}
 .commit.gap::after{background:color-mix(in srgb,var(--red) 45%,var(--line))}
+.commit.triv::after{background:var(--line)}
 .commit.merge::before{border-radius:4px;border-color:var(--accent);background:var(--accent)}
 .rail>.commit:last-child::after{display:none}
 .cl{position:absolute;right:calc(100% + 44px);top:3px;width:110px;text-align:right;line-height:1.25;white-space:nowrap}
@@ -248,7 +250,7 @@ function viewTimeline(){
     if(sub&&!es.length&&filtering)return null;
     if(!sub)shown++;
     const open=!COLLAPSED.has(c.sha),n=m?m.commits.length+m.more:0;
-    return h("div",{class:"commit "+(es.length?"has":"gap")+(m?" merge":"")},
+    return h("div",{class:"commit "+(es.length?"has":c.trivial?"triv":"gap")+(m?" merge":"")},
       h("div",{class:"cl",title:c.sha+" · "+c.date},h("span",{class:"cd"},stamp(c.date)),h("span",{class:"sha"},c.short)),
       h("div",{class:"chead"},h("span",{class:"subject"},c.subject),
         h("span",{class:"meta"},c.author+" · "+ago(c.date)),areasOf(c.entries||[]).map(l=>h("span",{class:"lc"},dot(l),l))),
@@ -283,7 +285,10 @@ function viewRecent(){
   if(!list.length)return empty("spark","No notes yet","When you or your agent record a note it shows up here, newest first.","logbook note --kind finding --summary \"...\" --why \"...\"");
   return [h("h2",{class:"title"},"Recent"),h("p",{class:"sub"},"The latest notes across all commits, newest first."),list.map(noteCard)];}
 
-function gapData(){return{noNotes:TREE.commits.filter(c=>!c.entries.length),noReason:ALL.filter(v=>!reason(v)),unanch:ALL.filter(v=>v.state==="orphaned"||v.state==="unknown")};}
+function coverage(){const c=TREE.coverage;if(!c||!c.commits)return null;
+  const need=c.commits-c.trivial;return h("span",{class:"b "+(c.without_reason?"warn":"ok"),title:"Recent commits with a note that says why or how it was wrong. Chores, merges and whitespace-only changes need none."},
+    c.with_reason+" of "+need+" commits explained"+(c.trivial?" · "+c.trivial+" trivial":""));}
+function gapData(){return{noNotes:TREE.commits.filter(c=>!c.entries.length&&!c.trivial),noReason:ALL.filter(v=>!reason(v)),unanch:ALL.filter(v=>v.state==="orphaned"||v.state==="unknown")};}
 function viewGaps(){const g=gapData();
   const sec=(icon,title,hint,items,row)=>h("section",{class:"gsec"},h("h3",{},ico(icon),title,h("span",{class:"count "+(items.length?"red":"green")},String(items.length))),
     h("p",{class:"hint"},hint),items.length?items.map(row):h("div",{class:"meta"},"Nothing to fix here."));
@@ -311,7 +316,7 @@ function renderTop(){
   const seg=(key,opts)=>h("div",{class:"seg",role:"group","aria-label":key},opts.map(o=>h("button",{"aria-pressed":String(FILT[key]===o[0]),onclick:()=>{FILT[key]=o[0];render();}},o[1])));
   $("#bar").replaceChildren(seg("kind",[["","All"],["change","Changes"],["finding","Findings"]]),seg("scope",[["","Everyone"],["mine","Mine"],["shared","Shared"],["private","Private"]]),
     FILT.name&&h("button",{class:"chip",onclick:()=>{FILT.name="";render();}},ico("cube"),FILT.name,ico("x")),h("span",{class:"spacer"}),
-    h("span",{class:"status"},TREE.entry_count+" notes",TREE.shallow&&badge("shallow clone","warn"),h("span",{},"dashed = yours, unpublished")));}
+    h("span",{class:"status"},TREE.entry_count+" notes",coverage(),TREE.shallow&&badge("shallow clone","warn"),h("span",{},"dashed = yours, unpublished")));}
 
 function render(){
   if(!TREE)return;renderTop();

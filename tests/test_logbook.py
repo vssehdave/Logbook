@@ -551,6 +551,30 @@ class TestNudge(Base):
         self.assertEqual(sent, 3, "at most three nudges per session")
 
 
+class TestCoverage(Base):
+    def test_trivial_commits_need_no_note_and_the_rest_are_counted(self):
+        d = make_repo(self.root, "r", "a@x.io")
+        commit(d, "feat: add orders", {"orders.py": "def f():\n    return 1\n", "util.py": "x = 1\n"})
+        commit(d, "chore: tidy", {"orders.py": "def f():\n    return 1\n# note\n"})
+        commit(d, "reformat", {"orders.py": "def f():\n    return    1\n# note\n"})  # whitespace only
+        sh("git", "mv", "util.py", "helpers.py", cwd=d)
+        sh("git", "commit", "-q", "-m", "move util", cwd=d)  # rename only
+        real = commit(d, "fix: totals ignore refunds", {"orders.py": "def f():\n    return 2\n# note\n"})
+        r = Repo(d)
+        r.init()
+        self.cd(d)
+        t = tree.build(r)
+        self.assertEqual({c["subject"]: c["trivial"] for c in t["commits"]},
+                         {"feat: add orders": False, "chore: tidy": True, "reformat": True, "move util": True,
+                          "fix: totals ignore refunds": False})
+        self.assertEqual((t["coverage"]["commits"], t["coverage"]["trivial"], t["coverage"]["with_reason"]), (5, 3, 0))
+        self.assertEqual(t["coverage"]["without_reason"], 2)
+        capture.make_entry(r, "change", "t", {"summary": "s", "why": "refunds were summed", "wrong": "4% high"}, sha=real)
+        capture.make_entry(r, "finding", "no reason given", {"summary": "s"}, sha=real)
+        cov = tree.build(r)["coverage"]
+        self.assertEqual((cov["with_reason"], cov["without_reason"]), (1, 1))
+
+
 class TestMergeResolution(Base):
     """A note should still be found under the right commit after the branch it was written on is merged, squashed or rebased."""
 

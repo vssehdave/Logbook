@@ -270,6 +270,9 @@ def cmd_doctor(a):
     from . import install as ins
     out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
     out(f"  git hook    : {'installed' if ins.git_hook_installed(r) else 'missing'}")
+    cov = tree.build(r)["coverage"]
+    need = cov["commits"] - cov["trivial"]
+    out(f"  coverage    : {cov['with_reason']} of {need} recent commits have a note that says why ({cov['trivial']} trivial: chores, merges, whitespace)")
     for t, st in ins.status(r).items():
         out(f"  {t:<12}: {st}")
     out("  Only Claude Code has hooks (it captures sessions and shows notes automatically). The other agents get the rules")

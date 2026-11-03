@@ -73,6 +73,33 @@ def merge_sides(repo, sp):
     return sides
 
 
+TRIVIAL_TYPES = ("chore", "style", "docs")
+_CC = re.compile(r"^(\w+)(\([^)]*\))?!?:")
+
+
+def trivial_subject(subject):
+    m = _CC.match(subject)
+    return bool(m) and m.group(1).lower() in TRIVIAL_TYPES
+
+
+def trivial_shas(repo, commits):
+    """Commits that need no note: merges, chore/style/docs, and changes that vanish once whitespace is ignored or only rename
+    files. Deterministic and cheap (one git call); an agent or a person can still write a note for any of them."""
+    out, need = set(), []
+    for c in commits:
+        if len(c["parents"]) > 1 or trivial_subject(c["subject"]):
+            out.add(c["sha"])
+        else:
+            need.append(c["sha"])
+    if need:
+        rc, txt, _ = g.try_run(["log", "--no-walk=unsorted", "--root", "-w", "-M", "--numstat", "--format=%x1e%H", *need], repo.root)
+        for block in txt.split(chr(30))[1:] if rc == 0 else []:
+            lines = [ln for ln in block.splitlines() if ln.strip()]
+            if lines and all(ln.split(chr(9))[:2] == ["0", "0"] for ln in lines[1:]):
+                out.add(lines[0].strip())
+    return out
+
+
 def get_derived(repo, head=None):
     """Per-HEAD cache of expensive git lookups (patch-ids, renames, tracked model names), kept in memory and on disk."""
     d = getattr(repo, "_derived", None)
@@ -316,20 +343,28 @@ def build(repo):
         else:
             loose.setdefault(v["branch"] or "(no branch)", []).append(v)
 
+    shown = [c for i, c in enumerate(anch.sp) if by_commit.get(c["sha"]) or c["sha"] in sides or i < 30]
+    kid_rows = [k for c in shown if c["sha"] in sides for k in sides[c["sha"]][:MERGE_SHOWN]]
+    triv = trivial_shas(repo, shown + kid_rows)
+
     def card(c):
         ents = sorted(by_commit.get(c["sha"], []), key=lambda v: v["id"])
-        return {**c, "short": c["sha"][:8], "entries": ents}
+        return {**c, "short": c["sha"][:8], "entries": ents, "trivial": c["sha"] in triv}
 
-    commits = []
-    for c in anch.sp:
-        ents = by_commit.get(c["sha"])
-        if ents or c["sha"] in sides or len(commits) < 30:
-            row = card(c)
-            if c["sha"] in sides:
-                kids = sides[c["sha"]]
-                row["merge"] = {"branch": merged_branch(c["subject"]), "commits": [card(s) for s in kids[:MERGE_SHOWN]],
-                                "more": max(0, len(kids) - MERGE_SHOWN)}
-            commits.append(row)
+    commits, cards = [], []
+    for c in shown:
+        row = card(c)
+        cards.append(row)
+        if c["sha"] in sides:
+            kids = sides[c["sha"]]
+            row["merge"] = {"branch": merged_branch(c["subject"]), "commits": [card(s) for s in kids[:MERGE_SHOWN]],
+                            "more": max(0, len(kids) - MERGE_SHOWN)}
+            cards += row["merge"]["commits"]
+        commits.append(row)
+    reasoned = lambda cd: any(v["body"].get("why") or v["body"].get("wrong") for v in cd["entries"])
+    cover = {"commits": len(cards), "trivial": sum(1 for cd in cards if cd["trivial"] and not cd["entries"]),
+             "with_reason": sum(1 for cd in cards if reasoned(cd))}
+    cover["without_reason"] = len(cards) - cover["trivial"] - cover["with_reason"]
     loose_list = [{"branch": b, "entries": sorted(es, key=lambda v: v["id"])} for b, es in sorted(loose.items())]
     return {"repo": repo.root.name, "head": g.head_sha(repo.root) or "", "branch": g.branch(repo.root), "shallow": anch.shallow,
-            "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views)}
+            "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views), "coverage": cover}
