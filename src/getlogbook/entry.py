@@ -77,7 +77,7 @@ def from_dict(d):
         raise ValueError("bad entry")
     body = d.get("body") if isinstance(d.get("body"), dict) else {}
     a = d.get("anchor") if isinstance(d.get("anchor"), dict) else {}
-    anchor = {k: _s(a.get(k), 300) for k in ("sha", "tree", "parent", "patch_id", "branch", "merge_base", "base", "subject",
+    anchor = {k: _s(a.get(k), 300) for k in ("sha", "tree", "parent", "patch_id", "range_pid", "branch", "merge_base", "base", "subject",
                                               "date", "pr")}
     # "models" is the 0.0.1 spelling of "names"; those files are already on people's refs
     anchor.update(paths=_strs(a.get("paths")), names=_strs(a.get("names") or a.get("models")),

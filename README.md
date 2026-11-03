@@ -12,8 +12,9 @@ particular stack.
 - A live local viewer (`logbook serve`) shows the shared tree with your private entries overlaid.
 
 **Status: alpha.** The engine, git-ref storage, sharing, the viewer and the Claude Code integration work and are tested on Linux,
-macOS and Windows. Not built yet: following a note through a merge, squash or rebase when it was written before its branch's first
-commit; summaries above commits; hooks for agents other than Claude Code (they get a rules file only). Entries marked `auto-copied`
+macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before its
+branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Not built yet: summaries
+above commits; hooks for agents other than Claude Code (they get a rules file only). Entries marked `auto-copied`
 are copied from git or a truncated transcript. They carry no reason and are never injected into an agent's prompt.
 
 ## Try it (no credentials, about 30 seconds)

@@ -214,7 +214,7 @@ const pass=v=>(!FILT.kind||v.kind===FILT.kind)&&(!FILT.scope||(FILT.scope==="min
 
 function badge(text,cls,icon){return h("span",{class:"b"+(cls?" "+cls:"")},icon&&ico(icon),text);}
 function anchorBadge(v){
-  const m={exact:["ok","anchor ok"],rewritten:["warn","re-anchored by "+v.rung],orphaned:["bad","commit not found"],unknown:["warn","anchor unverified"],unanchored:["warn","no commit"]}[v.state]||["","?"];
+  const m={exact:["ok","anchor ok"],rewritten:["warn","re-anchored by "+v.rung],orphaned:["bad","commit not found"],unknown:["warn","anchor unverified"],unanchored:["warn","no commit"],branch:["warn","on branch "+v.branch+", not merged here"]}[v.state]||["","?"];
   return badge(m[1]+(v.behind!=null&&v.state!=="unknown"&&v.behind>0?" · "+v.behind+" behind":""),m[0]);}
 function noteBadges(v){return [
   v.provenance==="auto-copied"?badge("copied from git, no reason","warn"):badge(v.provenance,"ok"),

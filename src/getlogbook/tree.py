@@ -119,6 +119,7 @@ class Anchorer:
             if m:
                 self.by_pr.setdefault(m.group(1), c["sha"])
         self._pids = None
+        self._sides = self._side_shas = None
         self.derived = get_derived(repo, self.sp[0]["sha"] if self.sp else "")
         self.shallow = (repo.common / "shallow").exists()  # no subprocess needed
         self.exists = None
@@ -130,28 +131,62 @@ class Anchorer:
     def _has(self, sha):
         return sha in self.exists if self.exists is not None else g.commit_exists(self.repo.root, sha)
 
-    def place(self, a):
-        """-> (sha_on_spine | None, state, rung). state: exact | rewritten | orphaned | unknown | unanchored."""
-        sha = a.get("sha", "")
-        if not sha:
-            return None, "unanchored", ""
-        if sha in self.by_sha:
-            return sha, "exact", "sha"
-        if self._has(sha):
-            return sha, "exact", "sha (off first-parent line)"
-        if a.get("patch_id"):
-            if self._pids is None:
-                if "patch_ids" not in self.derived:
-                    self.derived["patch_ids"] = patch_ids(self.repo)
-                    save_derived(self.repo)
-                self._pids = self.derived["patch_ids"]
-            if a["patch_id"] in self._pids:
-                return self._pids[a["patch_id"]], "rewritten", "patch-id"
+    def sides(self):
+        if self._sides is None:
+            self._sides = merge_sides(self.repo, self.sp)
+        return self._sides
+
+    def side_shas(self):
+        if self._side_shas is None:
+            self._side_shas = {c["sha"] for cs in self.sides().values() for c in cs}
+        return self._side_shas
+
+    def pids(self):
+        if self._pids is None:
+            if "patch_ids" not in self.derived:
+                self.derived["patch_ids"] = patch_ids(self.repo)
+                save_derived(self.repo)
+            self._pids = self.derived["patch_ids"]
+        return self._pids
+
+    def merged_into(self, branch, merge_base):
+        """The oldest merge on the main line, after the branch started, that is named for this branch; else None."""
+        stop = self.by_sha.get(merge_base, len(self.sp))
+        for c in reversed(self.sp[:stop]):
+            if len(c["parents"]) > 1 and merged_branch(c["subject"]) == branch:
+                return c["sha"]
+        return None
+
+    def follow(self, a):
+        """Where a rewritten commit went: by patch-id, by the diff of its whole branch (a squash), by PR number, by tree."""
+        if a.get("patch_id") and a["patch_id"] in self.pids():
+            return self.pids()[a["patch_id"]], "rewritten", "patch-id"
+        if a.get("range_pid") and a["range_pid"] in self.pids():
+            return self.pids()[a["range_pid"]], "rewritten", "squashed branch"
         if a.get("pr") and a["pr"] in self.by_pr:
             return self.by_pr[a["pr"]], "rewritten", "PR number"
         if a.get("tree") and a["tree"] in self.by_tree:
             return self.by_tree[a["tree"]], "rewritten", "tree hash"
-        return None, ("unknown" if self.shallow else "orphaned"), ""
+        return None
+
+    def place(self, a):
+        """-> (sha_on_spine | None, state, rung).
+        state: exact | rewritten | branch | orphaned | unknown | unanchored. 'branch' is a note about a branch's work, written
+        before the branch had a commit of its own: it stays with the branch until a merge named for it shows up."""
+        sha = a.get("sha", "")
+        if not sha:
+            return None, "unanchored", ""
+        if a.get("merge_base") and a.get("branch") and sha == a["merge_base"] and a["branch"] != a.get("base"):
+            hit = self.merged_into(a["branch"], a["merge_base"])
+            return (hit, "rewritten", "merged branch") if hit else (None, "branch", "")
+        if sha in self.by_sha:
+            return sha, "exact", "sha"
+        if self._has(sha):
+            if sha in self.side_shas():
+                return sha, "exact", "sha (off first-parent line)"  # a merge brought it in
+            hit = self.follow(a)  # reachable only by an old ref or the object store: rebased, squashed or abandoned
+            return hit or (sha, "exact", "sha (off first-parent line)")
+        return self.follow(a) or (None, ("unknown" if self.shallow else "orphaned"), "")
 
     def behind(self, sha):
         """Commits between the matched commit and HEAD (distance from the nearest *matched* commit)."""
@@ -199,6 +234,11 @@ def anchor_for(repo, sha=None, paths=None, dirty=None, pr="", with_base=False):
     a["names"] = names_of(a["paths"])
     if with_base:
         a["merge_base"], a["base"] = branch_point(repo, sha, br)
+        if a["merge_base"] and a["merge_base"] != sha:
+            rc, diff, _ = g.try_run(["diff", a["merge_base"], sha], repo.root)
+            if rc == 0 and diff.strip():
+                rc, pid, _ = g.try_run(["patch-id", "--stable"], repo.root, input=diff)
+                a["range_pid"] = pid.split()[0] if rc == 0 and pid.split() else ""
     return a
 
 
@@ -267,8 +307,8 @@ def all_views(repo):
 
 def build(repo):
     views, anch = all_views(repo)
-    sides = merge_sides(repo, anch.sp)
-    on_side = {s["sha"] for cs in sides.values() for s in cs}
+    sides = anch.sides()
+    on_side = anch.side_shas()
     by_commit, loose = {}, {}
     for v in views:
         if v["placed"] in anch.by_sha or v["placed"] in on_side:

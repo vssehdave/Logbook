@@ -26,7 +26,8 @@ def txt(v, s, cap=600):
 
 def line(v):
     where = {"exact": "anchor ok", "rewritten": f"re-anchored by {v['rung']}", "orphaned": "anchor commit gone",
-             "unknown": "anchor unverified (shallow)", "unanchored": "no commit"}[v["state"]]
+             "unknown": "anchor unverified (shallow)", "unanchored": "no commit",
+             "branch": f"on branch {v['branch']}, not merged here"}[v["state"]]
     behind = f", {v['behind']} behind HEAD" if v["behind"] is not None else ""
     return (f"{v['id']}  {v['kind']:<7} {v['scope']:<7} by {v['author']:<10} {v['provenance']:<13} "
             f"{where}{behind}\n    {txt(v, v['topic'], 200)}")

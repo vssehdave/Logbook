@@ -551,6 +551,92 @@ class TestNudge(Base):
         self.assertEqual(sent, 3, "at most three nudges per session")
 
 
+class TestMergeResolution(Base):
+    """A note should still be found under the right commit after the branch it was written on is merged, squashed or rebased."""
+
+    def setUp(self):
+        super().setUp()
+        self.d = make_repo(self.root, "r", "a@x.io")
+        commit(self.d, "base", {"a.txt": "1\n"})
+        self.main = sh("git", "branch", "--show-current", cwd=self.d)
+        self.r = Repo(self.d)
+        self.r.init()
+        self.cd(self.d)
+
+    def view(self, e):
+        views, _ = tree.all_views(self.r)
+        return next(v for v in views if v["id"] == e.id)
+
+    def note(self):
+        return capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
+
+    def prune(self):
+        sh("git", "reflog", "expire", "--expire=now", "--all", cwd=self.d)
+        sh("git", "gc", "-q", "--prune=now", cwd=self.d)
+
+    def test_note_written_before_the_branchs_first_commit_follows_the_merge(self):
+        sh("git", "switch", "-q", "-c", "feat", cwd=self.d)
+        (self.d / "a.txt").write_text("2\n")
+        e = self.note()  # HEAD is still the commit the branch started from
+        sh("git", "add", "-A", cwd=self.d)
+        sh("git", "commit", "-q", "-m", "feat: change a", cwd=self.d)
+        before = self.view(e)
+        self.assertEqual((before["state"], before["placed"]), ("branch", ""))
+        self.assertEqual(tree.build(self.r)["unplaced"][0]["branch"], "feat")
+        sh("git", "switch", "-q", self.main, cwd=self.d)
+        commit(self.d, "other", {"o.txt": "x\n"})
+        sh("git", "merge", "-q", "--no-ff", "feat", "-m", "Merge branch 'feat'", cwd=self.d)
+        merge = sh("git", "rev-parse", "HEAD", cwd=self.d)
+        after = self.view(e)
+        self.assertEqual((after["state"], after["rung"], after["placed"]), ("rewritten", "merged branch", merge))
+        cards = {c["sha"]: c for c in tree.build(self.r)["commits"]}
+        self.assertEqual([x["id"] for x in cards[merge]["entries"]], [e.id])
+
+    def test_note_on_a_branch_commit_sits_under_its_merge(self):
+        sh("git", "switch", "-q", "-c", "feat", cwd=self.d)
+        side = commit(self.d, "feat: change a", {"a.txt": "2\n"})
+        e = self.note()
+        sh("git", "switch", "-q", self.main, cwd=self.d)
+        commit(self.d, "other", {"o.txt": "x\n"})
+        sh("git", "merge", "-q", "--no-ff", "feat", "-m", "Merge branch 'feat'", cwd=self.d)
+        v = self.view(e)
+        self.assertEqual((v["state"], v["placed"]), ("exact", side))
+        merge_card = next(c for c in tree.build(self.r)["commits"] if c.get("merge"))
+        self.assertEqual([x["id"] for k in merge_card["merge"]["commits"] for x in k["entries"]], [e.id])
+
+    def test_squash_merge_is_recognised_by_the_diff_of_the_whole_branch(self):
+        sh("git", "switch", "-q", "-c", "feat", cwd=self.d)
+        commit(self.d, "feat: one", {"a.txt": "2\n"})
+        commit(self.d, "feat: two", {"b.txt": "y\n"})
+        e = self.note()  # at the tip
+        sh("git", "switch", "-q", self.main, cwd=self.d)
+        commit(self.d, "other", {"o.txt": "x\n"})  # main moved on, so the trees differ
+        sh("git", "merge", "-q", "--squash", "feat", cwd=self.d)
+        sh("git", "commit", "-q", "-m", "feat: one and two (#7)", cwd=self.d)
+        squash = sh("git", "rev-parse", "HEAD", cwd=self.d)
+        sh("git", "branch", "-q", "-D", "feat", cwd=self.d)
+        self.prune()
+        v = self.view(e)
+        self.assertEqual((v["state"], v["rung"], v["placed"]), ("rewritten", "squashed branch", squash))
+
+    def test_rebase_is_followed_by_patch_id_even_while_the_old_commit_still_exists(self):
+        sh("git", "switch", "-q", "-c", "feat", cwd=self.d)
+        commit(self.d, "feat: change a", {"a.txt": "2\n"})
+        e = self.note()
+        sh("git", "switch", "-q", self.main, cwd=self.d)
+        commit(self.d, "other", {"o.txt": "x\n"})
+        sh("git", "switch", "-q", "feat", cwd=self.d)
+        sh("git", "rebase", "-q", self.main, cwd=self.d)
+        sh("git", "switch", "-q", self.main, cwd=self.d)
+        sh("git", "merge", "-q", "--ff-only", "feat", cwd=self.d)
+        new = sh("git", "rev-parse", "HEAD", cwd=self.d)
+        v = self.view(e)  # the pre-rebase commit is still in the object store here
+        self.assertEqual((v["state"], v["rung"], v["placed"]), ("rewritten", "patch-id", new))
+        self.prune()
+        v = self.view(e)
+        self.assertEqual((v["state"], v["placed"]), ("rewritten", new))
+
+
 class TestBranchPoint(Base):
     def setUp(self):
         super().setUp()
