@@ -423,7 +423,7 @@ class TestInstaller(Base):
         self.assertNotIn("update", again)
         self.run_cli("uninstall", "--yes")
         self.assertEqual((self.d / "CLAUDE.md").read_bytes(), b"# Mine\r\n\r\nKeep this.\r\n")
-        self.assertFalse((self.d / ".claude" / "skills" / "logbook").exists())
+        self.assertFalse((self.d / ".claude" / "skills").exists(), "empty folders the install made are removed too")
         left = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
         self.assertEqual(list(left), ["Stop"])
         self.assertIn("mine", json.dumps(left))

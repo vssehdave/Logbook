@@ -107,9 +107,11 @@ class Step:
                 (self.path.parent / ".logbook-version").write_text(_version(), encoding="utf-8")
             if self.skill and not self.new:
                 (self.path.parent / ".logbook-version").unlink(missing_ok=True)
-                with_dir = self.path.parent
-                if with_dir.exists() and not any(with_dir.iterdir()):
-                    with_dir.rmdir()
+                for folder in (self.path.parent, self.path.parent.parent, self.path.parent.parent.parent):
+                    if folder.exists() and not any(folder.iterdir()):  # only folders we made and left empty
+                        folder.rmdir()
+                    else:
+                        break
 
 
 def _version():
