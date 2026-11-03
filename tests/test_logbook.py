@@ -347,6 +347,22 @@ class TestRichNotes(Base):
         self.assertLessEqual(len(pub.body["scale"]), 300)
 
 
+class TestFreeText(Base):
+    def test_prompt_naming_no_file_still_finds_a_clearly_related_note(self):
+        d = make_repo(self.root, "r", "a@x.io")
+        commit(d, "b", {"shop/revenue.py": "x"})
+        r = Repo(d)
+        r.init()
+        self.cd(d)
+        capture.make_entry(r, "finding", "weekly revenue ran high because refunded rows were summed",
+                           {"summary": "totals were 4% above the processor", "why": "total() sums refunded rows", "wrong": "assumed loader drops them"},
+                           paths=["shop/revenue.py"])
+        hit = recall.digest(r, "UserPromptSubmit", "why are the weekly totals so high versus the processor, is it refunded rows?", session="a")
+        self.assertIn("refunded rows were summed", hit)
+        self.assertEqual(recall.digest(r, "UserPromptSubmit", "what is the weather like today", session="b"), "")
+        self.assertEqual(recall.digest(r, "UserPromptSubmit", "why is it so", session="c"), "", "stop words alone match nothing")
+
+
 class TestRealPayloads(Base):
     """Payloads recorded from a real headless Claude Code session (paths and ids replaced)."""
 
