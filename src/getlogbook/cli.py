@@ -83,12 +83,13 @@ def cmd_join(a):
 
 
 def _note_input(a):
-    """The note as (kind, topic, body, paths, commit, before_commit, level), from flags or from JSON on stdin."""
+    """The note as (kind, topic, body, paths, commit, before_commit, level, sources), from flags or from JSON on stdin."""
     if not a.json:
         body = {k: getattr(a, k) for k in BODY_FIELDS if getattr(a, k, None)}
         if a.from_stdin:
             body["summary"] = sys.stdin.read().strip()[:MAX_SUMMARY]
-        return a.kind, a.topic, body, (a.paths.split(",") if a.paths else None), a.commit, a.before_commit, ""
+        return (a.kind, a.topic, body, (a.paths.split(",") if a.paths else None), a.commit, a.before_commit, "",
+                a.sources.split(",") if a.sources else [])
     try:
         obj = json.loads(sys.stdin.read())
     except ValueError as ex:
@@ -99,12 +100,17 @@ def _note_input(a):
     paths = obj.get("paths")
     paths = [str(p) for p in paths] if isinstance(paths, list) else (str(paths).split(",") if paths else None)
     return (obj.get("kind") if obj.get("kind") in ("finding", "change") else "finding", str(obj.get("topic") or ""), body, paths,
-            str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""))
+            str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""),
+            [str(x) for x in obj.get("sources") or []] if isinstance(obj.get("sources"), list) else [])
 
 
 def cmd_note(a):
     r = need_repo()
-    kind, topic, body, paths, commit, before_commit, level = _note_input(a)
+    kind, topic, body, paths, commit, before_commit, level, sources = _note_input(a)
+    sources = [x.strip() for x in sources if x.strip()]
+    bad = [x for x in sources if not ID_RE.match(x)]
+    if bad:
+        raise SystemExit(f"logbook: {bad[0]!r} is not a note id (see `logbook context` or `logbook query`)")
     if not body.get("summary"):
         raise SystemExit("logbook: a summary is required (what happened, in a few sentences)")
     if kind == "finding" and not (body.get("why") or body.get("wrong")):
@@ -117,7 +123,7 @@ def cmd_note(a):
         if rc != 0 or not full.strip():
             raise SystemExit(f"logbook: no commit {commit!r} in this repo")
         sha = full.strip()
-    e = capture.make_entry(r, kind, topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha, level=level,
+    e = capture.make_entry(r, kind, topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha, level=level, sources=sources,
                            pending=(kind == "change" and before_commit))
     out(f"recorded {e.id} ({'pending: attaches to your next commit' if before_commit and kind == 'change' else 'private'})")
 
@@ -400,6 +406,78 @@ def cmd_config(a):
     return 0
 
 
+def cmd_context(a):
+    """What an agent needs to write the note for a commit: whether it needs one, and which of your findings it grew out of."""
+    r = need_repo()
+    if a.commit:
+        rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", a.commit + "^{commit}"], r.root)
+        if rc != 0:
+            raise SystemExit(f"logbook: no commit {a.commit!r} in this repo")
+        paths = g.changed_paths(r.root, full.strip())
+        what = f"commit {full.strip()[:8]}"
+        rc, num, _ = g.try_run(["show", "-w", "-M", "--numstat", "--format=", full.strip()], r.root)
+    else:
+        staged = [x for x in g.try_run(["diff", "--cached", "--name-only"], r.root)[1].split() if x]
+        paths = staged or [x for x in g.try_run(["diff", "--name-only", "HEAD"], r.root)[1].split() if x]
+        what = "the staged changes" if staged else "the working tree"
+        rc, num, _ = g.try_run(["diff", "--cached", "-w", "-M", "--numstat"], r.root)
+    rows = [ln.split(chr(9))[:2] for ln in num.splitlines() if ln.strip()] if rc == 0 else []
+    trivial = bool(paths) and all(x == ["0", "0"] for x in rows)
+    out(f"Context for {what}: {len(paths)} file(s) changed" + ("; whitespace or renames only, so a note is optional." if trivial else "."))
+    vs, _ = views(r)
+    cited = {x for v in vs for x in v["sources"]}
+    mine = [v for v in vs if v["mine"] and v["kind"] == "finding" and v["provenance"] != "auto-copied" and v["id"] not in cited]
+    want, want_names = set(paths), set(tree.names_of(paths))
+    near = [v for v in mine if want & set(v["paths"]) or want_names & set(v["names"])]
+    if near:
+        out("Your findings that touch these files and are not yet part of a change note:")
+        for v in sorted(near, key=lambda x: x["id"], reverse=True)[:8]:
+            out(f"  {v['id']}  {txt(v, v['topic'], 90)}  -  {txt(v, v['body'].get('summary', ''), 140)}")
+        out('Cite the ones this change grew out of: "sources": ["<id>", ...] in the note (logbook note --json).')
+    else:
+        out(f"No unlinked finding of yours touches these files ({len(mine)} other unlinked finding(s); `logbook query` finds them).")
+    return 0
+
+
+def cmd_backfill(a):
+    """Brief an agent on commits that have no note saying why, so it can write one from the diff. Makes no model call itself."""
+    r = need_repo()
+    vs, an = views(r)
+    explained = {v["placed"] for v in vs if v["body"].get("why") or v["body"].get("wrong")}
+    if a.shas:
+        picked = []
+        for x in a.shas:
+            rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", x + "^{commit}"], r.root)
+            if rc != 0:
+                raise SystemExit(f"logbook: no commit {x!r} in this repo")
+            picked.append(full.strip())
+    else:
+        recent = an.sp[:a.scan]
+        triv = tree.trivial_shas(r, recent)
+        picked = [c["sha"] for c in recent if c["sha"] not in explained and c["sha"] not in triv][:a.limit]
+    if not picked:
+        out("nothing to backfill: every recent commit has a note saying why, or is trivial.")
+        return 0
+    out(f"{len(picked)} commit(s) have no note saying why. For each, write one only if the change needed real thought;")
+    out('use `logbook note --json` with "commit": "<sha>". Base it on the message and diff below, mark anything you inferred as')
+    out("not verified, and do not invent motives. Skip chores.")
+    for sha in picked:
+        info = g.commit_info(r.root, sha) or {}
+        body = g.try_run(["show", "-s", "--format=%b", sha], r.root)[1].strip()
+        stat = g.try_run(["show", "--stat", "--format=", sha], r.root)[1].strip()
+        diff = g.try_run(["show", "-w", "-M", "--format=", "--unified=2", sha], r.root)[1]
+        out("")
+        out("=" * 72)
+        out(f"commit {sha}  {info.get('subject', '')}")
+        if body:
+            out(body[:1200])
+        out(stat[:1200])
+        out(diff[:a.max_diff])
+        if len(diff) > a.max_diff:
+            out(f"... diff cut at {a.max_diff} characters")
+    return 0
+
+
 def cmd_purge(a):
     r = need_repo()
     ref = r.purge(a.id)
@@ -502,6 +580,7 @@ def build_parser():
     s.add_argument("--paths", help="comma-separated; defaults to the commit's files / working tree")
     s.add_argument("--before-commit", action="store_true", help="change entry: attach to the next commit")
     s.add_argument("--commit", help="write the note about this earlier commit instead of HEAD")
+    s.add_argument("--sources", help="comma-separated ids of the findings this note was written from")
     s.add_argument("--from-stdin", action="store_true", help="read the summary from stdin (for agents without hooks)")
     s.add_argument("--json", action="store_true", help="read the whole note as a JSON object on stdin (safest for agents)")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
@@ -544,6 +623,13 @@ def build_parser():
     s.add_argument("--yes", action="store_true")
     s.add_argument("--write", action="store_true")
     s.add_argument("--dry-run", action="store_true")
+    s = add("context", cmd_context, "what to cite and whether a note is needed before you commit")
+    s.add_argument("--commit", help="for an existing commit instead of the staged changes")
+    s = add("backfill", cmd_backfill, "brief an agent on commits with no note saying why, so it can write them")
+    s.add_argument("shas", nargs="*")
+    s.add_argument("--limit", type=int, default=3)
+    s.add_argument("--scan", type=int, default=50, help="how many recent commits to look through")
+    s.add_argument("--max-diff", type=int, default=6000)
     s = add("config", cmd_config, "show or set: nudge (off|context|block), nudge_after, block_after")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")

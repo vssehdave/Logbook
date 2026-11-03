@@ -347,6 +347,8 @@ function renderDrawer(){
     sec("sum","file","Summary",b.summary),sec("ctx","file","Context",b.context),sec("why","why","Why",b.why),sec("wrong","alert","How it was wrong",b.wrong),sec("fix","fix","Fix",b.fix),
     sec("dec","fix","Decided",b.decided),sec("open","alert","Still open",b.open),sec("scale","spark","How much",b.scale),sec("ev","find","Evidence",b.evidence),
     !reason(v)&&h("div",{class:"sec wrong"},h("h4",{},ico("alert"),"No reason recorded"),h("p",{},"This note only repeats what the commit or transcript said. Add why and how it was wrong so agents can use it.")),
+    v.sources&&v.sources.length>0&&h("div",{class:"sec"},h("h4",{},ico("find"),"Built from"),h("div",{class:"chips"},v.sources.map(id=>{const x=ALL.find(e=>e.id===id);
+      return h("button",{class:"mchip",disabled:x?null:true,onclick:()=>x&&openEntry(id)},x?(x.topic||"(untitled)").slice(0,60):"not visible here");}))),
     v.names.length>0&&h("div",{class:"sec"},h("h4",{},ico("cube"),"Names"),h("div",{class:"chips"},v.names.map(m=>h("button",{class:"mchip",onclick:()=>{FILT.name=m;setView("timeline");}},m)))),
     v.paths.length>0&&h("div",{class:"sec"},h("h4",{},ico("file"),"Files"),h("div",{class:"chips"},v.paths.slice(0,24).map(p=>h("span",{class:"b mono"},p)))),
     v.sha&&h("div",{class:"sec"},h("h4",{},ico("commit"),"Commit",h("span",{class:"sha"},v.sha.slice(0,8))),h("p",{},v.subject),

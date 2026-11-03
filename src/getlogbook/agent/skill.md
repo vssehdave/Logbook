@@ -42,13 +42,17 @@ echo '{"kind":"finding","topic":"short title","summary":"3-5 sentences: what was
 Leave out fields you have nothing true to say in. `summary` is required.
 
 - `kind` is `finding` for something learned, `change` for the reason behind a commit.
-- For a change you are about to commit, add `"before_commit": true` and commit as usual; the note attaches to that commit.
+- For a change you are about to commit, run `logbook context` first. It says whether the change needs a note (whitespace-only and rename-only changes do not) and lists your earlier findings that touch the same files. Then add `"before_commit": true` and `"sources": ["<finding id>", ...]` to a `change` note and commit as usual; the note attaches to that commit and cites the findings it grew out of, so one commit's note can be built from several sessions' findings.
 - To write about an earlier commit, add `"commit": "<sha>"`.
 - Write the way you would brief a colleague who joins tomorrow: the ask, the path, the dead ends, the decision, what is left. Not one line.
 
 Good: "Checkout totals ran 4% high. Compared one week of orders with the processor report and the gap matched refunded rows exactly. total() summed them because the payments loader keeps refunded rows for other reports. Fixed in total(), not in the loader, for that reason. Still open: whether partial refunds are handled."
 
 Bad: "fixed refund bug".
+
+## Commits that have no note
+
+`logbook backfill` lists recent commits with no note saying why, with each message and diff. For ones that needed real thought, write a note with `"commit": "<sha>"`, based only on the message and diff: say "not verified" for anything you inferred and do not invent motives. Skip chores. When a conversation exists, what was said in it is a better source than the diff.
 
 ## Rules
 

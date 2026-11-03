@@ -29,11 +29,11 @@ def now():
 
 
 # ---- entries made by people/agents ---------------------------------------------------------------------------
-def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=(), sha=None, level=""):
+def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=(), sha=None, level="", sources=()):
     from . import tree
     body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
     e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance, captured_via=via,
-              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "",
+              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources),
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
     if pending:  # change entries are written before the commit exists; post-commit attaches the sha
         e.anchor = {"paths": list(paths or [])}

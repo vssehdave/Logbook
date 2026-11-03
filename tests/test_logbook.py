@@ -551,6 +551,74 @@ class TestNudge(Base):
         self.assertEqual(sent, 3, "at most three nudges per session")
 
 
+class TestContext(Base):
+    def setUp(self):
+        super().setUp()
+        self.d = make_repo(self.root, "r", "a@x.io")
+        commit(self.d, "base", {"shop/revenue.py": "x = 1\n", "shop/other.py": "y = 1\n"})
+        self.r = Repo(self.d)
+        self.r.init()
+        self.cd(self.d)
+
+    def run_cli(self, *args, stdin=None):
+        buf = io.StringIO()
+        old = sys.stdin
+        if stdin is not None:
+            sys.stdin = io.StringIO(stdin)
+        try:
+            with contextlib.redirect_stdout(buf):
+                code = cli.main(list(args))
+        finally:
+            sys.stdin = old
+        return code, buf.getvalue()
+
+    def test_context_lists_unlinked_findings_near_the_staged_files_and_sources_link_them(self):
+        f1 = capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
+                                paths=["shop/revenue.py"])
+        capture.make_entry(self.r, "finding", "unrelated", {"summary": "about other.py", "why": "w"}, paths=["shop/other.py"])
+        (self.d / "shop" / "revenue.py").write_text("x = 2\n")
+        sh("git", "add", "-A", cwd=self.d)
+        _, text = self.run_cli("context")
+        self.assertIn(f1.id, text)
+        self.assertNotIn("unrelated", text)
+        note = json.dumps({"kind": "change", "summary": "filter refunded rows", "why": "total() summed them", "before_commit": True,
+                           "sources": [f1.id], "paths": ["shop/revenue.py"]})
+        self.assertEqual(self.run_cli("note", "--json", stdin=note)[0] or 0, 0)
+        sh("git", "commit", "-q", "-m", "fix: skip refunds", cwd=self.d)
+        capture.post_commit(self.r)
+        views, _ = tree.all_views(self.r)
+        change = next(v for v in views if v["kind"] == "change")
+        self.assertEqual(change["sources"], [f1.id])
+        (self.d / "shop" / "revenue.py").write_text("x = 3\n")
+        sh("git", "add", "-A", cwd=self.d)
+        self.assertNotIn(f1.id, self.run_cli("context")[1], "a finding already cited by a change note is not offered again")
+
+    def test_bad_source_id_is_rejected_and_whitespace_only_changes_are_called_optional(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli("note", "--json", stdin=json.dumps({"summary": "s", "sources": ["../x"]}))
+        (self.d / "shop" / "revenue.py").write_text("x   =   1\n")
+        sh("git", "add", "-A", cwd=self.d)
+        self.assertIn("optional", self.run_cli("context")[1])
+
+
+    def test_backfill_briefs_only_unexplained_non_trivial_commits(self):
+        a = commit(self.d, "feat: add totals", {"shop/totals.py": "def total(rows):\n    return sum(rows)\n"})
+        commit(self.d, "chore: tidy", {"shop/other.py": "y = 1\n# tidy\n"})
+        b = commit(self.d, "fix: skip refunds", {"shop/totals.py": "def total(rows):\n    return sum(r for r in rows if r > 0)\n"})
+        capture.make_entry(self.r, "change", "t", {"summary": "s", "why": "because", "wrong": "refunds counted"}, sha=b)
+        code, text = self.run_cli("backfill")
+        self.assertEqual(code or 0, 0)
+        self.assertIn("feat: add totals", text)
+        self.assertIn("def total(rows)", text, "the diff is included")
+        self.assertNotIn("chore: tidy", text)
+        self.assertNotIn("fix: skip refunds", text)
+        self.assertIn('"commit"', text)
+        explicit = self.run_cli("backfill", b[:10])[1]
+        self.assertIn("fix: skip refunds", explicit)
+        self.assertIn("nothing to backfill", self.run_cli("backfill", "--scan", "1")[1])
+        self.assertTrue(a)
+
+
 class TestCoverage(Base):
     def test_trivial_commits_need_no_note_and_the_rest_are_counted(self):
         d = make_repo(self.root, "r", "a@x.io")
