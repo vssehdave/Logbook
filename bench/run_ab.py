@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import statistics
 import subprocess
@@ -36,7 +37,7 @@ FILES = {
     "README.md": "A small shop. Reports live in shop/reports.\n",
 }
 PROMPT = ("The weekly revenue from shop/reports/weekly.py runs about 4% higher than the payment processor's own report. "
-          "Find the root cause and answer in two sentences: which file and function, and why. Do not change any files.")
+          "Find the root cause and answer in two sentences: which file and function, and why. Do not edit any source files.")
 NOTE = {"kind": "finding", "topic": "weekly revenue ran high because refunded rows were summed",
         "summary": "Weekly revenue in shop/reports/weekly.py was about 4% above the processor report. The cause is in revenue.total: "
                    "it sums every row payments.load_week returns, and that loader deliberately keeps refunded rows for finance reports.",
@@ -53,7 +54,7 @@ def sh(args, cwd, **kw):
     return subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", **kw)
 
 
-def build(root, logbook, with_note):
+def build(root, logbook, with_note, nudge=""):
     d = Path(root)
     for rel, text in FILES.items():
         p = d / rel
@@ -67,19 +68,24 @@ def build(root, logbook, with_note):
     r = sh([logbook, "install", "--yes", "--agent", "claude-code"], d)
     if r.returncode:
         sys.exit("logbook install failed: " + r.stderr + r.stdout)
+    if nudge:
+        sh([logbook, "config", "nudge", nudge], d)
     if with_note:
         r = subprocess.run([logbook, "note", "--json"], cwd=d, input=json.dumps(NOTE), capture_output=True, text=True, encoding="utf-8")
         if r.returncode:
             sys.exit("logbook note failed: " + r.stderr + r.stdout)
 
 
-def run_claude(d, model):
+def run_claude(d, model, bash=False, logbook=""):
     cmd = ["claude", "-p", PROMPT, "--output-format", "stream-json", "--verbose", "--setting-sources", "project,local",
-           "--strict-mcp-config", "--allowedTools", "Read", "Grep", "Glob"]
+           "--strict-mcp-config", "--allowedTools", "Read", "Grep", "Glob"] + (["Bash(logbook:*)"] if bash else [])
     if model:
         cmd += ["--model", model]
-    r = sh(cmd, d, timeout=420)
-    tools, result = {}, {}
+    env = dict(os.environ)
+    if bash:  # the agent must be able to run `logbook` by name
+        env["PATH"] = str(Path(logbook).resolve().parent) + os.pathsep + env.get("PATH", "")
+    r = sh(cmd, d, timeout=420, env=env)
+    tools, result, noted = {}, {}, False
     for line in r.stdout.splitlines():
         try:
             o = json.loads(line)
@@ -89,6 +95,7 @@ def run_claude(d, model):
             for b in (o.get("message") or {}).get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
                     tools[b["name"]] = tools.get(b["name"], 0) + 1
+                    noted |= b["name"] == "Bash" and "logbook note" in str((b.get("input") or {}).get("command", ""))
         elif o.get("type") == "result":
             result = o
     u = result.get("usage") or {}
@@ -97,7 +104,7 @@ def run_claude(d, model):
     return {"tools": sum(tools.values()), "by_tool": tools, "turns": result.get("num_turns"), "cost": result.get("total_cost_usd"),
             "in": u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0),
             "out": u.get("output_tokens", 0),
-            "correct": "refund" in low and ("revenue.py" in low or "total" in low), "answer": answer[:300], "error": bool(result.get("is_error"))}
+            "correct": "refund" in low and ("revenue.py" in low or "total" in low), "noted": noted, "answer": answer[:300], "error": bool(result.get("is_error"))}
 
 
 def main():
@@ -106,7 +113,24 @@ def main():
     ap.add_argument("--logbook", default=shutil.which("logbook") or "logbook")
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
+    ap.add_argument("--nudge", default="", help="set the repo's nudge mode first: off, context or block")
+    ap.add_argument("--write-rate", action="store_true",
+                    help="instead of A/B: with no notes and Bash allowed for `logbook`, how often does the agent record one unprompted?")
     a = ap.parse_args()
+    if a.write_rate:
+        noted = 0
+        for i in range(a.runs):
+            tmp = tempfile.mkdtemp(prefix="logbook-ab-")
+            try:
+                build(tmp, a.logbook, False, a.nudge)
+                res = run_claude(tmp, a.model, bash=True, logbook=a.logbook)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            noted += res["noted"]
+            print(f"run {i + 1}: tools={res['tools']} wrote a note={res['noted']} correct={res['correct']}", flush=True)
+        print()
+        print(f"wrote a note unprompted in {noted} of {a.runs} runs")
+        return
     results = {"A (no notes)": [], "B (one note)": []}
     for i in range(a.runs):
         for arm, with_note in (("A (no notes)", False), ("B (one note)", True)):
