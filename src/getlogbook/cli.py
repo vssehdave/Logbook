@@ -99,7 +99,7 @@ def _note_input(a):
     body = {k: str(obj[k]) for k in BODY_FIELDS if obj.get(k)}
     paths = obj.get("paths")
     paths = [str(p) for p in paths] if isinstance(paths, list) else (str(paths).split(",") if paths else None)
-    return (obj.get("kind") if obj.get("kind") in ("finding", "change") else "finding", str(obj.get("topic") or ""), body, paths,
+    return (obj.get("kind") if obj.get("kind") in ("finding", "change", "summary") else "finding", str(obj.get("topic") or ""), body, paths,
             str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""),
             [str(x) for x in obj.get("sources") or []] if isinstance(obj.get("sources"), list) else [])
 
@@ -279,6 +279,9 @@ def cmd_doctor(a):
     cov = tree.build(r)["coverage"]
     need = cov["commits"] - cov["trivial"]
     out(f"  coverage    : {cov['with_reason']} of {need} recent commits have a note that says why ({cov['trivial']} trivial: chores, merges, whitespace)")
+    for sm in tree.summaries(views(r)[0]):
+        node = "repo" if sm["level"] == "repo" else "branch " + sm["branch"]
+        out(f"  summary     : {node}: {'up to date' if sm['fresh'] else str(sm['new_notes']) + ' newer note(s), stale (logbook summarize)'}")
     for t, st in ins.status(r).items():
         out(f"  {t:<12}: {st}")
     out("  Only Claude Code has hooks (it captures sessions and shows notes automatically). The other agents get the rules")
@@ -439,6 +442,43 @@ def cmd_context(a):
     return 0
 
 
+def cmd_summarize(a):
+    """Brief an agent on the notes under a node (the repo, or a branch) so it can write the summary. No model call here."""
+    r = need_repo()
+    vs, _ = views(r)
+    cur = g.branch(r.root)
+    if a.branch:
+        level, branch = "branch", a.branch
+    elif a.repo or not cur or cur == tree.default_branch(r):
+        level, branch = "repo", ""
+    else:
+        level, branch = "branch", cur
+    pool = tree.under(vs, level, branch)
+    where = "the repo" if level == "repo" else f"branch {branch}"
+    if not pool:
+        out(f"nothing to summarise: no note with a reason under {where}.")
+        return 0
+    prev = next((s for s in tree.summaries(vs) if s["level"] == level and s["branch"] == branch), None)
+    if prev and prev["fresh"]:
+        out(f"The summary of {where} is up to date (built from {prev['count']} notes). Nothing to do.")
+        return 0
+    out(f"Summarise {where} from these {len(pool)} notes (newest first). Keep what still stands, drop what newer notes overturned,")
+    out("and add no claim the notes do not support. 4 to 8 sentences, at most 1000 characters: what is known, what was decided, what is open.")
+    if prev:
+        out(f"Previous summary ({prev['new_notes']} newer note(s) since): {prev['summary'][:700]}")
+    for v in pool:
+        out("")
+        out(f"{v['id']}  {v['kind']}  {v['author']}  {txt(v, v['topic'], 90)}")
+        for k in ("summary", "why", "wrong", "decided", "open"):
+            if v["body"].get(k):
+                out(f"    {k}: {txt(v, v['body'][k], 200)}")
+    out("")
+    out("Record it with `logbook note --json`:")
+    out(json.dumps({"kind": "summary", "level": level, "topic": f"Summary of {where}", "summary": "<your summary>",
+                    "sources": [v["id"] for v in pool]}))
+    return 0
+
+
 def cmd_backfill(a):
     """Brief an agent on commits that have no note saying why, so it can write one from the diff. Makes no model call itself."""
     r = need_repo()
@@ -573,7 +613,7 @@ def build_parser():
     s = add("join", cmd_join, "init + fetch teammates' entries (run this after cloning)")
     s.add_argument("--remote", default="origin")
     s = add("note", cmd_note, "record a finding or change in your private log")
-    s.add_argument("--kind", choices=["finding", "change"], default="finding")
+    s.add_argument("--kind", choices=["finding", "change", "summary"], default="finding")
     s.add_argument("--topic")
     for k in BODY_FIELDS:
         s.add_argument(f"--{k}")
@@ -625,6 +665,9 @@ def build_parser():
     s.add_argument("--dry-run", action="store_true")
     s = add("context", cmd_context, "what to cite and whether a note is needed before you commit")
     s.add_argument("--commit", help="for an existing commit instead of the staged changes")
+    s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
+    s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
+    s.add_argument("--branch", help="a named branch")
     s = add("backfill", cmd_backfill, "brief an agent on commits with no note saying why, so it can write them")
     s.add_argument("shas", nargs="*")
     s.add_argument("--limit", type=int, default=3)

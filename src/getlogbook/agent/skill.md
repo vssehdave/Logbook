@@ -54,6 +54,10 @@ Bad: "fixed refund bug".
 
 `logbook backfill` lists recent commits with no note saying why, with each message and diff. For ones that needed real thought, write a note with `"commit": "<sha>"`, based only on the message and diff: say "not verified" for anything you inferred and do not invent motives. Skip chores. When a conversation exists, what was said in it is a better source than the diff.
 
+## Summaries
+
+A summary is a short note about a whole node: the repo, or a branch. Teammates' agents are shown a fresh one at the start of a session, so it saves them reading every note. When the user asks for an overview, or `logbook doctor` says a summary is stale, run `logbook summarize`. It lists the notes under that node; write 4 to 8 sentences from them (what is known, decided and open) and record it with `logbook note --json` using `"kind": "summary"`, the `"level"` it gave you and the `sources` it listed. Add nothing the notes do not support. A summary goes stale as soon as a covered note is added, and a stale one is not shown.
+
 ## Rules
 
 - Never put secrets, personal data or pasted data rows in a note. Publishing is a separate, explicit step the user decides on.

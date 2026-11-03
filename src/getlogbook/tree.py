@@ -302,6 +302,34 @@ def aliases_for(repo, name):
     return names
 
 
+SUMMARY_SOURCES = 40  # a summary cites at most this many notes (entry.MAX_LIST), the newest ones under its node
+
+
+def _reasoned(v):
+    return v["kind"] != "summary" and bool(v["body"].get("why") or v["body"].get("wrong"))
+
+
+def under(views, level, branch):
+    """The notes a summary at this node should cover: reasoned, not themselves summaries, on the branch (or anywhere for the repo)."""
+    pool = [v for v in views if _reasoned(v) and (level == "repo" or v["branch"] == branch)]
+    return sorted(pool, key=lambda v: v["id"], reverse=True)[:SUMMARY_SOURCES]
+
+
+def summaries(views):
+    """Newest summary per node with its freshness: fresh while every note it should cover is among its sources and none is gone."""
+    present = {v["id"] for v in views}
+    newest = {}
+    for v in sorted((x for x in views if x["kind"] == "summary" and x["level"] in ("repo", "branch")), key=lambda x: x["id"]):
+        newest[(v["level"], v["branch"] if v["level"] == "branch" else "")] = v
+    out = []
+    for (level, branch), v in sorted(newest.items()):
+        cur, src = {x["id"] for x in under(views, level, branch)}, set(v["sources"])
+        out.append({"id": v["id"], "level": level, "branch": branch, "topic": v["topic"], "summary": v["body"].get("summary", ""),
+                    "fresh": cur <= src and src <= present, "new_notes": len(cur - src), "count": len(src), "author": v["author"],
+                    "mine": v["mine"], "trusted": v["trusted"], "age_days": v["age_days"], "created": v["created"]})
+    return sorted(out, key=lambda s: (s["level"] != "repo", s["branch"]))
+
+
 def age_days(created):
     try:
         return max(0, int((time.time() - time.mktime(time.strptime(created[:19], "%Y-%m-%dT%H:%M:%S"))) // 86400))
@@ -367,4 +395,5 @@ def build(repo):
     cover["without_reason"] = len(cards) - cover["trivial"] - cover["with_reason"]
     loose_list = [{"branch": b, "entries": sorted(es, key=lambda v: v["id"])} for b, es in sorted(loose.items())]
     return {"repo": repo.root.name, "head": g.head_sha(repo.root) or "", "branch": g.branch(repo.root), "shallow": anch.shallow,
-            "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views), "coverage": cover}
+            "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views), "coverage": cover,
+            "summaries": summaries(views)}

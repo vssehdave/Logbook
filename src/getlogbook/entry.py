@@ -11,7 +11,7 @@ import re
 import time
 
 ID_RE = re.compile(r"^[0-9a-f]{11}-[0-9a-f]{8}$")
-KINDS = ("change", "finding")
+KINDS = ("change", "finding", "summary")
 PROVENANCE = ("agent-written", "user-edited", "auto-copied")  # auto-copied: built by code from git data, carries no reason
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
 BODY_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale", "evidence")

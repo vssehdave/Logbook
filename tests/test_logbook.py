@@ -619,6 +619,30 @@ class TestContext(Base):
         self.assertTrue(a)
 
 
+    def test_summary_goes_stale_when_a_note_is_added_and_is_injected_only_while_fresh(self):
+        n1 = capture.make_entry(self.r, "finding", "refunds summed", {"summary": "s1", "why": "no filter", "wrong": "4% high"})
+        n2 = capture.make_entry(self.r, "finding", "rounding ruled out", {"summary": "s2", "why": "money.py is fine"})
+        text = self.run_cli("summarize")[1]
+        self.assertIn(n1.id, text)
+        self.assertIn(n2.id, text)
+        body = {"kind": "summary", "level": "repo", "topic": "Summary of the repo", "sources": [n1.id, n2.id],
+                "summary": "Revenue ran 4% high because refunded rows were summed; rounding was ruled out."}
+        self.run_cli("note", "--json", stdin=json.dumps(body))
+        views, _ = tree.all_views(self.r)
+        s = tree.summaries(views)[0]
+        self.assertEqual((s["level"], s["fresh"], s["count"]), ("repo", True, 2))
+        self.assertIn("up to date", self.run_cli("summarize")[1])
+        start = recall.digest(self.r, "SessionStart", session="s1")
+        self.assertIn("refunded rows were summed", start)
+        self.assertIn("verify first", start)
+        n3 = capture.make_entry(self.r, "finding", "partial refunds", {"summary": "s3", "why": "not handled"})
+        stale = tree.summaries(tree.all_views(self.r)[0])[0]
+        self.assertEqual((stale["fresh"], stale["new_notes"]), (False, 1))
+        self.assertNotIn("refunded rows were summed", recall.digest(self.r, "SessionStart", session="s2"), "stale summaries say nothing")
+        self.assertIn(n3.id, self.run_cli("summarize")[1])
+        self.assertEqual(tree.build(self.r)["summaries"][0]["fresh"], False)
+
+
 class TestCoverage(Base):
     def test_trivial_commits_need_no_note_and_the_rest_are_counted(self):
         d = make_repo(self.root, "r", "a@x.io")

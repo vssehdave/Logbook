@@ -63,6 +63,7 @@ p.sub{margin:0 0 14px;color:var(--muted);max-width:70ch}
 .commit.has::after{background:color-mix(in srgb,var(--green) 45%,var(--line))}
 .commit.gap::after{background:color-mix(in srgb,var(--red) 45%,var(--line))}
 .commit.triv::after{background:var(--line)}
+.sumcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 16px;margin-bottom:18px}.sumcard p{margin:6px 0;line-height:1.5}
 .commit.merge::before{border-radius:4px;border-color:var(--accent);background:var(--accent)}
 .rail>.commit:last-child::after{display:none}
 .cl{position:absolute;right:calc(100% + 44px);top:3px;width:110px;text-align:right;line-height:1.25;white-space:nowrap}
@@ -212,7 +213,7 @@ const reason=v=>!!(v.body.why||v.body.wrong);
 
 let TREE=null,ALL=[],SEL=null,VIEW="timeline",VER=null,RESULTS=null,QTEXT="";
 const FILT={kind:"",scope:"",name:""};
-const pass=v=>(!FILT.kind||v.kind===FILT.kind)&&(!FILT.scope||(FILT.scope==="mine"?v.mine:v.scope===FILT.scope))&&(!FILT.name||v.names.includes(FILT.name));
+const pass=v=>v.kind!=="summary"&&(!FILT.kind||v.kind===FILT.kind)&&(!FILT.scope||(FILT.scope==="mine"?v.mine:v.scope===FILT.scope))&&(!FILT.name||v.names.includes(FILT.name));
 
 function badge(text,cls,icon){return h("span",{class:"b"+(cls?" "+cls:"")},icon&&ico(icon),text);}
 function anchorBadge(v){
@@ -263,11 +264,18 @@ function viewTimeline(){
       es.length?es.map(noteCard):(m?null:h("div",{class:"gaptext"},ico("alert"),"No reason recorded for this commit")));}
   for(const c of TREE.commits){const b=block(c,false);if(b)rail.append(b);}
   const loose=TREE.unplaced.map(g=>({branch:g.branch,es:g.entries.filter(pass)})).filter(g=>g.es.length);
-  const out=[rail];
+  const out=[...summaryCards(),rail];
   for(const g of loose)out.push(h("div",{class:"gsec"},h("h3",{},ico("layers"),"Branch "+g.branch+" — commits not on this line"),
     h("p",{class:"hint"},"These notes belong to commits that were rewritten or never fetched, so they cannot sit on the timeline."),g.es.map(noteCard)));
   if(!shown&&!loose.length)return empty("inbox","Nothing matches","Try clearing the filters, or record the first note:","logbook note --kind finding --summary \"...\" --why \"...\"");
   return out;}
+
+function summaryCards(){
+  return (TREE.summaries||[]).filter(s=>s.level==="repo"||s.branch===TREE.branch).map(s=>h("section",{class:"gsec sumcard"},
+    h("h3",{},ico("spark"),s.level==="repo"?"Summary of the repo":"Summary of branch "+s.branch,
+      badge(s.fresh?"up to date":s.new_notes+" newer note"+(s.new_notes===1?"":"s")+", stale",s.fresh?"ok":"warn")),
+    h("p",{},s.summary||"(empty)"),
+    h("div",{class:"meta"},"by "+s.author+" · "+ago(s.created)+" · built from "+s.count+" notes"+(s.fresh?"":" · ask your agent to run logbook summarize"))));}
 
 function viewFiles(){
   const by={};for(const v of ALL.filter(pass))for(const m of v.names){(by[m]=by[m]||{name:m,es:[],area:"(root)"}).es.push(v);}
@@ -359,7 +367,7 @@ function renderDrawer(){
 async function loadTree(){
   const r=await fetch("/api/tree");TREE=await r.json();
   ALL=[...TREE.commits.flatMap(c=>[...c.entries,...(c.merge?c.merge.commits.flatMap(s=>s.entries):[])]),...TREE.unplaced.flatMap(g=>g.entries)];
-  const seen=new Set();ALL=ALL.filter(v=>seen.has(v.id)?false:seen.add(v.id));
+  const seen=new Set();ALL=ALL.filter(v=>v.kind==="summary"||seen.has(v.id)?false:seen.add(v.id));
   readHash();render();}
 async function search(){
   const q=$("#q").value.trim();QTEXT=q;
