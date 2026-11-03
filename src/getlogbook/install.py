@@ -163,10 +163,9 @@ def plan(repo, targets, remove=False, pretool=True):
     return steps
 
 
-def git_hook_installed(repo):
+def git_hook_installed(repo, name="post-commit"):
     try:
-        hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], repo.root).strip())
-        f = hooks / "post-commit"
+        f = capture._hooks_dir(repo) / name
         return f.exists() and capture.MARK_BEGIN in f.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return False
@@ -175,11 +174,11 @@ def git_hook_installed(repo):
 def describe(repo, targets, remove=False, pretool=True):
     """Lines that say what would change."""
     lines = []
-    hook = git_hook_installed(repo)
-    if remove:
-        lines.append(f"  {'remove' if hook else 'unchanged':<10} git post-commit hook")
-    else:
-        lines.append(f"  {'unchanged' if hook else 'create':<10} git post-commit hook")
+    for name, what in (("post-commit", "git post-commit hook (records commits)"),
+                       ("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)")):
+        hook = git_hook_installed(repo, name)
+        verb = ("remove" if hook else "unchanged") if remove else ("unchanged" if hook else "create")
+        lines.append(f"  {verb:<10} {what}")
     for s in plan(repo, targets, remove, pretool):
         rel = os.path.relpath(s.path, repo.root)
         lines.append(f"  {s.verb:<10} {rel}  ({s.label})")
@@ -190,8 +189,10 @@ def apply(repo, targets, remove=False, pretool=True):
     steps = plan(repo, targets, remove, pretool)
     if remove:
         capture.uninstall_git_hook(repo)
+        capture.uninstall_pre_push_hook(repo)
     else:
         capture.install_git_hook(repo)
+        capture.install_pre_push_hook(repo)
     for s in steps:
         s.apply(repo)
     return steps

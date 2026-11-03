@@ -339,14 +339,47 @@ def install_git_hook(repo):
     return f
 
 
+def _hooks_dir(repo):
+    return Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], repo.root).strip())
+
+
+def _strip_hook_block(f):
+    """Remove our marked block from a hook file; delete the file if nothing but the shebang is left."""
+    if not (f.exists() and MARK_BEGIN in f.read_text(encoding="utf-8")):
+        return
+    t = f.read_text(encoding="utf-8")
+    a, _, rest = t.partition(MARK_BEGIN)
+    _, _, b = rest.partition(MARK_END)
+    left = (a + b.lstrip("\n")).rstrip("\n") + "\n"
+    if left.strip() in ("", "#!/bin/sh"):
+        f.unlink()
+    else:
+        f.write_text(left, encoding="utf-8", newline="\n")
+
+
 def uninstall_git_hook(repo):
-    hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], repo.root).strip())
-    f = hooks / "post-commit"
-    if f.exists() and MARK_BEGIN in f.read_text(encoding="utf-8"):
-        t = f.read_text(encoding="utf-8")
-        a, _, rest = t.partition(MARK_BEGIN)
-        _, _, b = rest.partition(MARK_END)
-        f.write_text((a + b.lstrip("\n")).rstrip("\n") + "\n", encoding="utf-8", newline="\n")
+    f = _hooks_dir(repo) / "post-commit"
+    _strip_hook_block(f)
+    return f
+
+
+def install_pre_push_hook(repo):
+    """A reminder on stderr of notes that are still private. It never blocks the push and never publishes anything."""
+    hooks = _hooks_dir(repo)
+    hooks.mkdir(parents=True, exist_ok=True)
+    f = hooks / "pre-push"
+    block = f'{MARK_BEGIN}\n"{_py(repo)}" -m getlogbook queue --hook >&2 || true\n{MARK_END}\n'
+    text = f.read_text(encoding="utf-8") if f.exists() else "#!/bin/sh\n"
+    if MARK_BEGIN not in text:  # chain, never overwrite
+        f.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8", newline="\n")
+    with contextlib.suppress(OSError):
+        f.chmod(f.stat().st_mode | 0o111)
+    return f
+
+
+def uninstall_pre_push_hook(repo):
+    f = _hooks_dir(repo) / "pre-push"
+    _strip_hook_block(f)
     return f
 
 

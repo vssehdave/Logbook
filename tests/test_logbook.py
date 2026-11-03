@@ -468,7 +468,7 @@ class TestInstaller(Base):
         self.run_cli("install", "--yes")
         _, after = self.run_cli("doctor")
         self.assertRegex(after, r"claude-code\s*: installed")
-        self.assertRegex(after, r"git hook\s*: installed")
+        self.assertRegex(after, r"git hooks\s*: post-commit installed, pre-push installed")
 
 
 class TestNudge(Base):
@@ -551,7 +551,7 @@ class TestNudge(Base):
         self.assertEqual(sent, 3, "at most three nudges per session")
 
 
-class TestContext(Base):
+class CliRepo(Base):
     def setUp(self):
         super().setUp()
         self.d = make_repo(self.root, "r", "a@x.io")
@@ -572,6 +572,9 @@ class TestContext(Base):
             sys.stdin = old
         return code, buf.getvalue()
 
+
+
+class TestContext(CliRepo):
     def test_context_lists_unlinked_findings_near_the_staged_files_and_sources_link_them(self):
         f1 = capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
                                 paths=["shop/revenue.py"])
@@ -641,6 +644,34 @@ class TestContext(Base):
         self.assertNotIn("refunded rows were summed", recall.digest(self.r, "SessionStart", session="s2"), "stale summaries say nothing")
         self.assertIn(n3.id, self.run_cli("summarize")[1])
         self.assertEqual(tree.build(self.r)["summaries"][0]["fresh"], False)
+
+
+class TestSharingQueue(CliRepo):
+    def test_queue_lists_unshared_notes_and_publish_all_shares_them_once_confirmed(self):
+        keep = capture.make_entry(self.r, "finding", "worth sharing", {"summary": "s", "why": "w"})
+        capture.make_entry(self.r, "finding", "copied", {"summary": "s"}, provenance="auto-copied")
+        self.assertIn(keep.id, self.run_cli("queue")[1])
+        self.assertNotIn("copied", self.run_cli("queue")[1])
+        self.assertEqual([e.id for e in self.r.unpublished()], [keep.id])
+        code, text = self.run_cli("publish", "--all", "--yes")
+        self.assertEqual(code or 0, 0, text)
+        self.assertIn("would publish " + keep.id, text)
+        self.assertEqual(self.r.unpublished(), [])
+        self.assertIn("nothing waiting", self.run_cli("queue")[1])
+        self.assertIn("nothing to publish", self.run_cli("publish", "--all", "--yes")[1])
+
+    def test_pre_push_hook_reminds_and_never_blocks(self):
+        self.run_cli("install", "--yes", "--agent", "agents-md")
+        remote = self.root / "remote.git"
+        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
+        sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+        capture.make_entry(self.r, "finding", "worth sharing", {"summary": "s", "why": "w"})
+        p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("1 private note(s) are not shared", p.stderr)
+        self.run_cli("uninstall", "--yes", "--agent", "agents-md")
+        self.assertFalse((self.d / ".git" / "hooks" / "pre-push").exists(), "uninstall removes the hook file it created")
+        self.assertFalse((self.d / ".git" / "hooks" / "post-commit").exists())
 
 
 class TestCoverage(Base):

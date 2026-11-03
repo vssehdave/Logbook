@@ -156,7 +156,12 @@ def cmd_publish(a):
     if not r.policy().get("publish", True):
         raise SystemExit("logbook: this repo's policy has publishing turned off (.logbook/policy.json)")
     ready = []
-    for eid in a.ids:
+    ids = r.unpublished() if getattr(a, "all", False) else a.ids
+    ids = [e.id if hasattr(e, "id") else e for e in ids]
+    if not ids:
+        out("nothing to publish.")
+        return 0
+    for eid in ids:
         e = r.get_private(eid)
         if not e:
             raise SystemExit(f"logbook: no private entry {eid}")
@@ -275,7 +280,8 @@ def cmd_doctor(a):
         bad |= level == "fail"
     from . import install as ins
     out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
-    out(f"  git hook    : {'installed' if ins.git_hook_installed(r) else 'missing'}")
+    out(f"  git hooks   : post-commit {'installed' if ins.git_hook_installed(r) else 'missing'}, "
+        f"pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}")
     cov = tree.build(r)["coverage"]
     need = cov["commits"] - cov["trivial"]
     out(f"  coverage    : {cov['with_reason']} of {need} recent commits have a note that says why ({cov['trivial']} trivial: chores, merges, whitespace)")
@@ -384,6 +390,25 @@ def cmd_uninstall(a):
 
 
 CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None}
+
+
+def cmd_queue(a):
+    """Private notes that are not shared yet. Sharing stays your decision: this only lists, and `publish` previews and asks."""
+    r = need_repo()
+    q = r.unpublished() if r.policy().get("publish", True) else []
+    if a.hook:
+        if q:
+            print(f"logbook: {len(q)} private note(s) are not shared with your team yet. "
+                  "`logbook publish --all` shows what would be shared and asks first.", file=sys.stderr)
+        return 0
+    if not q:
+        out("nothing waiting: every note of yours is shared, auto-copied, or publishing is off for this repo.")
+        return 0
+    out(f"{len(q)} private note(s) not shared yet (newest first):")
+    for e in sorted(q, key=lambda x: x.id, reverse=True):
+        out(f"  {e.id}  {e.kind:<8} {e.topic[:80]}")
+    out("`logbook publish --all` previews them with redaction and asks once; `logbook publish <id>` does one.")
+    return 0
 
 
 def cmd_config(a):
@@ -624,7 +649,8 @@ def build_parser():
     s.add_argument("--from-stdin", action="store_true", help="read the summary from stdin (for agents without hooks)")
     s.add_argument("--json", action="store_true", help="read the whole note as a JSON object on stdin (safest for agents)")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
-    s.add_argument("ids", nargs="+")
+    s.add_argument("ids", nargs="*")
+    s.add_argument("--all", action="store_true", help="every private note not shared yet (same preview and one confirmation)")
     s.add_argument("--yes", action="store_true")
     s.add_argument("--push", action="store_true")
     s.add_argument("--include-evidence", action="store_true")
@@ -673,6 +699,8 @@ def build_parser():
     s.add_argument("--limit", type=int, default=3)
     s.add_argument("--scan", type=int, default=50, help="how many recent commits to look through")
     s.add_argument("--max-diff", type=int, default=6000)
+    s = add("queue", cmd_queue, "list private notes that are not shared yet")
+    s.add_argument("--hook", action="store_true", help="the quiet one-line reminder the pre-push hook prints")
     s = add("config", cmd_config, "show or set: nudge (off|context|block), nudge_after, block_after")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")

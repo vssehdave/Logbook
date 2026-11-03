@@ -290,6 +290,12 @@ class Repo:
                     tombs.add((m.group(1), path[len("tombstones/"):-len(".json")]))
         return loaded, tombs
 
+    def unpublished(self):
+        """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered."""
+        shared, _ = self.load_shared()
+        done = {l.entry.id for l in shared if l.user == self.user}
+        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied"]
+
     def all_entries(self):
         """Shared (merged at read time, deduped by id) + private overlay. Superseded/purged entries are hidden."""
         shared, tombs = self.load_shared()

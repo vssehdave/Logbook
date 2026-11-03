@@ -12,10 +12,11 @@ particular stack.
 - A live local viewer (`logbook serve`) shows the shared tree with your private entries overlaid.
 
 **Status: alpha.** The engine, git-ref storage, sharing, the viewer and the Claude Code integration work and are tested on Linux,
-macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before its
-branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Not built yet: summaries
-above commits; hooks for agents other than Claude Code (they get a rules file only). Entries marked `auto-copied`
-are copied from git or a truncated transcript. They carry no reason and are never injected into an agent's prompt.
+macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
+its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Summaries of the repo
+or a branch are written by your agent on request and go stale when a note is added. Hooks exist only for Claude Code; other agents
+get a rules file. Entries marked `auto-copied` are copied from git or a truncated transcript: they carry no reason and are never
+injected into an agent's prompt. The only measurements so far are two small smoke tests on a toy repo (see `docs/DESIGN.md`).
 
 ## Try it (no credentials, about 30 seconds)
 
@@ -29,7 +30,8 @@ are copied from git or a truncated transcript. They carry no reason and are neve
     logbook install        # shows what it will change and asks; --yes to apply, --dry-run to only look
     logbook uninstall      # puts every file back (your notes are kept)
 
-One command starts the repo (`init`), chains a git post-commit hook, and for each agent it finds writes that agent's hooks, an
+One command starts the repo (`init`), chains a git post-commit hook and a pre-push reminder (it never blocks a push and never
+shares anything), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
 `.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
@@ -52,6 +54,11 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
     logbook note --kind change --before-commit --summary "..." --why "..." --wrong "..." --fix "..."   # then commit as usual
     logbook note --commit <sha> --summary "..."   # a note about an earlier commit
     logbook publish <id>                      # preview + redaction, you confirm; evidence is opt-in
+    logbook queue                             # your private notes that are not shared yet (the pre-push hook counts them)
+    logbook publish --all                     # preview every one of them with redaction, confirm once
+    logbook context                           # before a commit: does it need a note, and which of your findings it grew out of
+    logbook backfill                          # recent commits with no note saying why, with diffs, for an agent to write
+    logbook summarize                         # the notes under the repo or branch, for an agent to write a summary
     logbook sync                              # fetch teammates' entries, push yours
     logbook query "refunds" | explain orders.py | path <rev> <rev>   # exit 0 found, 3 ambiguous, 4 no match
     logbook serve --open
