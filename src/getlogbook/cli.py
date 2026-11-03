@@ -603,14 +603,9 @@ def cmd_stats(a):
     out("model calls: 0 (backend none)")
 
 
-def cmd_serve(a):
-    from . import server
-    server.serve(need_repo(), a.port, a.open)
-
-
 def cmd_demo(a):
     from . import demo
-    return demo.run(a.dir, a.serve)
+    return demo.run(a.dir)
 
 
 def build_parser():
@@ -709,12 +704,8 @@ def build_parser():
     s.add_argument("--session")
     add("stats", cmd_stats, "injection and cost counters")
     add("snippet", cmd_snippet, "text to paste into CLAUDE.md / AGENTS.md / copilot-instructions for agents without hooks")
-    s = add("serve", cmd_serve, "live local viewer on 127.0.0.1")
-    s.add_argument("--port", type=int, default=0)
-    s.add_argument("--open", action="store_true")
     s = add("demo", cmd_demo, "build a scratch two-person team and walk through it")
     s.add_argument("--dir")
-    s.add_argument("--serve", action="store_true")
     return p
 
 

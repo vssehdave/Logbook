@@ -9,9 +9,8 @@ particular stack.
   your own agent writes the notes.
 - Two logs: a **private** one under `.git/logbook/` (never tracked), and a **shared** one on git refs
   (`refs/logbook/log/<user>/<device>`, one writer per ref, so no merge conflicts). Sharing is opt-in per entry.
-- A live local viewer (`logbook serve`) shows the shared tree with your private entries overlaid.
 
-**Status: alpha.** The engine, git-ref storage, sharing, the viewer and the Claude Code integration work and are tested on Linux,
+**Status: alpha.** The engine, git-ref storage, sharing and the Claude Code integration work and are tested on Linux,
 macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
 its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Summaries of the repo
 or a branch are written by your agent on request and go stale when a note is added. Hooks exist only for Claude Code; other agents
@@ -23,7 +22,6 @@ injected into an agent's prompt. The only measurements so far are two small smok
     pip install getlogbook   # from a clone: pip install .   (or: PYTHONPATH=src python -m getlogbook ...)
                              # the command is `logbook`; the package name is getlogbook because `logbook` on PyPI is taken
     logbook demo           # Alice, Bob and a hostile Mallory on a scratch repo; every claim is checked
-    logbook demo --serve   # same, then open the viewer on Bob's clone
 
 ## Set it up in a repo
 
@@ -61,7 +59,6 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
     logbook summarize                         # the notes under the repo or branch, for an agent to write a summary
     logbook sync                              # fetch teammates' entries, push yours
     logbook query "refunds" | explain orders.py | path <rev> <rev>   # exit 0 found, 3 ambiguous, 4 no match
-    logbook serve --open
     logbook stats                             # injections, nudges sent, notes written
     logbook doctor                            # setup + what is NOT captured
 
@@ -82,8 +79,8 @@ uses them.
 
 - Entries from other writers are **untrusted data**: author comes from the ref path, never from the file; text is
   sanitised (links, code fences, instruction-like lines, angle brackets removed) before it reaches an agent, in `inject`
-  and in CLI output; the viewer renders only with `textContent` under a strict CSP.
-- Every entry is recorded, searchable and visible in the viewer. Trust only decides what is *automatically injected into an
+  and in CLI output.
+- Every entry is recorded, searchable. Trust only decides what is *automatically injected into an
   agent's prompt*: your own entries, entries from anyone with a commit on this history (no setup), and writers you ran
   `logbook trust <user-id>` on. A writer with push access who never committed is searchable but not injected.
   Strict mode: `"inject_from": "self"` in `.logbook/policy.json`, or `trust_committers: false` in your config.

@@ -116,7 +116,7 @@ class Repo:
         return self._committers
 
     def trusted(self):
-        """Whose notes may be injected into an agent's context. Storage, search and the viewer cover everyone regardless.
+        """Whose notes may be injected into an agent's context. Storage and search cover everyone regardless.
         Default: you, anyone with a commit on this line of history, and anyone you ran `trust` on.
         policy inject_from=self narrows it to you; cfg trust_committers=false turns the committer rule off."""
         t = {self.user}

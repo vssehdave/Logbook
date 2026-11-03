@@ -37,4 +37,4 @@ logbook = "getlogbook.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-getlogbook = ["viewer.html", "agent/*.md"]
+getlogbook = ["agent/*.md"]

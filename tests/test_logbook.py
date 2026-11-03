@@ -1,15 +1,12 @@
 import contextlib
-import http.client
 import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
@@ -17,7 +14,7 @@ sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
 
-from getlogbook import capture, cli, recall, safety, server, sync, tree  # noqa: E402
+from getlogbook import capture, cli, recall, safety, sync, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
 from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
@@ -869,48 +866,6 @@ class TestCliSanitises(Base):
         self.assertNotIn("evil.example", buf.getvalue())
         self.assertNotIn("curl", buf.getvalue())
         self.assertIn("real reason", buf.getvalue())
-
-
-class TestServer(Base):
-    def test_security(self):
-        d = make_repo(self.root, "r", "a@x.io")
-        commit(d, "b", {"a.txt": "x"})
-        r = Repo(d)
-        r.init()
-        capture.make_entry(r, "finding", "<script>alert(1)</script>", {"summary": "s"})
-        token = "tok" + "x" * 20
-        srv = ThreadingHTTPServer(("127.0.0.1", 0), lambda *a, **k: None)
-        port = srv.server_address[1]
-        srv.RequestHandlerClass = server.make_handler(r, token, port)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        self.addCleanup(srv.server_close)
-        self.addCleanup(srv.shutdown)
-
-        def req(method, path, headers=None):
-            c = http.client.HTTPConnection("127.0.0.1", port)
-            c.request(method, path, headers=headers or {})
-            res = c.getresponse()
-            return res.status, dict(res.getheaders()), res.read().decode()
-
-        host = {"Host": f"127.0.0.1:{port}"}
-        self.assertEqual(req("GET", "/api/tree", host)[0], 403, "no token, no data")
-        self.assertEqual(req("GET", "/api/tree", {"Host": "evil.example"})[0], 403, "DNS rebinding host")
-        self.assertEqual(req("GET", "/?t=wrong", host)[0], 403)
-        st, hd, _ = req("GET", f"/?t={token}", host)
-        self.assertEqual(st, 302)
-        cookie = {**host, "Cookie": hd["Set-Cookie"].split(";")[0]}
-        st, hd, body = req("GET", "/", cookie)
-        self.assertEqual(st, 200)
-        self.assertIn("script-src 'nonce-", hd["Content-Security-Policy"])
-        self.assertIn("default-src 'none'", hd["Content-Security-Policy"])
-        self.assertNotIn("{{NONCE}}", body)
-        self.assertEqual(req("GET", "/api/tree", {**cookie, "Origin": "http://evil.example"})[0], 403)
-        st, _, body = req("GET", "/api/tree", cookie)
-        self.assertEqual(st, 200)
-        self.assertEqual(json.loads(body)["entry_count"], 1)
-        self.assertEqual(req("POST", "/api/tree", cookie)[0], 405, "read-only")
-        self.assertEqual(req("GET", "/api/commit/..%2f..", cookie)[0], 404)
-        self.assertEqual(req("GET", "/api/search?q=alert", cookie)[0], 200)
 
 
 class TestMergeCards(Base):

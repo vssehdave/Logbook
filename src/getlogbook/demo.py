@@ -54,7 +54,7 @@ def commit(d, msg, files):
     return sh("git", "rev-parse", "HEAD", cwd=d)
 
 
-def run(dir=None, serve=False):
+def run(dir=None):
     root = Path(dir) if dir else Path(tempfile.mkdtemp(prefix="logbook-demo-"))
     root.mkdir(parents=True, exist_ok=True)
     say(f"scratch space: {root}")
@@ -207,8 +207,5 @@ def run(dir=None, serve=False):
     check(not any(l == "fail" for l, _ in sync.doctor(ra)), "doctor reports no failures for Alice")
 
     say(f"\n{'ALL CHECKS PASSED' if not FAILS else str(len(FAILS)) + ' CHECK(S) FAILED'}")
-    say(f"try it yourself:  cd {bob}   then  logbook status | logbook query refunds | logbook serve --open")
-    if serve:
-        from . import server
-        server.serve(rb, 0, True)
+    say(f"try it yourself:  cd {bob}   then  logbook status | logbook query refunds")
     return 1 if FAILS else 0
