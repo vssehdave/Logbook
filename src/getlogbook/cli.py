@@ -350,6 +350,9 @@ def cmd_install(a):
         r.init()
     ins.apply(r, targets, pretool=not a.no_pretool)
     out("done. `logbook doctor` shows what is installed; `logbook uninstall` reverses it.")
+    if "claude-code" in targets:
+        out("Claude Code will be asked once to record a note before it finishes a turn that read or searched 3 or more times and wrote")
+        out("none. `logbook config nudge context` makes that a reminder on the next prompt, `logbook config nudge off` turns it off.")
     return 0
 
 
@@ -364,6 +367,32 @@ def cmd_uninstall(a):
         return 0
     ins.apply(r, targets, remove=True)
     out("done.")
+    return 0
+
+
+CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None}
+
+
+def cmd_config(a):
+    r = need_repo()
+    c = r.cfg()
+    if not a.key:
+        for k in CONFIG_KEYS:
+            out(f"{k} = {('off' if c.get(k) is False else c.get(k)) if k in c else '(default)'}")
+        return 0
+    if a.key not in CONFIG_KEYS:
+        raise SystemExit(f"logbook: unknown setting {a.key!r}; choose from {', '.join(CONFIG_KEYS)}")
+    if a.value is None:
+        out(str(c.get(a.key, "(default)")))
+        return 0
+    allowed = CONFIG_KEYS[a.key]
+    if allowed and a.value not in allowed:
+        raise SystemExit(f"logbook: {a.key} must be one of {', '.join(allowed)}")
+    if not allowed and not a.value.isdigit():
+        raise SystemExit(f"logbook: {a.key} must be a number")
+    c[a.key] = False if a.value == "off" else int(a.value) if a.value.isdigit() else a.value
+    r.save_cfg(c)
+    out(f"{a.key} = {a.value}")
     return 0
 
 
@@ -511,6 +540,9 @@ def build_parser():
     s.add_argument("--yes", action="store_true")
     s.add_argument("--write", action="store_true")
     s.add_argument("--dry-run", action="store_true")
+    s = add("config", cmd_config, "show or set: nudge (off|context|block), nudge_after, block_after")
+    s.add_argument("key", nargs="?")
+    s.add_argument("value", nargs="?")
     s = add("purge", cmd_purge, "remove a published entry from your ref")
     s.add_argument("id")
     s.add_argument("--push", action="store_true")

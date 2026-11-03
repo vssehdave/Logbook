@@ -481,6 +481,9 @@ class TestNudge(Base):
         self.cd(self.d)
         self.tpath = self.root / "t.jsonl"
         self.tpath.write_text("")
+        c = self.r.cfg()
+        c["nudge"] = "context"  # block is the default; most of these tests are about the reminder
+        self.r.save_cfg(c)
 
     def turn(self, *tools):
         """Append one assistant turn made of (tool name, input) pairs, in Claude Code's real transcript shape."""
@@ -507,6 +510,29 @@ class TestNudge(Base):
         self.turn(("Read", {"file_path": "a.py"}), ("Bash", {"command": "git log --oneline"}))
         self.hook("Stop")
         self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
+
+    def test_block_mode_blocks_once_and_cannot_loop(self):
+        cli.main(["config", "nudge", "block"])
+        self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(4)])
+        first = json.loads(self.hook("Stop", last_assistant_message="answer"))
+        self.assertEqual(first["decision"], "block")
+        self.assertIn("logbook note", first["reason"])
+        self.assertEqual(self.hook("Stop", stop_hook_active=True), "", "the stop that follows our own block is never blocked")
+        self.assertEqual(self.hook("Stop"), "", "a turn is blocked once")
+        self.turn(*[("Read", {"file_path": f"g{i}.py"}) for i in range(4)], ("Bash", {"command": "logbook note --json"}))
+        self.assertEqual(self.hook("Stop"), "", "no block when the agent already wrote a note")
+        self.turn(("Read", {"file_path": "a.py"}))
+        self.assertEqual(self.hook("Stop"), "", "no block after a short turn")
+
+    def test_config_command_validates(self):
+        self.assertEqual(cli.main(["config", "nudge", "off"]), 0)
+        self.assertIs(self.r.cfg()["nudge"], False)
+        self.assertEqual(cli.main(["config", "nudge_after", "9"]), 0)
+        self.assertEqual(self.r.cfg()["nudge_after"], 9)
+        with self.assertRaises(SystemExit):
+            cli.main(["config", "nudge", "loud"])
+        with self.assertRaises(SystemExit):
+            cli.main(["config", "colour", "blue"])
 
     def test_config_switch_and_session_cap(self):
         c = self.r.cfg()

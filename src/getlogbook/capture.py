@@ -142,6 +142,9 @@ def handle_hook(event, agent, raw):
             out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
+            if event == "Stop":
+                from . import nudge
+                out = nudge.stop_block(repo, payload)
         if event in ("SessionStart", "PreCompact", "SessionEnd"):
             spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], repo.root)
         return out
