@@ -1,6 +1,6 @@
 {
   "name": "logbook",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "A Sources band above the prompt for Logbook: the numbered notes behind an answer, with links to the commit or pull request for notes a teammate shared. Needs the logbook command (pip install getlogbook).",
   "author": {
     "name": "Veertej Sehdave",
