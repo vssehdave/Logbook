@@ -215,7 +215,7 @@ export const register: Register = on => {
             {ids.length ? at + 1 : 0}/{ids.length}
           </Text>
         </Box>
-        <Button key="toggle" plain label="details" onPress={toggle} />
+        <Button key="toggle" plain label={isOpen ? 'compact' : 'details'} onPress={toggle} />
       </Box>
     )
 
@@ -256,10 +256,17 @@ export const register: Register = on => {
       </Box>
     )
 
+    // A rule closes the list when details are on, as the line under a table does. Terminal only: it is a row of box-drawing characters.
+    const rule = (
+      <Text dimColor wrap="truncate-end">
+        {'─'.repeat(width ?? 0)}
+      </Text>
+    )
     const mine = (
       <Box flexDirection="column">
         {head}
         {isOpen ? list : compact}
+        {isOpen && width !== undefined ? rule : null}
       </Box>
     )
     return below ? (
