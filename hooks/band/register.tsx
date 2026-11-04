@@ -179,13 +179,16 @@ export const register: Register = on => {
         <Text>bibliography</Text>
         <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
-        {/* The finder is one tight group: arrows, the field, x/y. The field fills its box, so the box is only as wide as the field and
-            its "⏎ go" need: a digit, the cursor, a space and four cells, seven in all. */}
-        <Box flexDirection="row" alignItems="center" gap={1}>
-          <Button key="prev" plain label="↑" onPress={() => move(-1)} />
-          <Button key="next" plain label="↓" onPress={() => move(1)} />
-          <Box width={7}>
-            <Input key="find" placeholder="n" submitLabel="go" value={query.text} onInput={typed} onSubmit={typed} />
+        {/* The finder is one tight group: arrows, the field, x/y. The field fills its box, so the box is as wide as a three-digit number
+            and its cursor need (four cells) plus one; at rest that leaves four cells between "n" and x/y. The field has no submit label:
+            the number is searched as it is typed. */}
+        <Box flexDirection="row" alignItems="center">
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            <Button key="prev" plain label="↑" onPress={() => move(-1)} />
+            <Button key="next" plain label="↓" onPress={() => move(1)} />
+            <Box width={5}>
+              <Input key="find" placeholder="n" submitLabel="" value={query.text} onInput={typed} onSubmit={typed} />
+            </Box>
           </Box>
           <Text dimColor>
             {ids.length ? at + 1 : 0}/{ids.length}
