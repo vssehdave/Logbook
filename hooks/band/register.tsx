@@ -140,8 +140,10 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     // Other mods share this slot: draw theirs below ours instead of replacing it.
     const below = await next(e).catch(() => undefined)
-    // The list belongs to the session it was built in; after /clear the id differs and the band is empty at once.
-    const sources = (await read($, owner)) === (await $.session.id()) ? await read($, shown) : []
+    // The list belongs to the session it was built in; after /clear the id differs and the band is empty at once. No owner yet (just
+    // loaded, no answer has completed since) is not a different chat: show what is kept.
+    const owned = await read($, owner)
+    const sources = owned === '' || owned === (await $.session.id()) ? await read($, shown) : []
     const isOpen = await read($, open)
     const seen = instances
     const query = await read($, find)
@@ -177,14 +179,18 @@ export const register: Register = on => {
         <Text>bibliography</Text>
         <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
-        <Button key="prev" plain label="↑" onPress={() => move(-1)} />
-        <Button key="next" plain label="↓" onPress={() => move(1)} />
-        <Box width={9}>
-          <Input key="find" placeholder="n" submitLabel="go" value={query.text} onInput={typed} onSubmit={typed} />
+        {/* The finder is one tight group: arrows, the field, x/y. The field fills its box, so the box is only as wide as the field and
+            its "⏎ go" need: a digit, the cursor, a space and four cells, seven in all. */}
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          <Button key="prev" plain label="↑" onPress={() => move(-1)} />
+          <Button key="next" plain label="↓" onPress={() => move(1)} />
+          <Box width={7}>
+            <Input key="find" placeholder="n" submitLabel="go" value={query.text} onInput={typed} onSubmit={typed} />
+          </Box>
+          <Text dimColor>
+            {ids.length ? at + 1 : 0}/{ids.length}
+          </Text>
         </Box>
-        <Text dimColor>
-          {ids.length ? at + 1 : 0}/{ids.length}
-        </Text>
         <Button key="toggle" plain label="details" onPress={toggle} />
       </Box>
     )
