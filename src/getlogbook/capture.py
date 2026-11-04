@@ -152,6 +152,7 @@ def handle_hook(event, agent, raw):
             if event == "UserPromptSubmit":
                 from . import nudge
                 text = nudge.join(text, nudge.nudge_text(repo, sid))
+                nudge.new_turn(repo, sid)  # after the reminder has looked at the turn that just ended
             out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
@@ -221,7 +222,7 @@ def checkpoint(repo, sid, transcript, paths=(), meta=None):
         data = _copy_slice(d, st, transcript)
         if data:
             from . import nudge
-            st["turn"] = nudge.turn_stats(data)
+            st["turn"] = nudge.add_stats(st.get("turn"), nudge.turn_stats(data))  # add to the turn: a checkpoint can come mid-turn
         st["paths"] = sorted(set(st["paths"]) | set(paths))[:200]
         st["last"] = time.time()
         st.update(meta or {})

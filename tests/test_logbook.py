@@ -504,6 +504,25 @@ class TestNudge(Base):
         self.assertIn("recorded no note", json.loads(first)["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(self.hook("UserPromptSubmit", prompt="and then?"), "", "said once per turn")
 
+    def test_a_turn_split_over_several_checkpoints_adds_up_and_the_next_prompt_starts_again(self):
+        """PreCompact fires mid-turn: 4 reads before it and 3 after are 7, not 3 (the later checkpoint used to overwrite the earlier one)."""
+        self.turn(*[("Read", {"file_path": f"a{i}.py"}) for i in range(4)])
+        self.hook("PreCompact")
+        self.turn(*[("Read", {"file_path": f"b{i}.py"}) for i in range(3)])
+        self.hook("Stop", last_assistant_message="done")
+        st = capture._load(self.r.cdir / "sessions" / "s1")
+        self.assertEqual((st["turn"]["reads"], st["turn"]["noted"]), (7, False))
+        self.assertIn("recorded no note", json.loads(self.hook("UserPromptSubmit", prompt="next"))["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(capture._load(self.r.cdir / "sessions" / "s1")["turn"], {}, "a new prompt starts a new turn")
+
+    def test_a_note_written_early_in_a_turn_still_counts_after_a_later_checkpoint(self):
+        self.turn(*[("Read", {"file_path": f"a{i}.py"}) for i in range(7)], ("Bash", {"command": "logbook note --fields"}))
+        self.hook("PreCompact")
+        self.turn(("Read", {"file_path": "late.py"}))
+        self.hook("Stop", last_assistant_message="done")
+        self.assertTrue(capture._load(self.r.cdir / "sessions" / "s1")["turn"]["noted"])
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
+
     def test_only_the_note_subcommand_counts_as_writing_a_note(self):
         """A real session found this: `logbook ask "... same note id"` was counted as a note, so no reminder ever came."""
         from getlogbook import nudge

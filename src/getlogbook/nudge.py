@@ -52,6 +52,26 @@ def turn_stats(data):
     return {"reads": reads, "edits": edits, "noted": noted, "nudged": False}
 
 
+def add_stats(old, new):
+    """A turn spans several checkpoints (PreCompact, a second Stop after a block): its counts add up, and `nudged` is kept."""
+    old = old or {}
+    return {"reads": old.get("reads", 0) + new["reads"], "edits": old.get("edits", 0) + new["edits"],
+            "noted": bool(old.get("noted")) or new["noted"], "nudged": bool(old.get("nudged"))}
+
+
+def new_turn(repo, session):
+    """A prompt arrived: the turn that was counting is over, the next one starts from zero."""
+    from . import capture
+    d = repo.cdir / "sessions" / capture._sid(session)
+    if not session or not (d / "state.json").exists():
+        return
+    with capture._lock(d / ".lock") as ok:
+        if ok:
+            st = capture._load(d)
+            st["turn"] = {}
+            atomic_write(d / "state.json", json.dumps(st))
+
+
 def _claim(repo, session, threshold):
     """Reads in the last turn if it earns a reminder (investigated, no note, not yet reminded, under the cap); marks it said."""
     from . import capture
