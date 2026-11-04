@@ -55,6 +55,12 @@ the answer and `logbook cites` for the list. It needs the `logbook` command on y
 `claude plugin test` and, for the first version, in a live session; scrolling the chat to a citation and the finder are new and
 unproven at narrow widths.
 
+## Who wrote a note
+
+A note is labelled `agent-written` only when it is written from inside an agent's session (Claude Code is recognised by the session id in the
+environment of the commands it runs), and `user-written` when a person writes it in their own terminal. For another agent, or a person using an
+agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from before this label was reliable show `origin unknown`.
+
 ## What the agent does
 
 - **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook ask`. Hooks also put

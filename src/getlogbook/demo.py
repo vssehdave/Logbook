@@ -121,7 +121,7 @@ def run(dir=None):
            {"src/shop/revenue.py": "def total(payments):\n    return sum(p.amount for p in payments if p.status != 'refunded')\n"})
     capture.post_commit(ra)
     capture.reconcile(ra)
-    chg = [v for v in views(ra)[0] if v["kind"] == "change" and v["provenance"] == "agent-written"]
+    chg = [v for v in views(ra)[0] if v["kind"] == "change" and v["provenance"] != "auto-copied"]
     check(len(chg) == 1 and chg[0]["state"] == "exact" and chg[0]["names"] == ["revenue"], "change entry attached to the new commit, file name detected")
     cs, _ = share_copy(ra, ra.get_private(chg[0]["id"]), False, False)
     ra.publish([cs])

@@ -373,7 +373,7 @@ def view(repo, loaded, anch):
     e, a = loaded.entry, loaded.entry.anchor
     sha, state, rung = anch.place(a)
     behind = anch.behind(sha) if sha else None
-    return {"id": e.id, "kind": e.kind, "topic": e.topic, "body": e.body, "provenance": e.provenance,
+    return {"id": e.id, "kind": e.kind, "topic": e.topic, "body": e.body, "provenance": "origin unknown" if (e.v < 2 and e.provenance == "agent-written") else e.provenance,
             "scope": loaded.scope, "author": repo.label(loaded), "mine": loaded.user == repo.user,
             "trusted": loaded.user in repo.trusted(), "state": state, "rung": rung, "behind": behind,
             "age_days": age_days(e.created), "created": e.created, "captured_via": e.captured_via,

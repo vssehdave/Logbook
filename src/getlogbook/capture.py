@@ -29,11 +29,21 @@ def now():
 
 
 # ---- entries made by people/agents ---------------------------------------------------------------------------
-def make_entry(repo, kind, topic, body, paths=None, provenance="agent-written", via="cli", pending=False, supersedes=(), sha=None, level="", sources=()):
+def writer():
+    """Who is writing a note: "agent-written" from inside an agent's session, else "user-written". Claude Code puts its session id in the
+    environment of the commands it runs, which a person in their own terminal does not have. LOGBOOK_WRITER=agent|user says it outright (another
+    agent, or a person running a command through an agent).  shortcut: only Claude Code is recognised by itself; others set LOGBOOK_WRITER."""
+    forced = os.environ.get("LOGBOOK_WRITER", "").strip().lower()
+    if forced in ("agent", "user"):
+        return "agent-written" if forced == "agent" else "user-written"
+    return "agent-written" if os.environ.get("CLAUDE_CODE_SESSION_ID") else "user-written"
+
+
+def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", pending=False, supersedes=(), sha=None, level="", sources=()):
     from . import tree
     body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
-    e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance, captured_via=via,
-              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources),
+    e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance or writer(), captured_via=via,
+              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources), v=2,
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
     if pending:  # change entries are written before the commit exists; post-commit attaches the sha
         e.anchor = {"paths": list(paths or [])}
