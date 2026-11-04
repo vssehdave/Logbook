@@ -17,6 +17,7 @@ from .safety import sanitize
 
 _TOK = re.compile(r"[a-z0-9_]{2,}")
 DEFAULT_CAP = 1500
+MAX_COMMIT_MSG = 400  # the commit's subject and body as injected: enough to say why, the rest is `git show`
 FREE_MIN, FREE_MAX = 4, 2  # a prompt that names nothing we know must overlap a note in at least two topic words (or equal weight)
 _STOP = frozenset("a an and are as at be but by can did do does for from had has have how i if in into is it its me my no not of on or "
                   "our so than that the their then there these this to up us was we were what when where which who why will with you "
@@ -72,7 +73,14 @@ def injectable(v):
     return v["trusted"] and bool(v["body"].get("why") or v["body"].get("wrong") or v["provenance"] == "user-written")  # a person's own note needs no why
 
 
-def _fmt(i, v, src=""):
+def commit_message(repo, v):
+    """The message of the commit a note is about, subject then body, read from git now (the note does not hold it). '' when the note has no commit."""
+    sha = v["placed"] or v["sha"]
+    info = (g.commit_info(repo.root, sha) or {}) if sha else {}
+    return " ".join(x for x in (info.get("subject", ""), g.commit_body(repo.root, sha) if info else "") if x)
+
+
+def _fmt(i, v, src="", msg=""):
     bits = [v["kind"], v["author"], v["provenance"],
             "unverified anchor" if v["state"] in ("orphaned", "unknown") else
             (f"{v['behind']} commits behind HEAD" if v["behind"] is not None else "anchor unknown"),
@@ -85,6 +93,8 @@ def _fmt(i, v, src=""):
     lines.append(f"    node: note:{v['id']}" + (f" (under commit:{v['placed'][:8]})" if v["placed"] else ""))
     if src:
         lines.append("    source: " + src)
+    if msg:
+        lines.append("    commit message: " + sanitize(msg, MAX_COMMIT_MSG))
     for k in ("summary", "what", "why", "wrong", "fix"):
         if v["body"].get(k) and k != "evidence":
             lines.append(f"    {k}: " + sanitize(v["body"][k], 300))
@@ -139,7 +149,7 @@ def digest(repo, event, prompt="", files=(), session="", cap=DEFAULT_CAP):
     out, used = [], list(used_sum)
     for v in cands[:5]:
         n = cites.peek(repo, session, v["id"]) if session else len(out) + 1  # a number is kept for the whole chat
-        block = _fmt(n, v, cites.source_line(repo, v))
+        block = _fmt(n, v, cites.source_line(repo, v), commit_message(repo, v))
         if len(head) + sum(len(b) + 1 for b in out) + len(block) + 200 > cap:
             break
         if session:
