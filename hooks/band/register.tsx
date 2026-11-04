@@ -155,6 +155,10 @@ async function hitsOf($: EngineInterface, session: string, n: number): Promise<H
 
 // Scrolls the chat to the answer a peek came from. The engine allows it only while answering the person's own click, which is when this runs.
 async function scrollToHit($: EngineInterface, uuid: string): Promise<void> {
+  if (typeof uuid !== 'string' || uuid === '') {
+    $.ui.toast('Click the citation again to refresh the peek') // a peek kept from before the band last changed has no row id
+    return
+  }
   const done = await $.ui.scroll({ to: { requestId: uuid }, block: 'center' })
   if (done.deny) $.ui.toast(`Could not scroll there: ${done.deny}`)
 }
@@ -213,7 +217,7 @@ export const register: Register = on => {
     const sources = owned === '' || owned === (await $.session.id()) ? await read($, shown) : []
     const isOpen = await read($, open)
     const current = await read($, mode)
-    const hits = await read($, peek)
+    const hits = (await read($, peek)).filter(h => typeof h.uuid === 'string') // state kept from an older version may lack the id
     const query = await read($, find)
     const wanted = queryNumber(query.text)
     const at = hits.length ? Math.min(query.at, hits.length - 1) : 0
