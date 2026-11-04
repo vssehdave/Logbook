@@ -210,10 +210,25 @@ newest = max((bob / ".git/logbook/private").glob("*.json"), key=lambda p: p.stat
 d = json.loads(newest.read_text(encoding="utf-8"))
 ok(rc == 0 and d["provenance"] == "agent-written" and d["topic"] == "agent note" and d["checks"]["evidence"], "an agent's note is labelled agent-written, title: is the topic, and it is grounded", d)
 rc, o = lb(bob, "setup", "--yes", "--agent", "claude-code")
-allow = json.loads((bob / ".claude/settings.local.json").read_text())["permissions"]["allow"]
-ok("Bash(logbook note:*)" in allow and not any(w in a for a in allow for w in ("publish", "sync", "purge", "gc", "trust", "config")), "setup allows the safe commands only", allow)
+cfg = json.loads((bob / ".claude/settings.local.json").read_text())
+ok("permissions" not in cfg and any(e.get("matcher") == "Bash" and "--event Permission" in json.dumps(e) for e in cfg["hooks"]["PreToolUse"]),
+   "setup adds the permission hook on Bash and writes no allow rules", cfg)
+ok("managed-by: logbook" in (bob / ".claude/agents/logbook-scribe.md").read_text(encoding="utf-8"), "setup installs the logbook-scribe agent")
+
+
+def decision(command, agent_type=""):
+    rc, o = lb(bob, "capture", "--event", "Permission", inp=json.dumps({"cwd": str(bob), "agent_type": agent_type, "tool_input": {"command": command}}))
+    return json.loads(o)["hookSpecificOutput"]["permissionDecision"] if o.strip().startswith("{") else None
+
+
+ok(decision("logbook note --fields") == "allow" and decision("logbook ask x") == "allow", "the hook allows note and ask")
+ok(decision("logbook config publish auto") == "ask" and decision("logbook purge") == "ask", "the hook makes config and purge ask")
+ok(decision("logbook note x && rm y") is None and decision("ls") is None, "the hook has no opinion on a compound command or another command")
+ok(decision("logbook publish abc") == "ask", "publish asks in the default mode (ask)")
+ok(decision("ls", "logbook-scribe") == "deny", "the scribe may not run anything but logbook")
 rc, o = lb(bob, "uninstall", "--yes", "--agent", "claude-code")
-ok("permissions" not in json.loads((bob / ".claude/settings.local.json").read_text()) if (bob / ".claude/settings.local.json").exists() else True, "uninstall removes the allow rules", o)
+left = json.loads((bob / ".claude/settings.local.json").read_text()) if (bob / ".claude/settings.local.json").exists() else {}
+ok("PreToolUse" not in left.get("hooks", {}) and not (bob / ".claude/agents").exists(), "uninstall removes the hook and the scribe agent", o)
 
 print(f"\n{len(fails)} failed" if fails else "\nALL PASSED")
 print("workdir:", root)
