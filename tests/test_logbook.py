@@ -1491,6 +1491,7 @@ class TestPermissions(CliRepo):
         self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(capture.handle_hook("Permission", "claude-code", payload("ls -la")), "", "no opinion on other commands")
 
+
     def test_the_scribe_may_run_only_a_few_logbook_commands(self):
         from getlogbook import permissions
         said = lambda cmd, mode="auto": json.loads(permissions.hook_output(cmd, mode, "logbook-scribe") or "{}").get("hookSpecificOutput", {}).get("permissionDecision")
@@ -1504,6 +1505,58 @@ class TestPermissions(CliRepo):
         from getlogbook import permissions
         readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
         self.assertIn(permissions.readme_table(), readme.replace("\r\n", "\n"))
+
+
+
+class TestTidy(CliRepo):
+    """`logbook tidy` lists candidates with reasons from git and the notes alone; it judges nothing and changes nothing."""
+
+    def candidates(self):
+        from getlogbook import tidy
+        return tidy.candidates(self.r, tree.all_views(self.r)[0])
+
+    def test_a_note_whose_files_changed_in_a_later_commit_is_listed_with_that_commit(self):
+        first = commit(self.d, "add refund filter", {"shop/revenue.py": "x = 2\n"})
+        e = capture.make_entry(self.r, "change", "refund filter", {"summary": "s", "why": "w"}, sha=first)
+        self.assertEqual(self.candidates(), [], "nothing changed after it yet")
+        commit(self.d, "rework revenue", {"shop/revenue.py": "x = 3\n"})
+        commit(self.d, "unrelated", {"shop/other.py": "y = 2\n"})
+        (c,) = self.candidates()
+        self.assertEqual((c["id"], c["reason"]), (e.id, "files it is about changed in later commits"))
+        self.assertEqual(len(c["detail"]), 1)
+        self.assertIn("rework revenue", c["detail"][0])
+        before = sorted(p.name for p in (self.r.cdir / "private").glob("*.json"))
+        code, text = self.run_cli("tidy")
+        self.assertIn("1 candidate (nothing was changed", text)
+        self.assertIn(e.id, text)
+        self.assertEqual(sorted(p.name for p in (self.r.cdir / "private").glob("*.json")), before, "listing changes no note")
+
+    def test_a_note_without_a_commit_is_checked_from_where_it_was_written(self):
+        e = capture.make_entry(self.r, "finding", "export stalls", {"summary": "s", "why": "w", "evidence": "e"}, paths=["shop/other.py"])
+        self.assertEqual(self.candidates(), [])
+        commit(self.d, "touch other", {"shop/other.py": "y = 5\n"})
+        self.assertEqual([c["id"] for c in self.candidates()], [e.id])
+
+    def test_two_notes_on_the_same_files_that_say_much_the_same_are_listed_once(self):
+        a = capture.make_entry(self.r, "finding", "refund sum is wrong", {"summary": "total sums refunded rows", "why": "w"}, paths=["shop/revenue.py"])
+        b = capture.make_entry(self.r, "finding", "refund sum is wrong", {"summary": "total sums the refunded rows too", "why": "w"}, paths=["shop/revenue.py"])
+        (c,) = [c for c in self.candidates() if c["reason"] == "may say the same as another note"]
+        self.assertEqual({c["id"], c["detail"][0].split()[0]}, {a.id, b.id})
+
+    def test_an_old_auto_copied_draft_is_listed_and_a_new_one_is_not(self):
+        from getlogbook.entry import Entry, new_id
+        for created in ("2020-01-01T00:00:00", capture.now()):
+            e = Entry(id=new_id(), kind="finding", topic="draft " + created[:4], body={"summary": "the final message"}, provenance="auto-copied", captured_via="claude-code", created=created)
+            e.anchor = tree.anchor_for(self.r, sha=None, paths=[], dirty=False)
+            self.r.add_private(e)
+        (c,) = self.candidates()
+        self.assertEqual((c["topic"], c["reason"].startswith("auto-copied draft")), ("draft 2020", True))
+
+    def test_a_commit_id_taken_from_a_note_never_reaches_git_unchecked(self):
+        from getlogbook import tidy
+        v = {"placed": "", "sha": "", "paths": ["shop/revenue.py"], "checks": {"at": "--output=evil.txt", "files": ["shop/revenue.py"]}}
+        self.assertEqual(tidy.later_commits(self.r, v), [])
+        self.assertFalse((self.d / "evil.txt").exists())
 
 
 class TestWhoWroteIt(CliRepo):
