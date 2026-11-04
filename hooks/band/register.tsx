@@ -179,16 +179,18 @@ export const register: Register = on => {
         <Text>bibliography</Text>
         <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
-        {/* The finder is one tight group: arrows, the field, x/y. The field fills its box, so the box is as wide as a three-digit number
-            and its cursor need (four cells) plus one; at rest that leaves four cells between "n" and x/y. The field has no submit label:
-            the number is searched as it is typed. */}
-        <Box flexDirection="row" alignItems="center">
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            <Button key="prev" plain label="↑" onPress={() => move(-1)} />
-            <Button key="next" plain label="↓" onPress={() => move(1)} />
-            <Box width={5}>
+        {/* The finder: arrows, an outlined field, x/y. The engine draws a "⏎" beside a focused field and it cannot be turned off, so the
+            field has room for it: a three-digit number, the cursor, a space and the "⏎", six cells. The dim brackets make that room read
+            as the box itself and not as a gap. The number is searched as it is typed; Enter only repeats the search. */}
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          <Button key="prev" plain label="↑" onPress={() => move(-1)} />
+          <Button key="next" plain label="↓" onPress={() => move(1)} />
+          <Box flexDirection="row" alignItems="center">
+            <Text dimColor>[</Text>
+            <Box width={6}>
               <Input key="find" placeholder="n" submitLabel="" value={query.text} onInput={typed} onSubmit={typed} />
             </Box>
+            <Text dimColor>]</Text>
           </Box>
           <Text dimColor>
             {ids.length ? at + 1 : 0}/{ids.length}
