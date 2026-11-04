@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from . import capture, nav, recall, sync, tree
+from . import capture, cites, nav, recall, sync, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
@@ -762,17 +762,34 @@ def cmd_stats(a):
     out("model calls: 0 (backend none)")
 
 
+def cmd_cites(a):
+    """The numbered sources behind an answer in this chat. Teammates' shared notes carry a link, a name and a date."""
+    r = need_repo()
+    session = a.session or cites.latest_session(r)
+    vs, _ = views(r)
+    recs = cites.records(r, session, vs)
+    if a.json:
+        out(json.dumps({"session": session, "sources": recs}, ensure_ascii=False))
+        return 0
+    if not recs:
+        out("no notes have been numbered in this chat yet")
+        return 4
+    out(cites.text(recs, expanded=not a.compact))
+    return 0
+
+
 def cmd_demo(a):
     from . import demo
     return demo.run(a.dir)
 
 
 HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
-          "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo"}
+          "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
+          "cites"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall snippet demo
 agents and hooks call these; you rarely need to:
-  context summarize backfill inject capture post-commit reconcile
+  context summarize backfill inject cites capture post-commit reconcile
 older names that still work:
   init join query explain path doctor queue stats install install-hook"""
 
@@ -891,6 +908,10 @@ def build_parser():
     s.add_argument("--file", action="append")
     s.add_argument("--session")
     add("stats", cmd_stats, "injection and cost counters")
+    s = add("cites", cmd_cites, "the numbered sources behind an answer in a chat")
+    s.add_argument("--session", help="the chat's id (default: the most recent one)")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--compact", action="store_true", help="one short line per source, no links")
     add("snippet", cmd_snippet, "text to paste into CLAUDE.md / AGENTS.md / copilot-instructions for agents without hooks")
     s = add("demo", cmd_demo, "build a scratch two-person team and walk through it")
     s.add_argument("--dir")

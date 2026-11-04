@@ -60,6 +60,7 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
     logbook sync                              # fetch teammates' entries, push yours
     logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match
     logbook ask repo | branch:<name> | commit:<sha> | note:<id>   # walk the tree from the top (docs/SUMMARY-TREE.md)
+    logbook cites                             # the numbered sources behind an answer in this chat (links, names, dates)
     logbook log                               # the notes next to your commits, newest first (-v for their text)
     logbook status                            # what is recorded and waiting to be shared; --check, --stats
 
