@@ -38,27 +38,31 @@ Pass the note as `key: value` lines on stdin. A value can run over several lines
 logbook note --fields <<'EOF'
 kind: finding
 topic: short title
-summary: 3-5 sentences: what was found and why it matters
-context: what was asked and what was tried, in order
+summary: 2-4 sentences: what was found and why it matters
 why: the cause
-wrong: what was wrong or assumed
-fix: what changed, if anything
+evidence: what you ran or read: a command and its result, or file:line
 decided: the choice made and the alternatives rejected, with the reason
 open: what is still unknown
-scale: how much: rows, percent, users, days
 paths: src/app/orders.py
-evidence: what you ran or read: a command and its result, or file:line
 EOF
 ```
 
-Leave out fields you have nothing true to say in. `summary` is required.
+Also allowed: `context` (what was asked and tried), `wrong` (what was assumed), `fix` (what changed), `scale` (rows, percent, users, days). Leave out fields you have nothing true to say in.
+
+**A note is 3 to 9 non-empty lines of the real work, and `evidence` is required.** `summary` and `evidence` always; `why` for a finding; `decided` and `open` when the work had them. One line is refused, and so is more than nine. `evidence` is what you ran or read, not a file name: a path in `paths` does not count. `--allow-ungrounded` saves a note with no evidence, marked unverified; use it only when there was nothing to run or read.
 
 - `kind` is `finding` for something learned, `change` for the reason behind a commit.
 - For a change you are about to commit, run `logbook context` first. It says whether the change needs a note (whitespace-only and rename-only changes do not) and lists your earlier findings that touch the same files. Then add the lines `before_commit: yes` and `sources: <finding id>, <finding id>` to a `change` note and commit as usual; the note attaches to that commit and cites the findings it grew out of, so one commit's note can be built from several sessions' findings.
 - To write about an earlier commit, add the line `commit: <sha>`.
-- Write the way you would brief a colleague who joins tomorrow: the ask, the path, the dead ends, the decision, what is left. Not one line.
+- Write the way you would brief a colleague who joins tomorrow: the cause, the proof, the decision, what is left. Not one line, and not a page.
 
-Good: "Checkout totals ran 4% high. Compared one week of orders with the processor report and the gap matched refunded rows exactly. total() summed them because the payments loader keeps refunded rows for other reports. Fixed in total(), not in the loader, for that reason. Still open: whether partial refunds are handled."
+Good:
+```
+summary: Checkout totals ran 4% high. total() summed refunded rows, so it was fixed there and not in the loader.
+why: the payments loader keeps refunded rows for other reports.
+evidence: compared one week of orders with the processor report; the gap matched the refunded rows exactly.
+open: whether partial refunds are handled.
+```
 
 Bad: "fixed refund bug".
 
@@ -68,7 +72,7 @@ Put long research, a trail of dead ends or a summary of a whole piece of work on
 
 ## Check before you save
 
-Run the same note through `logbook note --fields --check` first. It looks up every file, name in backticks and commit id the note mentions, in the repo as it is now, and prints `grounding: files 2/2, names 3/4, commits 1/1, evidence yes`, with each thing it could not find after a `!`. A name that is not in the code means the note is wrong, vague or about something that has changed: fix the note, do not save it as it is. A finding that names no file that exists, no commit and no evidence is refused. It also lists notes on the same files that say much the same, after a `~`: if your note replaces one of yours, add a line `supersedes: <id>`; if both stand, say why in the note. The check only shows that what you name exists; whether what you say is true is still on you, so cite what you ran or read in `evidence`.
+Run the same note through `logbook note --fields --check` first. It looks up every file, name in backticks and commit id the note mentions, in the repo as it is now, and prints `grounding: files 2/2, names 3/4, commits 1/1, evidence yes`, with each thing it could not find after a `!`. A name that is not in the code means the note is wrong, vague or about something that has changed: fix the note, do not save it as it is. A finding or change with no `evidence` line, or with fewer than 3 or more than 9 lines, is refused, and `--check` says so after a `!`. It also lists notes on the same files that say much the same, after a `~`: if your note replaces one of yours, add a line `supersedes: <id>`; if both stand, say why in the note. The check only shows that what you name exists; whether what you say is true is still on you, so cite what you ran or read in `evidence`.
 
 ## Commits that have no note
 

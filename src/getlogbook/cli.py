@@ -172,7 +172,9 @@ def cmd_note(a):
     near = [o for o in (ground.overlaps(views(r)[0], topic, body["summary"], cks["files"]) if kind != "summary" else [])
             if o["id"] not in supersedes]
     out("grounding: " + ground.line(cks))
-    for p in ground.problems(cks, capture.writer() == "agent-written"):
+    agent = capture.writer() == "agent-written"
+    size = ground.size_problems(kind, body) if agent else []
+    for p in ground.problems(cks, agent) + size:
         out("  ! " + p)
     for o in near:
         out(f"  ~ may overlap {o['id']} ({'yours' if o['mine'] else 'a teammate'}): {o['topic'][:70]}")
@@ -181,9 +183,11 @@ def cmd_note(a):
     if a.check:
         out("(checked only: nothing was saved)")
         return 0
-    if kind == "finding" and not cks["evidence"] and not a.allow_ungrounded and capture.writer() == "agent-written":
-        raise SystemExit("logbook: not saving a finding that points at nothing. Name a file that exists (paths), a commit, or add an evidence "
-                         "field. --allow-ungrounded saves it anyway, marked unverified.")
+    if size:
+        raise SystemExit("logbook: not saving the note, it has " + size[0])
+    if kind != "summary" and agent and not cks["evidence"] and not a.allow_ungrounded:
+        raise SystemExit("logbook: not saving a note with no evidence. Add an evidence: line with what you ran or read (a command and its result, "
+                         "or file:line); naming a file is not enough. --allow-ungrounded saves it anyway, marked unverified.")
     e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
                            pending=pending, checks=cks)
     shared = not pending and auto_publish(r, e)
@@ -927,7 +931,7 @@ def build_parser():
     s.add_argument("--fields", action="store_true", help="read the whole note as `key: value` lines on stdin (no braces or quotes: what an agent should use)")
     s.add_argument("--supersedes", help="comma-separated ids of your own notes this one replaces")
     s.add_argument("--check", action="store_true", help="only look up what the note names and report; save nothing")
-    s.add_argument("--allow-ungrounded", action="store_true", help="save a finding that points at no file, commit or evidence, marked unverified")
+    s.add_argument("--allow-ungrounded", action="store_true", help="save a finding or change with no evidence line, marked unverified")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="*")
     s.add_argument("--all", action="store_true", help="every private note not shared yet (same preview and one confirmation)")
