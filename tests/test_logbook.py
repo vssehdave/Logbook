@@ -1206,6 +1206,26 @@ class TestGrounding(CliRepo):
     def as_a_person(self):
         os.environ.pop("CLAUDE_CODE_SESSION_ID", None)  # setUp's patch restores it afterwards
 
+    def test_a_note_can_be_written_as_key_value_lines_with_no_braces_or_quotes(self):
+        """Claude Code refuses a shell command holding a brace and a quote (it looks like obfuscation) until a person approves it, so an agent
+        cannot save a JSON note unattended. Key: value lines have neither."""
+        text = ("kind: finding\ntopic: refund sum\nsummary: `total()` sums rows,\n  and nothing filters refunds\nwhy: no filter\n"
+                "paths: shop/revenue.py, shop/other.py\nsupersedes:\nbefore_commit: no\n")
+        self.assertNotIn("{", text)
+        obj = cli._parse_fields(text)
+        self.assertEqual(obj["summary"], "`total()` sums rows,\n  and nothing filters refunds")
+        self.assertEqual((obj["paths"], obj["supersedes"], obj["before_commit"]), (["shop/revenue.py", "shop/other.py"], [], False))
+        code, out = self.run_cli("note", "--fields", stdin=text)
+        self.assertIn("recorded", out)
+        (e,) = self.r.load_private()
+        self.assertEqual((e.topic, e.body["why"], e.anchor["paths"][0], e.checks["paths"]), ("refund sum", "no filter", "shop/revenue.py", [2, 2]))  # both files exist
+        self.assertIn("nothing filters refunds", e.body["summary"])
+
+    def test_check_works_on_key_value_lines_and_a_line_that_is_not_a_key_belongs_to_the_value_above(self):
+        code, out = self.run_cli("note", "--fields", "--check", stdin="topic: t\nsummary: see `shop/gone.py`\nnote: this is prose, not a key\npaths: shop/revenue.py\n")
+        self.assertIn("! not found: shop/gone.py", out)
+        self.assertEqual(self.r.load_private(), [])
+
     def test_a_person_writes_a_note_in_plain_words_and_it_needs_no_why(self):
         self.as_a_person()
         code, text = self.run_cli("note", "Revenue dips come from the stalled export", "shop/revenue.py")
