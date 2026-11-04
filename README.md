@@ -46,9 +46,9 @@ not). With details on, a note a teammate shared also shows its commit or pull re
 <name> on <date>" when it has no commit). Your own and private notes stay one line. When there are more rows than the band may take, the
 band scrolls (mouse wheel, or the keys while it is focused) and says how many are hidden.
 
-Click `¹` and the chat scrolls to the first answer that cites it. The finder takes a number (`2`, `[2]` or `²`), shows `x/y` (this is the
-xth of y answers that cite it) and has up and down buttons to go through them; the engine only lets a mod scroll the chat in answer to your
-own click or typing. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
+Click `¹` and the chat scrolls to the first answer that cites it. The finder on the right shows the number you clicked and `x/y` (this
+is the xth of y answers that cite it), with up and down buttons to go through them. Nothing can be typed into it. The engine only lets a
+mod scroll the chat in answer to your own click. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
 the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. Checked with `claude plugin validate` and
 `claude plugin test` and, for the first version, in a live session; scrolling the chat to a citation and the finder are new and
 unproven at narrow widths.

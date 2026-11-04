@@ -3,10 +3,10 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Source } from './types'
 
-// The Bibliography band, above the prompt. It is always there: a title, how many sources this chat has cited, and a finder that jumps
-// through the chat to the answers that cite a given number. Under it, the sources cited so far, kept until /clear. Compact they are
-// `[n] title` buttons that fit the width; expanded each teammate-shared note also shows its commit or pull request header as a link,
-// who wrote it and when. Clicking `[n]` scrolls the chat to the first answer that cites it.
+// The bibliography band, above the prompt. It is always there: a title, how many sources this chat has cited, and a finder that shows
+// which citation you clicked and steps (x/y) through the answers that cite it. Under it, the sources cited so far, kept until /clear.
+// Compact they are `¹ title` buttons that fit the width; with details on, each teammate-shared note also shows its commit or pull request
+// header as a link, who wrote it and when. Clicking a citation scrolls the chat to the first answer that cites it.
 const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
 const find = atom({ plugin: 'logbook', key: 'find' } as const, { text: '', at: 0 })
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
@@ -158,7 +158,7 @@ export const register: Register = on => {
     const wanted = queryNumber(query.text)
     const ids = wanted === undefined ? [] : (seen[String(wanted)] ?? [])
     const at = ids.length ? Math.min(query.at, ids.length - 1) : 0
-    const { Box, Button, Input, Link, Text } = $.ui.resolve(e)
+    const { Box, Button, Link, Text } = $.ui.resolve(e)
     const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
 
     const toggle = () => update($, open, was => !was)
@@ -168,40 +168,24 @@ export const register: Register = on => {
       await update($, find, was => ({ ...was, at: to }))
       await goTo($, ids[to] as string)
     }
-    // A click on [n]: make it the finder's number and go to the first answer that cites it.
+    // A click on a citation in the list: make it the finder's number and go to the first answer that cites it.
     const pick = async (n: number) => {
       const found = seen[String(n)] ?? []
       await update($, find, () => ({ text: String(n), at: 0 }))
       if (found.length) await goTo($, found[0] as string)
       else $.ui.toast(`${label(n)} has no answer on screen yet`)
     }
-    const typed = async (typedText: string) => {
-      const text = queryDigits(typedText) // anything but the first three digits is dropped
-      await update($, find, () => ({ text, at: 0 }))
-      const n = queryNumber(text)
-      const found = n === undefined ? [] : (seen[String(n)] ?? [])
-      if (found.length) await goTo($, found[0] as string)
-    }
-
     const head = (
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
         <Text>bibliography</Text>
         <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
-        {/* The finder: arrows, an outlined field, x/y. The engine draws " ⏎ " beside a focused field and it cannot be turned off; that
-            takes three of the cells, and the rest holds the text. Three digits and the cursor need four, so seven cells in all. The dim
-            brackets make that room read as the box itself and not as a gap. At most three digits are kept. The number is searched as it
-            is typed; Enter only repeats the search. */}
+        {/* The finder: arrows, the number of the citation clicked in the list (dim "n" until one is), and x/y. Nothing can be typed:
+            a text field makes the engine draw an enter hint and its width cannot be controlled. The number is the one the list set. */}
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Button key="prev" plain label="↑" onPress={() => move(-1)} />
           <Button key="next" plain label="↓" onPress={() => move(1)} />
-          <Box flexDirection="row" alignItems="center">
-            <Text dimColor>[</Text>
-            <Box width={7}>
-              <Input key="find" placeholder="n" submitLabel="" value={query.text} onInput={typed} onSubmit={typed} />
-            </Box>
-            <Text dimColor>]</Text>
-          </Box>
+          {wanted === undefined ? <Text dimColor>n</Text> : <Text>{sup(wanted)}</Text>}
           <Text dimColor>
             {ids.length ? at + 1 : 0}/{ids.length}
           </Text>
