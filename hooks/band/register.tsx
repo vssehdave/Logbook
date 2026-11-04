@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Drawn, Hit, Source } from './types'
+import type { Hit, Source } from './types'
 
 // The bibliography band, above the prompt. It is always there: a title, how many sources this chat has cited, and a finder that shows
 // which citation you clicked and steps (x/y) through the answers that cite it. Under it, the sources cited so far, kept until /clear.
@@ -43,39 +43,6 @@ export const mergeSources = (was: readonly Source[], fresh: readonly Source[]): 
   return [...byId.values()].sort((a, b) => a.n - b.n)
 }
 
-const clean = (s: string): string => s.replace(/\s+/g, ' ')
-
-// The assistant messages that cite number n, oldest first, each with a peek: the words before and after the citation. `core` is a short
-// stretch ending at the citation, enough to find the same message among those the engine has drawn. This reads the whole chat as
-// `$.session.messages()` gives it, on screen or not.
-export const hitsFor = (messages: readonly { role: string; text: string }[], n: number): Hit[] => {
-  const mark = sup(n)
-  const out: Hit[] = []
-  for (const m of messages) {
-    if (m.role !== 'assistant') continue
-    // The first run of superscript digits that is exactly this number: ² is not part of ²² or ¹².
-    const runs = /[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g
-    let found = runs.exec(m.text)
-    while (found && found[0] !== mark) found = runs.exec(m.text)
-    if (!found) continue
-    const before = clean(m.text.slice(Math.max(0, found.index - 70), found.index))
-    const after = clean(m.text.slice(found.index + mark.length, found.index + mark.length + 40))
-    out.push({ before, after, core: before.slice(-30) + mark })
-  }
-  return out
-}
-
-// A message block the engine drew that cites something, kept by id (a block is drawn again as it streams, so the latest text wins).
-export const upsertDrawn = (was: readonly Drawn[], id: string, text: string): Drawn[] => {
-  const rest = was.filter(d => d.id !== id)
-  return [...rest, { id, text }].slice(-400)
-}
-
-// The id of the drawn block that holds a hit's core, newest first; undefined when the engine has not drawn it since the band loaded
-// (the engine gives out a message's id only when it draws the message, and scrolling needs the id).
-export const findDrawn = (drawn: readonly Drawn[], core: string): string | undefined =>
-  [...drawn].reverse().find(d => clean(d.text).includes(core))?.id
-
 // "2", "[2]" and "²" all mean citation 2; anything without a digit means none.
 export const queryNumber = (text: string): number | undefined => {
   const digits = queryDigits(text)
@@ -114,10 +81,6 @@ export const sup = (n: number): string => [...String(n)].map(d => SUPERSCRIPT[Nu
 export const label = (n: number): string => sup(n)
 
 let runner: readonly string[] | undefined
-// The message blocks that cite something, as the engine drew them. Kept here and not in $.state: the engine refuses state writes while a
-// message is drawn, and noting a block as it is drawn is the only way to learn its id.
-let drawn: Drawn[] = []
-
 // The numbered sources of this chat and the publish mode, from the logbook command; empty when it is missing or this is not a Logbook repo.
 async function sourcesOf($: EngineInterface, session: string): Promise<{ sources: Source[]; mode: string }> {
   for (const argv of runner ? [runner] : RUNNERS) {
@@ -172,15 +135,27 @@ async function openUrl($: EngineInterface, url: string): Promise<void> {
   $.ui.toast('Could not open the link')
 }
 
-// Scrolls the chat to the answer a peek came from. The engine allows it only while answering the person's own click, which is when this
-// runs, and it needs the message's id, which the engine gives out only for a message it has drawn.
-async function scrollToHit($: EngineInterface, core: string): Promise<void> {
-  const id = findDrawn(drawn, core)
-  if (id === undefined) {
-    $.ui.toast('That answer has not been drawn since the band loaded: scroll up to it once, then click again')
-    return
+// The answers in this chat that cite a number, oldest first, from `logbook cites --where`. It reads Claude Code's transcript of the chat, so
+// what has been drawn, or is on screen, does not matter. Each carries the transcript row's id, which is what the engine scrolls to, and
+// the words around the citation. undefined when the logbook command could not be run.
+async function hitsOf($: EngineInterface, session: string, n: number): Promise<Hit[] | undefined> {
+  for (const argv of runner ? [runner] : RUNNERS) {
+    try {
+      const done = await $.process.run([...argv, 'cites', '--where', String(n), '--session', session], { timeoutMs: 8000 })
+      if (done.exitCode === 0) {
+        runner = argv
+        return JSON.parse(done.stdout).hits as Hit[]
+      }
+    } catch {
+      // that spelling of the command is not installed: try the next
+    }
   }
-  const done = await $.ui.scroll({ to: { requestId: id }, block: 'center' })
+  return undefined
+}
+
+// Scrolls the chat to the answer a peek came from. The engine allows it only while answering the person's own click, which is when this runs.
+async function scrollToHit($: EngineInterface, uuid: string): Promise<void> {
+  const done = await $.ui.scroll({ to: { requestId: uuid }, block: 'center' })
   if (done.deny) $.ui.toast(`Could not scroll there: ${done.deny}`)
 }
 
@@ -190,7 +165,6 @@ export const register: Register = on => {
       const session = await $.session.id()
       // A different session id means a new chat (/clear, resume): nothing of the old one may stay.
       if ((await read($, owner)) !== session) {
-        drawn = []
         await update($, shown, () => [])
         await update($, peek, () => [])
         await update($, find, () => ({ text: '', at: 0 }))
@@ -219,18 +193,11 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Note the message blocks that cite something as they are drawn: that is how a peek finds its message to scroll to.
-  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    if (citedNumbers(e.props.text).length) drawn = upsertDrawn(drawn, e.requestId, e.props.text)
-    return next(e)
-  })
-
   // /clear starts a new chat, and numbering starts again at one with it.
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await update($, shown, () => [])
       await update($, peek, () => [])
-      drawn = []
       await update($, find, () => ({ text: '', at: 0 }))
     }
     return next(e)
@@ -262,14 +229,13 @@ export const register: Register = on => {
       const to = stepInstance(at, hits.length, by)
       await update($, find, was => ({ ...was, at: to }))
     }
-    // A click on a citation in the list: read the whole chat for the answers that cite it and peek at the closest one, the latest.
+    // A click on a citation in the list: find the answers that cite it in the whole chat and peek at the closest one, the latest.
     const pick = async (n: number) => {
-      const messages = await $.session.messages()
-      if (!Array.isArray(messages)) {
-        $.ui.toast('Could not read the chat')
+      const found = await hitsOf($, await $.session.id(), n)
+      if (found === undefined) {
+        $.ui.toast('Could not read the chat: is the logbook command installed?')
         return
       }
-      const found = hitsFor(messages, n)
       await update($, peek, () => found)
       await update($, find, () => ({ text: String(n), at: Math.max(0, found.length - 1) }))
       if (found.length === 0) $.ui.toast(`${label(n)} is not cited in this chat's messages`)
@@ -369,7 +335,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {head}
         {hit !== undefined && wanted !== undefined ? (
-          <Button key="peek" plain onPress={() => scrollToHit($, hit.core)}>
+          <Button key="peek" plain onPress={() => scrollToHit($, hit.uuid)}>
             <Text dimColor>{`▸ …${hit.before}`}</Text>
             <Text>{label(wanted)}</Text>
             <Text dimColor>{`${hit.after}…`}</Text>

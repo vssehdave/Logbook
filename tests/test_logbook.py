@@ -1044,6 +1044,31 @@ class TestCitations(CliRepo):
         self.assertIn("¹", text)
         self.assertNotIn("my private note  by", text)
 
+    def test_every_answer_that_cites_a_number_is_found_in_the_transcript_whatever_is_on_screen(self):
+        import os
+        import unittest.mock
+        from getlogbook import cites
+        proj = self.root / "claude" / "projects" / "p"
+        proj.mkdir(parents=True)
+
+        def row(uuid, kind, text, side=False):
+            return json.dumps({"type": kind, "uuid": uuid, "isSidechain": side, "message": {"role": kind, "content": [{"type": "text", "text": text}]}},
+                              ensure_ascii=False, separators=(",", ":"))
+
+        rows = [row("u1", "user", "why? ²"), row("a1", "assistant", "Refunds counted as revenue² and the export is late¹."),
+                row("a2", "assistant", "Nothing cited here."), row("a3", "assistant", "Again²,\n  the same."),
+                row("a4", "assistant", "A number like ²² is another, and so is ¹²."), row("a5", "assistant", "side chain²", side=True)]
+        (proj / "chat9.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        with unittest.mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.root / "claude")}):
+            found = cites.hits("chat9", 2)
+            self.assertEqual([h["uuid"] for h in found], ["a1", "a3"], "oldest first; not the user's row, not a side chain, not 22 or 12")
+            self.assertEqual((found[0]["before"], found[0]["after"]), ("Refunds counted as revenue", " and the export is late¹."))
+            self.assertEqual(found[1]["after"], ", the same.")
+            self.assertEqual([h["uuid"] for h in cites.hits("chat9", 22)], ["a4"])
+            self.assertEqual(cites.hits("no-such-chat", 2), [])
+            data = json.loads(self.run_cli("cites", "--where", "2", "--session", "chat9")[1])
+            self.assertEqual([h["uuid"] for h in data["hits"]], ["a1", "a3"])
+
     def test_a_hostile_anchor_cannot_make_git_write_a_file(self):
         """`git show --output=<file>` overwrites a file. A teammate's note carries its anchor sha into git arguments, so it must be hex."""
         victim = self.d / "victim.txt"

@@ -47,10 +47,10 @@ not). With details on, the mode selector (`never  ask  [ claude ]  auto`, each a
 band scrolls (mouse wheel, or the keys while it is focused) and says how many are hidden.
 
 Click `¹` and a peek appears under the header: the words around that citation in the closest answer that cites it, the latest. The finder
-on the right shows the number and `x/y` (this is the xth of y answers that cite it, counted over the whole chat, on screen or not); up goes to
+on the right shows the number and `x/y` (this is the xth of y answers that cite it, counted over the whole chat); up goes to
 an earlier answer, down to a later one. Click the peek and the chat scrolls to that answer. The engine only lets a mod scroll the chat in
-answer to your own click, and it gives out a message's id only for a message it has drawn, so an answer the band has not seen drawn since it
-loaded (scroll past it once) can be peeked at but not jumped to. Nothing can be typed into the finder. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
+answer to your own click. The band finds the answers by asking `logbook cites --where N`, which reads Claude Code's transcript of the chat, so
+it works for every answer and survives reloads; the jump uses the transcript row's id. Nothing can be typed into the finder. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
 the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. Checked with `claude plugin validate` and
 `claude plugin test` and, for the first version, in a live session; scrolling the chat to a citation and the finder are new and
 unproven at narrow widths.

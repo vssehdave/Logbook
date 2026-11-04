@@ -10,7 +10,9 @@ with no commit says "Note added by <name> on <date>".
 from __future__ import annotations
 
 import json
+import os
 import re
+from pathlib import Path
 
 from . import git as g
 from .safety import sanitize
@@ -59,6 +61,52 @@ def number(repo, session, note_id):
 def latest_session(repo):
     files = sorted((repo.cdir / "cites").glob("*.json"), key=lambda p: p.stat().st_mtime) if (repo.cdir / "cites").exists() else []
     return files[-1].stem if files else ""
+
+
+_RUNS = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
+
+
+def transcript_path(session):
+    """Claude Code's transcript of a chat: <config dir>/projects/<project>/<session>.jsonl, the config dir being CLAUDE_CONFIG_DIR or ~/.claude."""
+    safe = _SAFE.sub("", session or "")
+    if not safe:
+        return None
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    return next(base.glob(f"*/{safe}.jsonl"), None)
+
+
+def _clean(s):
+    return re.sub(r"\s+", " ", s)  # runs of whitespace become one space; the edges keep theirs, so "²" and the next word stay apart
+
+
+def hits(session, n):
+    """The answers in this chat that cite number n, oldest first, from the transcript, so it does not matter what is on screen:
+    [{uuid, before, after}], the uuid being the row's id (what a client scrolls to) and before/after the words around the citation.
+    A run of superscript digits counts only when it is exactly n: the citation 2 is not part of 22 or 12."""
+    path = transcript_path(session)
+    if path is None:
+        return []
+    mark, out = sup(n), []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if '"type":"assistant"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("type") != "assistant" or d.get("isSidechain") or not isinstance(d.get("uuid"), str):
+            continue
+        content = (d.get("message") or {}).get("content")
+        text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+        run = next((m for m in _RUNS.finditer(text) if m.group(0) == mark), None)
+        if run:
+            out.append({"uuid": d["uuid"], "before": _clean(text[max(0, run.start() - 70):run.start()]),
+                        "after": _clean(text[run.end():run.end() + 40])})
+    return out
 
 
 def web_url(repo, kind, ident):

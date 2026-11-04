@@ -790,6 +790,9 @@ def cmd_cites(a):
     """The numbered sources behind an answer in this chat. Teammates' shared notes carry a link, a name and a date."""
     r = need_repo()
     session = a.session or cites.latest_session(r)
+    if a.where:  # the answers in this chat that cite this number, from Claude Code's transcript of it
+        out(json.dumps({"session": session, "hits": cites.hits(session, a.where)}, ensure_ascii=False))
+        return 0
     vs, _ = views(r)
     recs = cites.records(r, session, vs)
     if a.json:
@@ -935,6 +938,7 @@ def build_parser():
     s.add_argument("--session", help="the chat's id (default: the most recent one)")
     s.add_argument("--json", action="store_true")
     s.add_argument("--compact", action="store_true", help="one short line per source, no links")
+    s.add_argument("--where", type=int, help="the answers in this chat that cite this number, as JSON (the band uses it)")
     add("snippet", cmd_snippet, "text to paste into CLAUDE.md / AGENTS.md / copilot-instructions for agents without hooks")
     s = add("demo", cmd_demo, "build a scratch two-person team and walk through it")
     s.add_argument("--dir")
