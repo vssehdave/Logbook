@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 
 from . import git as g
+from .entry import BODY_FIELDS
 
 _TICKS = re.compile(r"`([^`\n]{2,80})`")
 _FILE = re.compile(r"^[\w./\\-]+\.[A-Za-z0-9]{1,6}$")
@@ -40,7 +41,7 @@ def _refs(texts):
 def check(repo, body, topic, paths, sha=None):
     """Look up what the note names, in the commit it is about (or HEAD). Returns the record that is saved with the note:
     {paths: [found, total], names: [found, total], commits: [found, total], files: [the files that exist], missing: [what was not found],
-     evidence: bool (a real file, a real commit or an evidence field), at: HEAD when checked}."""
+     evidence: bool (an evidence field was given), at: HEAD when checked}."""
     ref = sha or "HEAD"
     named_files, idents, shas = _refs([topic] + [body.get(k, "") for k in TEXT_FIELDS])
     files = list(dict.fromkeys([p.replace("\\", "/") for p in (paths or []) if p] + named_files))
@@ -58,17 +59,32 @@ def check(repo, body, topic, paths, sha=None):
     miss_c = [s for s in shas if s not in found_c]
     return {"paths": [len(found_f), len(files)], "names": [found_n, looked], "commits": [len(found_c), len(shas)],
             "files": found_f[:MAX_FILES], "missing": (miss_f + miss_n + miss_c)[:8],
-            "evidence": bool(body.get("evidence") or found_f or found_c), "at": g.head_sha(repo.root) or ""}
+            "evidence": bool(body.get("evidence")), "at": g.head_sha(repo.root) or ""}  # naming a file or commit is not evidence: say what was run or read
+
+
+NO_EVIDENCE = "no evidence: add an `evidence:` line with what you ran or read (a command and its result, or file:line); naming a file is not enough"
+MIN_LINES, MAX_LINES = 3, 9
+
+
+def size_problems(kind, body):
+    """Why a finding or change note is the wrong size: a note is 3 to 9 non-empty lines of the real work. A summary note is a different shape."""
+    n = sum(1 for k in BODY_FIELDS for ln in (body.get(k) or "").splitlines() if ln.strip())
+    if kind == "summary" or MIN_LINES <= n <= MAX_LINES:
+        return []
+    if n < MIN_LINES:
+        return [f"{n} line{'s' if n != 1 else ''}: a note is {MIN_LINES} to {MAX_LINES} lines. Add the summary (2 to 4 sentences), why, evidence, "
+                "and decided/open if the work had them"]
+    return [f"{n} lines: a note is {MIN_LINES} to {MAX_LINES} lines. Keep what the next agent needs; the rest is in the diff"]
 
 
 def problems(cks, strict=True):
-    """What is wrong with a checked note, in words: empty when everything it names exists and it points at something. A person's own note
+    """What is wrong with a checked note, in words: empty when everything it names exists and it carries evidence. A person's own note
     is not held to the second rule (strict=False): their word is the evidence; a note an agent wrote is."""
     if not cks:
         return []
     out = [f"not found: {m}" for m in cks.get("missing", [])]
     if strict and not cks.get("evidence"):
-        out.append("it points at nothing: no file that exists, no commit, no evidence")
+        out.append(NO_EVIDENCE)
     return out
 
 

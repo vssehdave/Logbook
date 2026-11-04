@@ -1210,7 +1210,7 @@ class TestGrounding(CliRepo):
         """Claude Code refuses a shell command holding a brace and a quote (it looks like obfuscation) until a person approves it, so an agent
         cannot save a JSON note unattended. Key: value lines have neither."""
         text = ("kind: finding\ntopic: refund sum\nsummary: `total()` sums rows,\n  and nothing filters refunds\nwhy: no filter\n"
-                "paths: shop/revenue.py, shop/other.py\nsupersedes:\nbefore_commit: no\n")
+                "paths: shop/revenue.py, shop/other.py\nevidence: ran total() on a refunded order\nsupersedes:\nbefore_commit: no\n")
         self.assertNotIn("{", text)
         obj = cli._parse_fields(text)
         self.assertEqual(obj["summary"], "`total()` sums rows,\n  and nothing filters refunds")
@@ -1262,7 +1262,7 @@ class TestGrounding(CliRepo):
         self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "uninstall removes ours and keeps theirs")
 
     def note(self, *flags, **body):
-        obj = {"kind": "finding", "topic": "refund sum", "summary": "x", "why": "y", **body}
+        obj = {"kind": "finding", "topic": "refund sum", "summary": "x", "why": "y", "evidence": "ran the totals, 4% high", **body}
         return self.run_cli("note", "--json", *flags, stdin=json.dumps(obj))
 
     def test_it_looks_up_the_files_names_and_commits_a_note_names(self):
@@ -1272,20 +1272,50 @@ class TestGrounding(CliRepo):
         self.assertEqual((c["paths"], c["names"], c["commits"]), ([1, 2], [1, 2], [1, 2]))
         self.assertEqual(c["files"], ["shop/revenue.py"])
         self.assertEqual(set(c["missing"]), {"shop/missing.py", "no_such_function", "deadbee1234"})
-        self.assertTrue(c["evidence"])
+        self.assertFalse(c["evidence"], "a file and a commit that exist are not evidence")
+        self.assertTrue(ground.check(self.r, {"summary": said, "evidence": "ran it"}, "t", [], None)["evidence"])
 
     def test_a_number_or_an_ordinary_word_is_not_taken_for_a_commit_or_a_name(self):
         from getlogbook import ground
         c = ground.check(self.r, {"summary": "Version 1234567 had 100000000 rows; see `True` and `x`; added a deadbeef of cache."}, "t", [], None)
         self.assertEqual((c["commits"], c["names"]), ([0, 0], [0, 0]))
 
-    def test_a_finding_that_points_at_nothing_is_refused_unless_you_say_so(self):
-        with self.assertRaises(SystemExit):
-            self.note(summary="the cache is slow")
-        code, text = self.note("--allow-ungrounded", summary="the cache is slow")
+    def test_an_agents_note_needs_evidence_and_naming_a_file_is_not_evidence(self):
+        for kw in ({"evidence": ""}, {"evidence": "", "paths": ["shop/revenue.py"]}):
+            with self.assertRaises(SystemExit) as ctx:
+                self.note(summary="the cache is slow", context="looked at it", **kw)
+            self.assertIn("no evidence", str(ctx.exception))
+        self.assertEqual(self.r.load_private(), [])
+        self.note("--allow-ungrounded", summary="the cache is slow", context="looked at it", evidence="")
         (e,) = self.r.load_private()
         self.assertFalse(e.checks["evidence"])
-        self.assertIn("it points at nothing", "; ".join(__import__("getlogbook").ground.problems(e.checks)))
+        self.assertIn("no evidence", "; ".join(__import__("getlogbook").ground.problems(e.checks)))
+
+    def test_an_agents_change_note_needs_evidence_too(self):
+        with self.assertRaises(SystemExit):
+            self.note(kind="change", evidence="")
+        self.note(kind="change")
+
+    def test_a_note_is_three_to_nine_lines_and_the_refusal_says_what_to_add(self):
+        with self.assertRaises(SystemExit) as ctx:
+            self.run_cli("note", "--fields", stdin="topic: t\nsummary: one line only\nevidence: ran it\n")  # 2 lines
+        self.assertIn("2 lines: a note is 3 to 9 lines. Add", str(ctx.exception))
+        code, text = self.run_cli("note", "--fields", "--check", stdin="topic: t\nsummary: one line only\n")
+        self.assertIn("! 1 line: a note is 3 to 9 lines", text)
+        ten = "".join(f"{k}: x\n" for k in ("summary", "why", "fix", "decided", "open", "scale", "context", "wrong", "what", "evidence"))
+        with self.assertRaises(SystemExit) as ctx:
+            self.run_cli("note", "--fields", stdin="topic: t\n" + ten)
+        self.assertIn("10 lines", str(ctx.exception))
+        code, text = self.run_cli("note", "--fields", stdin="topic: t\nsummary: found it\nwhy: no filter\nevidence: ran total(), 4% high\n")
+        self.assertIn("recorded", text)
+        code, text = self.run_cli("note", "--fields", stdin="topic: t2\nsummary: line one\n  line two\nevidence: ran it\n")  # lines inside a value count
+        self.assertIn("recorded", text)
+
+    def test_a_person_and_a_summary_note_are_not_held_to_the_size(self):
+        self.run_cli("note", "--fields", stdin="kind: summary\nlevel: repo\nsummary: the repo in a few sentences\n")
+        self.as_a_person()
+        self.run_cli("note", "one line from a person")
+        self.assertEqual(len(self.r.load_private()), 2)
 
     def test_check_reports_and_saves_nothing(self):
         code, text = self.note("--check", summary="`total()` sums rows in `shop/missing.py`", paths=["shop/revenue.py"])

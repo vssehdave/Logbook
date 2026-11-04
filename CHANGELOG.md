@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **A note an agent writes is 3 to 9 lines and carries evidence.** A finding or change note needs an `evidence:` line (what was run or read: a command and its result, or file:line). Naming a file that exists, or a commit, no longer counts as evidence. A one-line note is refused with a message saying what to add, and so is one over nine lines. `--allow-ungrounded` still saves a note with no evidence, marked unverified; the line count has no bypass. A person's own note and a summary note are not held to either rule. The skill now asks for a 2 to 4 sentence summary, not 3 to 5.
+
 ## 0.0.4
 
 - **Notes go in as `key: value` lines (`logbook note --fields`), not JSON.** In a real session Claude's note was refused because Claude Code flags `{"` in a shell command as obfuscation and needs a person to approve it, whatever allow rules exist, so an unattended agent could never save a note (and an attended one was prompted every time). The skill, rules and prompts now use `--fields`; `--json` still works.
