@@ -10,6 +10,7 @@ import type { Source } from './types'
 const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
 const find = atom({ plugin: 'logbook', key: 'find' } as const, { text: '', at: 0 })
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
+const owner = atom({ plugin: 'logbook', key: 'owner' } as const, '') // the session id the list was built in
 
 const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹'
 const RUNNERS: readonly (readonly string[])[] = [['logbook'], ['python', '-m', 'getlogbook'], ['python3', '-m', 'getlogbook']]
@@ -65,9 +66,9 @@ export const fitCompact = (sources: readonly Source[], columns: number): { fits:
   return { fits, more: sources.length - fits.length }
 }
 
-// A number as superscript digits (12 -> ¹²), and as the bracketed label the band and the answers use: [¹].
+// A number as superscript digits (12 -> ¹²): the label the band and the answers use.
 export const sup = (n: number): string => [...String(n)].map(d => SUPERSCRIPT[Number(d)]).join('')
-export const label = (n: number): string => `[${sup(n)}]`
+export const label = (n: number): string => sup(n)
 
 let runner: readonly string[] | undefined
 // Which chat messages cite which number. Kept here and not in $.state: the engine refuses state writes while a message is drawn, and noting
@@ -99,11 +100,20 @@ async function goTo($: EngineInterface, requestId: string): Promise<void> {
 export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId && e.reason === 'answer') {
+      const session = await $.session.id()
+      // A different session id means a new chat (/clear, resume): nothing of the old one may stay.
+      if ((await read($, owner)) !== session) {
+        instances = {}
+        await update($, shown, () => [])
+        await update($, find, () => ({ text: '', at: 0 }))
+        await update($, owner, () => session)
+      }
       const marks = citedNumbers(e.answer)
       // An answer that cites nothing leaves the band as it was; the sources are the chat's, not the last answer's.
       if (marks.length) {
-        const fresh = (await sourcesOf($, await $.session.id())).filter(s => marks.includes(s.n))
-        await update($, shown, was => mergeSources(was, fresh))
+        const all = await sourcesOf($, session)
+        // The cited ones are added, and the ones already listed are refreshed (a link or a name may have been added since).
+        await update($, shown, was => mergeSources(was, all.filter(s => marks.includes(s.n) || was.some(w => w.id === s.id))))
       }
     }
     return next(e)
@@ -130,7 +140,8 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     // Other mods share this slot: draw theirs below ours instead of replacing it.
     const below = await next(e).catch(() => undefined)
-    const sources = await read($, shown)
+    // The list belongs to the session it was built in; after /clear the id differs and the band is empty at once.
+    const sources = (await read($, owner)) === (await $.session.id()) ? await read($, shown) : []
     const isOpen = await read($, open)
     const seen = instances
     const query = await read($, find)
@@ -168,8 +179,8 @@ export const register: Register = on => {
         <Box flexGrow={1} />
         <Button key="prev" plain label="↑" onPress={() => move(-1)} />
         <Button key="next" plain label="↓" onPress={() => move(1)} />
-        <Box width={14}>
-          <Input key="find" placeholder="[n]" submitLabel="go" value={query.text} onInput={typed} onSubmit={typed} />
+        <Box width={9}>
+          <Input key="find" placeholder="n" submitLabel="go" value={query.text} onInput={typed} onSubmit={typed} />
         </Box>
         <Text dimColor>
           {ids.length ? at + 1 : 0}/{ids.length}
@@ -199,7 +210,14 @@ export const register: Register = on => {
           <Box key={s.id} flexDirection="row" gap={1}>
             <Button key={`src:${s.n}`} plain label={label(s.n)} onPress={() => pick(s.n)} />
             <Text>{s.header}</Text>
-            {s.expandable && s.has_commit && s.url !== '' ? <Link href={s.url} label={s.commit_header} /> : null}
+            {s.expandable ? <Text dimColor>·</Text> : null}
+            {s.expandable && s.has_commit && s.url !== '' ? (
+              <Link href={s.url}>
+                <Text dimColor underline>
+                  {s.commit_header}
+                </Text>
+              </Link>
+            ) : null}
             {s.expandable && s.has_commit && s.url === '' ? <Text dimColor>{s.commit_header}</Text> : null}
             {s.expandable && s.has_commit ? <Text dimColor>{`· ${s.author}, ${s.date}`}</Text> : null}
             {s.expandable && !s.has_commit ? <Text dimColor>{`Note added by ${s.author} on ${s.date}`}</Text> : null}

@@ -21,6 +21,7 @@ declare module 'claude-code' {
       shown: Source[] // every source cited so far in this chat, in number order
       find: { text: string; at: number } // the finder: what was typed, and which instance it is on (from 0)
       open: boolean // the band is expanded
+      owner: string // the session id the list was built in; a different id means a new chat
     }
   }
 }

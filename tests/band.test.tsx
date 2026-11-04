@@ -28,9 +28,9 @@ describe('citations in an answer', () => {
 })
 
 describe('the citation label', () => {
-  test('is the number in square brackets as a superscript, and reads back as the same number', () => {
+  test('is the number as a superscript, and reads back as the same number', () => {
     expect(sup(12)).toBe('¹²')
-    expect(label(2)).toBe('[²]')
+    expect(label(2)).toBe('²')
     expect(citedNumbers(`claim ${label(2)} and ${label(11)}`)).toEqual([2, 11])
     expect(queryNumber(label(2))).toBe(2)
   })

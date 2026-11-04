@@ -40,13 +40,13 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
     /plugin install logbook --marketplace vssehdave/Logbook
 
 A row above the prompt, always there: **bibliography**, how many sources this chat has cited (in grey), a finder on the right, and
-**details**. Under it, the sources cited so far, as `[¹] title` buttons that fit the width (`+N more` when they do
+**details**. Under it, the sources cited so far, as `¹ title` buttons that fit the width (`+N more` when they do
 not). With details on, a note a teammate shared also shows its commit or pull request header as a link (set `commit_url` and `pr_url` in
 `.git/logbook/config.json` for a host Logbook does not know), who wrote it and when ("Note added by
 <name> on <date>" when it has no commit). Your own and private notes stay one line. When there are more rows than the band may take, the
 band scrolls (mouse wheel, or the keys while it is focused) and says how many are hidden.
 
-Click `[¹]` and the chat scrolls to the first answer that cites it. The finder takes a number (`2`, `[2]` or `²`), shows `x/y` (this is the
+Click `¹` and the chat scrolls to the first answer that cites it. The finder takes a number (`2`, `[2]` or `²`), shows `x/y` (this is the
 xth of y answers that cite it) and has up and down buttons to go through them; the engine only lets a mod scroll the chat in answer to your
 own click or typing. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
 the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. Checked with `claude plugin validate` and

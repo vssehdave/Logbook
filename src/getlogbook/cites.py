@@ -99,7 +99,7 @@ def record(repo, v, n):
         detail = f"{v['topic']} | {commit_header}  by {v['author']}, {date}" + (f"  {url}" if url else f"  commit {sha[:8]}")
     else:
         detail = f"Note added by {v['author']} on {date}"
-    return {"n": n, "mark": f"[{sup(n)}]", "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
+    return {"n": n, "mark": sup(n), "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
             "date": date, "scope": v["scope"], "mine": v["mine"], "has_commit": bool(sha), "expandable": expandable,
             "detail": detail if expandable else ""}
 
