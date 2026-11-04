@@ -1044,6 +1044,22 @@ class TestCitations(CliRepo):
         self.assertIn("¹", text)
         self.assertNotIn("my private note  by", text)
 
+    def test_a_local_remote_has_no_link_until_a_template_gives_one_and_a_pr_header_falls_back_to_the_commit(self):
+        from getlogbook import cites
+        head = commit(self.d, "Fix refunds (#12)", {"shop/revenue.py": "x = 3\n"})
+        (note,) = self.teammate_notes(("refund fix", head))
+        vs, _ = tree.all_views(self.r)
+        view = next(v for v in vs if v["id"] == note)
+        self.assertEqual(cites.record(self.r, view, 1)["url"], "", "no remote, no address, so no link")
+        c = self.r.cfg()
+        c["commit_url"] = "https://git.example/acme/shop/c/{sha}"
+        self.r.save_cfg(c)
+        self.assertEqual(cites.record(self.r, view, 1)["url"], f"https://git.example/acme/shop/c/{head}", "no pr_url: the commit")
+        c["pr_url"] = "https://git.example/acme/shop/pr/{n}"
+        self.r.save_cfg(c)
+        self.assertEqual(cites.record(self.r, view, 1)["url"], "https://git.example/acme/shop/pr/12")
+        self.assertEqual(cites.record(self.r, view, 1)["mark"], "[¹]")
+
     def test_injected_notes_carry_a_number_that_stays_and_a_source_line(self):
         sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
         head = sh("git", "rev-parse", "HEAD", cwd=self.d)
@@ -1052,6 +1068,7 @@ class TestCitations(CliRepo):
         text = recall.digest(self.r, "UserPromptSubmit", "why is revenue wrong?", session="chat1")
         self.assertIn("[1]", text)
         self.assertIn("source:", text)
+        self.assertIn("[¹]", self.run_cli("cites", "--session", "chat1")[1], "the label is the bracketed superscript")
         self.assertIn("superscript", text)
         code, listing = self.run_cli("cites", "--session", "chat1")
         self.assertEqual(code, 0, listing)

@@ -62,11 +62,12 @@ def latest_session(repo):
 
 
 def web_url(repo, kind, ident):
-    """Link to a commit or a pull request on GitHub, GitLab or Bitbucket; '' elsewhere (set `commit_url` in the config to add a host)."""
+    """Link to a commit or a pull request on GitHub, GitLab or Bitbucket; '' elsewhere. For another host, or a local remote, set
+    `commit_url` (with {sha}) and `pr_url` (with {n}) in the config."""
     url = g.try_run(["remote", "get-url", "origin"], repo.root)[1].strip()
-    tmpl = repo.cfg().get("commit_url")
-    if tmpl and kind == "commit":
-        return tmpl.replace("{sha}", ident)
+    tmpl = repo.cfg().get("commit_url" if kind == "commit" else "pr_url")
+    if tmpl:
+        return tmpl.replace("{sha}" if kind == "commit" else "{n}", ident)
     m = _REMOTE.match(url)
     if not m:
         return ""
@@ -90,15 +91,15 @@ def record(repo, v, n):
     if not v["mine"]:  # words from a teammate: shown to people and agents, so they go through the same filter as injected notes
         commit_header, v = sanitize(commit_header, 200), {**v, "author": sanitize(v["author"], 60), "topic": sanitize(v["topic"], 200)}
     url = ""
-    if sha:
-        url = web_url(repo, "pr", pr.group(1) or pr.group(2)) if pr else web_url(repo, "commit", sha)
+    if sha:  # the pull request when the header names one and the host has an address for it, else the commit
+        url = (web_url(repo, "pr", pr.group(1) or pr.group(2)) if pr else "") or web_url(repo, "commit", sha)
     date = (v["created"] or "")[:10]
     expandable = v["scope"] == "shared" and not v["mine"]
     if sha:
         detail = f"{v['topic']} | {commit_header}  by {v['author']}, {date}" + (f"  {url}" if url else f"  commit {sha[:8]}")
     else:
         detail = f"Note added by {v['author']} on {date}"
-    return {"n": n, "mark": sup(n), "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
+    return {"n": n, "mark": f"[{sup(n)}]", "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
             "date": date, "scope": v["scope"], "mine": v["mine"], "has_commit": bool(sha), "expandable": expandable,
             "detail": detail if expandable else ""}
 

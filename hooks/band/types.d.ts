@@ -19,7 +19,6 @@ declare module 'claude-code' {
   interface PluginState {
     logbook: {
       shown: Source[] // every source cited so far in this chat, in number order
-      where: Record<string, string[]> // citation number -> the chat messages that cite it, in the order they were drawn
       find: { text: string; at: number } // the finder: what was typed, and which instance it is on (from 0)
       open: boolean // the band is expanded
     }

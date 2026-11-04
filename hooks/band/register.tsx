@@ -8,7 +8,6 @@ import type { Source } from './types'
 // `[n] title` buttons that fit the width; expanded each teammate-shared note also shows its commit or pull request header as a link,
 // who wrote it and when. Clicking `[n]` scrolls the chat to the first answer that cites it.
 const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
-const where = atom({ plugin: 'logbook', key: 'where' } as const, {} as Record<string, string[]>)
 const find = atom({ plugin: 'logbook', key: 'find' } as const, { text: '', at: 0 })
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
 
@@ -66,7 +65,14 @@ export const fitCompact = (sources: readonly Source[], columns: number): { fits:
   return { fits, more: sources.length - fits.length }
 }
 
+// A number as superscript digits (12 -> ¹²), and as the bracketed label the band and the answers use: [¹].
+export const sup = (n: number): string => [...String(n)].map(d => SUPERSCRIPT[Number(d)]).join('')
+export const label = (n: number): string => `[${sup(n)}]`
+
 let runner: readonly string[] | undefined
+// Which chat messages cite which number. Kept here and not in $.state: the engine refuses state writes while a message is drawn, and noting
+// a message as it is drawn is the only way to learn its id. The band reads it when it is drawn, which is after the answer has been.
+let instances: Record<string, string[]> = {}
 
 // The numbered sources of this chat, from the logbook command; [] when it is missing or this is not a Logbook repo.
 async function sourcesOf($: EngineInterface, session: string): Promise<Source[]> {
@@ -106,7 +112,7 @@ export const register: Register = on => {
   // Note which messages cite which number, as they are drawn, so the finder can walk them.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     const marks = citedNumbers(e.props.text)
-    if (marks.length) await update($, where, was => addInstances(was, marks, e.requestId))
+    if (marks.length) instances = addInstances(instances, marks, e.requestId)
     return next(e)
   })
 
@@ -114,7 +120,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await update($, shown, () => [])
-      await update($, where, () => ({}))
+      instances = {}
       await update($, find, () => ({ text: '', at: 0 }))
     }
     return next(e)
@@ -126,7 +132,7 @@ export const register: Register = on => {
     const below = await next(e).catch(() => undefined)
     const sources = await read($, shown)
     const isOpen = await read($, open)
-    const seen = await read($, where)
+    const seen = instances
     const query = await read($, find)
     const wanted = queryNumber(query.text)
     const ids = wanted === undefined ? [] : (seen[String(wanted)] ?? [])
@@ -146,7 +152,7 @@ export const register: Register = on => {
       const found = seen[String(n)] ?? []
       await update($, find, () => ({ text: String(n), at: 0 }))
       if (found.length) await goTo($, found[0] as string)
-      else $.ui.toast(`[${n}] has no answer in this chat yet`)
+      else $.ui.toast(`${label(n)} has no answer on screen yet`)
     }
     const typed = async (text: string) => {
       await update($, find, () => ({ text, at: 0 }))
@@ -157,18 +163,18 @@ export const register: Register = on => {
 
     const head = (
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
-        <Text>Bibliography</Text>
+        <Text>bibliography</Text>
         <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
         <Button key="prev" plain label="↑" onPress={() => move(-1)} />
         <Button key="next" plain label="↓" onPress={() => move(1)} />
-        <Box width={9}>
-          <Input key="find" placeholder="[n]" value={query.text} onInput={typed} onSubmit={typed} />
+        <Box width={14}>
+          <Input key="find" placeholder="[n]" submitLabel="go" value={query.text} onInput={typed} onSubmit={typed} />
         </Box>
         <Text dimColor>
           {ids.length ? at + 1 : 0}/{ids.length}
         </Text>
-        <Button key="toggle" plain label={isOpen ? 'collapse [-]' : 'expand [+]'} onPress={toggle} />
+        <Button key="toggle" plain label="details" onPress={toggle} />
       </Box>
     )
 
@@ -178,7 +184,7 @@ export const register: Register = on => {
         <Box flexDirection="row" gap={2} width={width}>
           {fit.fits.map(s => (
             <Box key={s.id} flexDirection="row" gap={1}>
-              <Button key={`src:${s.n}`} plain label={`[${s.n}]`} onPress={() => pick(s.n)} />
+              <Button key={`src:${s.n}`} plain label={label(s.n)} onPress={() => pick(s.n)} />
               <Text>{short(s.header)}</Text>
             </Box>
           ))}
@@ -190,19 +196,13 @@ export const register: Register = on => {
     const list = (
       <Box flexDirection="column" width={width}>
         {sources.map(s => (
-          <Box key={s.id} flexDirection="column">
-            <Box flexDirection="row" gap={1}>
-              <Button key={`src:${s.n}`} plain label={`[${s.n}]`} onPress={() => pick(s.n)} />
-              <Text>{s.header}</Text>
-            </Box>
-            {s.expandable && s.has_commit ? (
-              <Box flexDirection="row" gap={1}>
-                <Text>{'    '}</Text>
-                {s.url !== '' ? <Link href={s.url} label={s.commit_header} /> : <Text dimColor>{s.commit_header}</Text>}
-                <Text dimColor>{`· ${s.author}, ${s.date}`}</Text>
-              </Box>
-            ) : null}
-            {s.expandable && !s.has_commit ? <Text dimColor>{`    Note added by ${s.author} on ${s.date}`}</Text> : null}
+          <Box key={s.id} flexDirection="row" gap={1}>
+            <Button key={`src:${s.n}`} plain label={label(s.n)} onPress={() => pick(s.n)} />
+            <Text>{s.header}</Text>
+            {s.expandable && s.has_commit && s.url !== '' ? <Link href={s.url} label={s.commit_header} /> : null}
+            {s.expandable && s.has_commit && s.url === '' ? <Text dimColor>{s.commit_header}</Text> : null}
+            {s.expandable && s.has_commit ? <Text dimColor>{`· ${s.author}, ${s.date}`}</Text> : null}
+            {s.expandable && !s.has_commit ? <Text dimColor>{`Note added by ${s.author} on ${s.date}`}</Text> : null}
           </Box>
         ))}
       </Box>

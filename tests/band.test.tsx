@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addInstances, citedNumbers, fitCompact, mergeSources, queryNumber, stepInstance } from '../hooks/band/register'
+import { addInstances, citedNumbers, fitCompact, label, mergeSources, queryNumber, stepInstance, sup } from '../hooks/band/register'
 import type { Source } from '../hooks/band/types'
 
 const source = (over: Partial<Source>): Source => ({
@@ -24,6 +24,15 @@ describe('citations in an answer', () => {
   test('reads superscript numbers, including more than one digit, once each', () => {
     expect(citedNumbers('Rounds half-even¹ and drops refunds² ¹ again, see ¹¹.')).toEqual([1, 2, 11])
     expect(citedNumbers('no sources here, and 2 is not a superscript')).toEqual([])
+  })
+})
+
+describe('the citation label', () => {
+  test('is the number in square brackets as a superscript, and reads back as the same number', () => {
+    expect(sup(12)).toBe('¹²')
+    expect(label(2)).toBe('[²]')
+    expect(citedNumbers(`claim ${label(2)} and ${label(11)}`)).toEqual([2, 11])
+    expect(queryNumber(label(2))).toBe(2)
   })
 })
 
