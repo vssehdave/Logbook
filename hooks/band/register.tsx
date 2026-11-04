@@ -185,7 +185,11 @@ export const register: Register = on => {
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Button key="prev" plain label="↑" onPress={() => move(-1)} />
           <Button key="next" plain label="↓" onPress={() => move(1)} />
-          {wanted === undefined ? <Text dimColor>n</Text> : <Text>{sup(wanted)}</Text>}
+          <Box flexDirection="row">
+            <Text dimColor>[</Text>
+            {wanted === undefined ? <Text dimColor>n</Text> : <Text>{wanted}</Text>}
+            <Text dimColor>]</Text>
+          </Box>
           <Text dimColor>
             {ids.length ? at + 1 : 0}/{ids.length}
           </Text>
