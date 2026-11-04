@@ -24,6 +24,19 @@ BLOCK_TEXT = ("Before you finish: this turn read or searched {n} times and no lo
 NUDGE_TEXT = ("Logbook: your last turn read or searched {n} times and recorded no note. If you learned something a teammate's "
               "agent would otherwise have to rediscover (a cause, a wrong assumption, a dead end, a decision), record it now "
               "with `logbook note --fields` (see the logbook skill: 3 to 9 lines, with an `evidence:` line). If nothing is worth keeping, ignore this.")
+# With the logbook-scribe agent installed the note is written in its own context: the main agent only hands over the facts.
+HANDOFF = ("hand the facts to the logbook-scribe subagent (what was asked; what you found and why; what you ran or read, with the result; the files; "
+           "what was decided or left open) and use its two-line answer. Do not write the note yourself")
+BLOCK_SCRIBE = BLOCK_TEXT.replace("record it now with `logbook note --fields` (see the logbook skill: 3 to 9 lines, with an `evidence:` line), then give "
+                                  "your final answer again.", HANDOFF + ", then give your final answer again.")
+NUDGE_SCRIBE = NUDGE_TEXT.replace("record it now with `logbook note --fields` (see the logbook skill: 3 to 9 lines, with an `evidence:` line).", HANDOFF + ".")
+
+
+def scribe_installed(repo):
+    try:
+        return "managed-by: logbook" in (repo.root / ".claude" / "agents" / "logbook-scribe.md").read_text(encoding="utf-8")
+    except OSError:
+        return False
 
 
 def turn_stats(data):
@@ -43,8 +56,8 @@ def turn_stats(data):
                 continue
             name = b.get("name", "")
             cmd = str((b.get("input") or {}).get("command", "")) if name == "Bash" else ""
-            if _NOTING.search(cmd):
-                noted = True
+            if _NOTING.search(cmd) or (name in ("Agent", "Task") and (b.get("input") or {}).get("subagent_type") == "logbook-scribe"):
+                noted = True  # the scribe writes its note in its own context, so the main transcript only shows the hand-off
             elif name in INVESTIGATE or (name == "Bash" and _SEARCHY.search(cmd)):
                 reads += 1
             elif name in EDITS:
@@ -108,7 +121,7 @@ def nudge_text(repo, session):
     if mode(repo) == "off":
         return ""
     n = _claim(repo, session, int(repo.cfg().get("nudge_after", NUDGE_AFTER)))
-    return NUDGE_TEXT.format(n=n) if n else ""
+    return (NUDGE_SCRIBE if scribe_installed(repo) else NUDGE_TEXT).format(n=n) if n else ""
 
 
 def stop_block(repo, payload):
@@ -117,7 +130,7 @@ def stop_block(repo, payload):
     if mode(repo) != "block" or payload.get("stop_hook_active"):
         return ""
     n = _claim(repo, str(payload.get("session_id", "")), int(repo.cfg().get("block_after", BLOCK_AFTER)))
-    return json.dumps({"decision": "block", "reason": BLOCK_TEXT.format(n=n)}) if n else ""
+    return json.dumps({"decision": "block", "reason": (BLOCK_SCRIBE if scribe_installed(repo) else BLOCK_TEXT).format(n=n)}) if n else ""
 
 
 def join(*parts):

@@ -413,6 +413,10 @@ class TestInstaller(Base):
         self.assertTrue(md.count("\n") == md.count("\r\n"), "CRLF file stays CRLF")
         skill = (self.d / ".claude" / "skills" / "logbook" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("managed-by: logbook", skill)
+        scribe = (self.d / ".claude" / "agents" / "logbook-scribe.md").read_text(encoding="utf-8")
+        self.assertRegex(scribe, r"(?m)^name: logbook-scribe$")
+        self.assertRegex(scribe, r"(?m)^model: haiku$")
+        self.assertIn("managed-by: logbook", scribe)
         hooks = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
         self.assertIn("mine", json.dumps(hooks["Stop"]), "existing hooks are kept")
         self.assertIn("getlogbook capture", json.dumps(hooks["UserPromptSubmit"]))
@@ -425,6 +429,7 @@ class TestInstaller(Base):
         self.run_cli("uninstall", "--yes")
         self.assertEqual((self.d / "CLAUDE.md").read_bytes(), b"# Mine\r\n\r\nKeep this.\r\n")
         self.assertFalse((self.d / ".claude" / "skills").exists(), "empty folders the install made are removed too")
+        self.assertFalse((self.d / ".claude" / "agents").exists())
         left = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
         self.assertEqual(list(left), ["Stop"])
         self.assertIn("mine", json.dumps(left))
@@ -449,6 +454,15 @@ class TestInstaller(Base):
             self.run_cli("install", "--yes", "--agent", "claude-code")
         self.run_cli("uninstall", "--yes")
         self.assertEqual((sk / "SKILL.md").read_text(), "someone else's skill")
+
+    def test_someone_elses_agent_of_the_same_name_is_never_overwritten_or_removed(self):
+        ag = self.d / ".claude" / "agents"
+        ag.mkdir(parents=True)
+        (ag / "logbook-scribe.md").write_text("someone else's agent")
+        with self.assertRaises(SystemExit):
+            self.run_cli("install", "--yes", "--agent", "claude-code")
+        self.run_cli("uninstall", "--yes")
+        self.assertEqual((ag / "logbook-scribe.md").read_text(), "someone else's agent")
 
     def test_symlinked_rules_file_is_written_through(self):
         real = self.root / "shared-claude.md"
@@ -522,6 +536,26 @@ class TestNudge(Base):
         self.hook("Stop", last_assistant_message="done")
         self.assertTrue(capture._load(self.r.cdir / "sessions" / "s1")["turn"]["noted"])
         self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
+
+    def test_with_the_scribe_installed_the_reminder_says_to_hand_over_the_facts_and_the_handoff_counts_as_a_note(self):
+        from getlogbook import nudge
+        self.assertNotIn("scribe", nudge.NUDGE_TEXT)
+        self.assertIn("logbook-scribe", nudge.NUDGE_SCRIBE)
+        self.assertIn("logbook-scribe", nudge.BLOCK_SCRIBE)
+        self.assertNotIn("record it now", nudge.NUDGE_SCRIBE + nudge.BLOCK_SCRIBE, "the replacement must have matched")
+        reads = [("Read", {"file_path": f"f{i}.py"}) for i in range(7)]
+        self.turn(*reads)
+        self.hook("Stop", last_assistant_message="done")
+        self.assertIn("recorded no note", json.loads(self.hook("UserPromptSubmit", prompt="a"))["hookSpecificOutput"]["additionalContext"])  # no scribe: the plain text
+        (self.d / ".claude" / "agents").mkdir(parents=True)
+        (self.d / ".claude" / "agents" / "logbook-scribe.md").write_text("---\nname: logbook-scribe\nmetadata:\n  managed-by: logbook\n---\n")
+        self.turn(*reads)
+        self.hook("Stop", last_assistant_message="done")
+        self.assertIn("logbook-scribe subagent", json.loads(self.hook("UserPromptSubmit", prompt="b"))["hookSpecificOutput"]["additionalContext"])
+        self.turn(*reads, ("Agent", {"subagent_type": "logbook-scribe", "description": "note", "prompt": "facts"}))
+        self.hook("Stop", last_assistant_message="done")
+        self.assertTrue(capture._load(self.r.cdir / "sessions" / "s1")["turn"]["noted"], "a hand-off to the scribe is a note")
+        self.assertEqual(self.hook("UserPromptSubmit", prompt="c"), "")
 
     def test_only_the_note_subcommand_counts_as_writing_a_note(self):
         """A real session found this: `logbook ask "... same note id"` was counted as a note, so no reminder ever came."""
@@ -1456,6 +1490,15 @@ class TestPermissions(CliRepo):
         self.run_cli("config", "publish", "never")
         self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(capture.handle_hook("Permission", "claude-code", payload("ls -la")), "", "no opinion on other commands")
+
+    def test_the_scribe_may_run_only_a_few_logbook_commands(self):
+        from getlogbook import permissions
+        said = lambda cmd, mode="auto": json.loads(permissions.hook_output(cmd, mode, "logbook-scribe") or "{}").get("hookSpecificOutput", {}).get("permissionDecision")
+        self.assertEqual(said("logbook note --fields --check"), "allow")
+        for cmd in ("logbook publish abc", "logbook sync", "logbook config publish auto", "ls -la", "git push", "rm -rf x", "logbook note x && rm y"):
+            self.assertEqual(said(cmd), "deny", cmd)
+        self.assertEqual(permissions.hook_output("ls -la", "auto", ""), "", "the main agent keeps its own rules")
+        self.assertEqual(permissions.hook_output("ls -la", "auto", "someone-elses-agent"), "")
 
     def test_the_readme_table_is_the_code_table(self):
         from getlogbook import permissions

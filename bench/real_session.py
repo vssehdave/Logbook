@@ -48,7 +48,9 @@ def one(lb, name, args):
     env = dict(os.environ, PATH=str(Path(lb).parent) + os.pathsep + os.environ["PATH"])
     env.pop("LOGBOOK_WRITER", None)
     run(lb, "setup", "--yes", "--agent", "claude-code", cwd=d, env=env)
-    cmd = ["claude", "-p", prompt, "--output-format", "json", "--max-turns", str(args.max_turns),
+    if args.no_scribe:  # the main-agent path: the nudge then tells the main agent to write the note itself
+        (d / ".claude" / "agents" / "logbook-scribe.md").unlink(missing_ok=True)
+    cmd =["claude", "-p", prompt, "--output-format", "json", "--max-turns", str(args.max_turns),
            "--allowedTools", "Read Grep Glob Edit Bash(python -m unittest:*) Bash(logbook:*)"]
     if args.model:
         cmd += ["--model", args.model]
@@ -64,7 +66,10 @@ def one(lb, name, args):
     fired = len(log.read_text(encoding="utf-8").splitlines()) if log.exists() else 0
     text = " ".join(" ".join(str(v) for v in n.get("body", {}).values()) for n in notes).lower()
     u = res.get("usage") or {}
-    return {"task": name, "dir": str(d), "claude_exit": rc, "turns": res.get("num_turns"), "reminders_fired": fired, "notes": len(notes),
+    slug = "".join(c if c.isalnum() else "-" for c in str(d))  # Claude Code keeps the transcript under ~/.claude/projects/<the path with symbols as dashes>
+    scribe_used = any('"subagent_type":"logbook-scribe"' in p.read_text(encoding="utf-8", errors="replace").replace(": ", ":")
+                      for p in (Path.home() / ".claude" / "projects" / slug).glob("*.jsonl"))
+    return {"task": name, "dir": str(d), "no_scribe": args.no_scribe, "scribe_used": scribe_used,"claude_exit": rc, "turns": res.get("num_turns"), "reminders_fired": fired, "notes": len(notes),
             "grounding": [n.get("checks") for n in notes], "has_evidence": [bool((n.get("body") or {}).get("evidence")) for n in notes],
             "names_the_cause": (any(w in text for w in words) if words else None), "note_expected": expect_note,
             "tokens_in": u.get("input_tokens"), "tokens_out": u.get("output_tokens"), "cost_usd": res.get("total_cost_usd")}
@@ -77,6 +82,7 @@ def main():
     ap.add_argument("--tasks", default=",".join(TASKS))
     ap.add_argument("--max-turns", type=int, default=30)
     ap.add_argument("--model", default="")
+    ap.add_argument("--no-scribe", action="store_true", help="remove the logbook-scribe agent after setup, to measure the main-agent path")
     args = ap.parse_args()
     rows = []
     for name in args.tasks.split(","):

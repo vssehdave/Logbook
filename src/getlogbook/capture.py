@@ -141,7 +141,7 @@ def handle_hook(event, agent, raw):
         if event == "Permission":  # PreToolUse on Bash: allow, ask or deny a logbook command from the publish mode; no opinion on anything else
             from . import permissions
             ti = payload.get("tool_input")
-            return permissions.hook_output(str(ti.get("command", "")) if isinstance(ti, dict) else "", repo.publish_mode())
+            return permissions.hook_output(str(ti.get("command", "")) if isinstance(ti, dict) else "", repo.publish_mode(), str(payload.get("agent_type") or ""))
         if event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
             from . import recall  # only the prompt-time hooks need retrieval; Stop/SessionEnd stay lean
             files = []
