@@ -49,6 +49,8 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
     qt = tokens(query) - _STOP
     scored = []
     for v in views:
+        if v.get("is_status"):
+            continue  # a status record is about another note; it is not a finding to show
         s = 0.0
         s += 6 * len(want_names & {m.lower() for m in v["names"]})
         s += 5 * len(want_paths & set(v["paths"]))
@@ -63,6 +65,7 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
         s -= 1 if v["state"] in ("orphaned", "unknown") else 0
         s -= 1 if ground.problems(v["checks"], v["provenance"] != "user-written") else 0  # it names something that is not there, or points at nothing
         s -= 1 if (v["behind"] or 0) > 200 else 0
+        s -= {"in-progress": 2, "resolved": 4}.get(v.get("status"), 0)  # later commits changed what it says in part, or fixed it
         scored.append((s, v))
     scored.sort(key=lambda x: x[1]["id"], reverse=True)  # newest first on ties
     scored.sort(key=lambda x: -x[0])
@@ -70,6 +73,8 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
 
 
 def injectable(v):
+    if v.get("status") == "resolved" or v.get("is_status"):
+        return False  # a fixed or gone finding is not context, and a status record is not a finding
     return v["trusted"] and bool(v["body"].get("why") or v["body"].get("wrong") or v["provenance"] == "user-written")  # a person's own note needs no why
 
 
@@ -93,6 +98,8 @@ def _fmt(i, v, src="", msg=""):
     lines.append(f"    node: note:{v['id']}" + (f" (under commit:{v['placed'][:8]})" if v["placed"] else ""))
     if src:
         lines.append("    source: " + src)
+    if v.get("status") == "in-progress":
+        lines.append("    status: in-progress, later commits changed this in part: " + sanitize(", ".join(v["status_commits"]) + ". " + v["status_reason"], 240))
     if msg:
         lines.append("    commit message: " + sanitize(msg, MAX_COMMIT_MSG))
     for k in ("summary", "what", "why", "wrong", "fix"):

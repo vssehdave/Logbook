@@ -93,6 +93,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `status` | allow |
 | `summarize` | allow |
 | `backfill` | allow |
+| `tidy` | allow; `--apply` asks |
 | `publish` | never: deny, ask: ask, claude: allow, auto: allow |
 | `sync` | never: ask, ask: ask, claude: ask, auto: allow |
 | `purge` | ask |

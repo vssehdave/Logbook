@@ -226,6 +226,11 @@ ok(decision("logbook config publish auto") == "ask" and decision("logbook purge"
 ok(decision("logbook note x && rm y") is None and decision("ls") is None, "the hook has no opinion on a compound command or another command")
 ok(decision("logbook publish abc") == "ask", "publish asks in the default mode (ask)")
 ok(decision("ls", "logbook-scribe") == "deny", "the scribe may not run anything but logbook")
+ok(decision("logbook tidy --brief") == "allow" and decision("logbook tidy --apply <<'EOF'\nstatus_of: x\nEOF") == "ask", "tidy reads freely and --apply always asks")
+rc, o = lb(bob, "tidy")
+ok(rc == 0 and "candidate" in o, "tidy lists candidates", o)
+rc, o = lb(bob, "tidy", "--apply", inp="status_of: 1a1a5684310-5ba7d17c\nstatus: resolved\ncommits: abc1234\nreason: r\n")
+ok(rc != 0 and "nothing was changed" in o, "tidy --apply with a note that does not exist stores nothing", o)
 rc, o = lb(bob, "uninstall", "--yes", "--agent", "claude-code")
 left = json.loads((bob / ".claude/settings.local.json").read_text()) if (bob / ".claude/settings.local.json").exists() else {}
 ok("PreToolUse" not in left.get("hooks", {}) and not (bob / ".claude/agents").exists(), "uninstall removes the hook and the scribe agent", o)

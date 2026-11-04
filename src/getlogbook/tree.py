@@ -380,7 +380,20 @@ def view(repo, loaded, anch):
             "branch": a.get("branch", ""), "subject": a.get("subject", ""), "sha": a.get("sha", ""), "placed": sha or "",
             "paths": a.get("paths", []), "names": a.get("names", []), "dirty": a.get("dirty", False),
             "supersedes": e.supersedes, "checks": e.checks, "redacted": e.redacted, "level": e.level, "sources": e.sources,
-            "merge_base": a.get("merge_base", ""), "base": a.get("base", "")}
+            "merge_base": a.get("merge_base", ""), "base": a.get("base", ""), "writer": loaded.user, "status_rec": e.status}
+
+
+def apply_statuses(views):
+    """Give every note its current status from the status records its own author wrote (open when there is none). A record from anyone else is
+    ignored, so nobody can mark another person's note resolved. Record ids sort by time, so the latest one wins."""
+    by_id = {v["id"]: v for v in views}
+    for v in views:
+        v.update(status="open", status_commits=[], status_reason="", status_id="", is_status=bool(v["status_rec"]))
+    for s in sorted((v for v in views if v["status_rec"]), key=lambda v: v["id"]):
+        t = by_id.get(s["status_rec"]["of"])
+        if t and t["writer"] == s["writer"] and not t["status_rec"]:
+            t.update(status=s["status_rec"]["state"], status_commits=s["status_rec"]["commits"], status_reason=s["body"].get("summary", ""), status_id=s["id"])
+    return views
 
 
 def all_views(repo):
@@ -388,7 +401,7 @@ def all_views(repo):
     anch = Anchorer(repo)
     loaded = repo.all_entries()
     anch.prime([l.entry.anchor.get("sha", "") for l in loaded])
-    return [view(repo, l, anch) for l in loaded], anch
+    return apply_statuses([view(repo, l, anch) for l in loaded]), anch
 
 
 def build(repo):

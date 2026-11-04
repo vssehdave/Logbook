@@ -759,9 +759,24 @@ def cmd_summarize(a):
 
 
 def cmd_tidy(a):
-    """Notes that may be out of date, repeated or junk, each with the reason. Only lists: judging them and applying a change are not built yet."""
+    """Notes that may be out of date, repeated or junk, each with the reason. Plain `tidy` and `--brief` only read; `--apply` stores the statuses
+    the person approved, all or none."""
     r = need_repo()
-    found = tidy.candidates(r, views(r)[0])
+    vs = views(r)[0]
+    if a.apply:
+        done, errors = tidy.apply(r, vs, sys.stdin.read())
+        if errors:
+            for e in errors:
+                out("  ! " + e)
+            raise SystemExit("logbook: nothing was changed; fix the proposals above and run it again")
+        for nid, state, e in done:
+            shared = auto_publish(r, e)
+            out(f"  {nid} is now {state} (record {e.id}, {'published (auto mode)' if shared else 'private until you publish it'})")
+        return 0
+    if a.brief:
+        out(tidy.brief(r, vs, a.limit))
+        return 0
+    found = tidy.candidates(r, vs)
     out(f"{len(found)} candidate{'' if len(found) == 1 else 's'} (nothing was changed; whether each one is really outdated or repeated is for an agent to judge and you to approve)")
     for c in found[:a.limit]:
         out(f"  {c['id']}  {'yours' if c['mine'] else 'a teammate'}  {safety_sanitize(c['topic'], 80)}")
@@ -1000,8 +1015,10 @@ def build_parser():
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
     s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
     s.add_argument("--branch", help="a named branch")
-    s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk (lists only)")
+    s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk; --brief for an agent; --apply stores approved statuses")
     s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
+    s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
     s = add("backfill", cmd_backfill,"brief an agent on commits with no note saying why, so it can write them")
     s.add_argument("shas", nargs="*")
     s.add_argument("--limit", type=int, default=3)

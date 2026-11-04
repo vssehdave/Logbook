@@ -82,6 +82,28 @@ Run the same note through `logbook note --fields --check` first. It looks up eve
 
 A summary is a short note about a whole node: the repo, or a branch. Teammates' agents are shown a fresh one at the start of a session, so it saves them reading every note. When the user asks for an overview, or `logbook status` says a summary is out of date, run `logbook summarize`. It lists the notes under that node; write 4 to 8 sentences from them (what is known, decided and open) and record it with `logbook note --fields` using `kind: summary`, the `level:` it gave you and the `sources` it listed. Add nothing the notes do not support. A summary goes stale as soon as a covered note is added, and a stale one is not shown.
 
+## Keeping notes true
+
+When the user asks you to tidy the notes, or `logbook tidy` lists candidates, run `logbook tidy --brief`. It lists notes whose files changed in later commits, notes that may repeat each other and old auto-copied drafts, with the note's words. It decides nothing: you do. For each candidate read the commits it names (`git show <sha> -- <file>`) and decide whether the note is still true, partly changed (`in-progress`), fixed or gone (`resolved`), or should be replaced by a newer note (write that note with `supersedes: <id>`). A resolved note is never shown to agents again, so be sure; say "not verified" in the reason for anything you did not check.
+
+Show the user the whole list once, in chat: each note, your proposed status and the commit that justifies it. Wait for a yes (they can approve all, some or none). Then store exactly what they approved with one command:
+
+```
+logbook tidy --apply <<'EOF'
+status_of: <note id>
+status: resolved
+commits: <sha>
+reason: one or two sentences, citing the commit
+---
+status_of: <note id>
+status: in-progress
+commits: <sha>, <sha>
+reason: what changed and what still holds
+EOF
+```
+
+`commits` must be commits that touched the note's files after it was written, and the reason must not be empty; otherwise nothing is stored. Only the author's own notes can be changed. The note is not edited: a small record is added beside it, and `status: open` reopens it. Claude Code asks the user before this command runs, so never run it for a list they have not seen.
+
 ## Rules
 
 - Never put secrets, personal data or pasted data rows in a note. Publishing is a separate, explicit step the user decides on.
