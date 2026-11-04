@@ -1176,6 +1176,44 @@ class TestPublishModes(CliRepo):
         self.assertEqual(len(self.r.load_private()), 1)
 
 
+class TestWhoWroteIt(CliRepo):
+    """The "agent-written" label belongs to a note Claude wrote, and to no one else's."""
+
+    def written(self, **env):
+        import unittest.mock
+        with unittest.mock.patch.dict(os.environ, {}):
+            for k in ("CLAUDE_CODE_SESSION_ID", "LOGBOOK_WRITER"):
+                os.environ.pop(k, None)
+            os.environ.update(env)
+            e = capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
+        return self.r.get_private(e.id)
+
+    def test_a_note_from_a_persons_own_terminal_is_user_written(self):
+        e = self.written()
+        self.assertEqual((e.provenance, e.v), ("user-written", 2))
+
+    def test_a_note_written_inside_claude_code_is_agent_written(self):
+        self.assertEqual(self.written(CLAUDE_CODE_SESSION_ID="abc").provenance, "agent-written")
+
+    def test_logbook_writer_says_it_outright_and_wins(self):
+        self.assertEqual(self.written(LOGBOOK_WRITER="agent").provenance, "agent-written", "another agent")
+        self.assertEqual(self.written(CLAUDE_CODE_SESSION_ID="abc", LOGBOOK_WRITER="user").provenance, "user-written", "a person using an agent's shell")
+
+    def test_a_note_from_before_the_label_was_true_says_its_origin_is_unknown(self):
+        old = from_dict({"id": new_id(), "kind": "finding", "topic": "old", "body": {"summary": "s", "why": "w"}, "provenance": "agent-written"})
+        self.assertEqual(old.v, 1)
+        self.r.add_private(old)
+        mine = self.written(CLAUDE_CODE_SESSION_ID="abc")
+        user = self.written()
+        seen = {v["id"]: v["provenance"] for v in tree.all_views(self.r)[0]}
+        self.assertEqual((seen[old.id], seen[mine.id], seen[user.id]), ("origin unknown", "agent-written", "user-written"))
+
+    def test_the_label_survives_publishing(self):
+        user = self.written()
+        c, _ = cli.share_copy(self.r, user, False, False)
+        self.assertEqual((c.provenance, c.v), ("user-written", 2))
+
+
 class TestShelf(Base):
     """One shelf per person: two machines of the same person write the same ref, and sync merges them."""
 

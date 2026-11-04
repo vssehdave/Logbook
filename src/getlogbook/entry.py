@@ -13,7 +13,7 @@ import time
 ID_RE = re.compile(r"^[0-9a-f]{11}-[0-9a-f]{8}$")
 HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")  # a commit, tree or parent id: never anything git could read as an option
 KINDS = ("change", "finding", "summary")
-PROVENANCE = ("agent-written", "user-edited", "auto-copied")  # auto-copied: built by code from git data, carries no reason
+PROVENANCE = ("agent-written", "user-written", "user-edited", "auto-copied")  # auto-copied: built by code from git data, carries no reason
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
 BODY_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale", "evidence")
 INJECTABLE = ("summary", "what", "why", "fix")  # evidence/wrong never enter agent context
@@ -36,7 +36,7 @@ class Entry:
     __slots__ = ("id", "kind", "topic", "body", "anchor", "provenance", "captured_via", "supersedes", "display", "created",
                  "redacted", "v", "level", "sources")
 
-    def __init__(self, id, kind="finding", topic="", body=None, anchor=None, provenance="agent-written", captured_via="cli",
+    def __init__(self, id, kind="finding", topic="", body=None, anchor=None, provenance="user-written", captured_via="cli",
                  supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None):
         self.id, self.kind, self.topic = id, kind, topic
         self.body = dict(body or {})
@@ -89,11 +89,12 @@ def from_dict(d):
     kind = d.get("kind") if d.get("kind") in KINDS else "finding"
     prov = d.get("provenance")
     prov = "auto-copied" if prov == "inferred" or prov not in PROVENANCE else prov  # "inferred" was the 0.0.1 spelling
+    version = d.get("v") if d.get("v") in (1, 2) else 1  # 2: the provenance says who really wrote it; 1 claimed "agent-written" for everyone
     return Entry(id=d["id"], kind=kind, topic=_s(d.get("topic"), 200),
                  body={k: _s(body.get(k), field_cap(k)) for k in BODY_FIELDS if body.get(k)},
                  anchor=anchor, provenance=prov, captured_via=_s(d.get("captured_via"), 40),
                  supersedes=[x for x in _strs(d.get("supersedes")) if ID_RE.match(x)],
-                 display=_s(d.get("display"), 60), created=_s(d.get("created"), 40), redacted=bool(d.get("redacted")),
+                 display=_s(d.get("display"), 60), created=_s(d.get("created"), 40), redacted=bool(d.get("redacted")), v=version,
                  level=d.get("level") if d.get("level") in LEVELS else "",
                  sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)])
 
