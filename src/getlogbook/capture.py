@@ -54,6 +54,9 @@ def post_commit(repo):
             e = from_json(p.read_text(encoding="utf-8"))
             e.anchor = tree.anchor_for(repo, with_base=True)  # paths come from the commit itself
             repo.add_private(e)
+            if repo.publish_mode() == "auto":  # the note is complete now: share it as auto mode promises
+                from . import cli
+                cli.auto_publish(repo, e)
             p.unlink()
             n += 1
         except (OSError, ValueError) as ex:

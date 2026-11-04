@@ -10,7 +10,7 @@ from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
 from .safety import sanitize as safety_sanitize
-from .store import Repo
+from .store import PUBLISH_MODES, Repo
 
 SHARE_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale")  # allowlist: evidence is opt-in
 
@@ -125,7 +125,26 @@ def cmd_note(a):
         sha = full.strip()
     e = capture.make_entry(r, kind, topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha, level=level, sources=sources,
                            pending=(kind == "change" and before_commit))
-    out(f"recorded {e.id} ({'pending: attaches to your next commit' if before_commit and kind == 'change' else 'private'})")
+    pending = before_commit and kind == "change"
+    shared = not pending and auto_publish(r, e)
+    out(f"recorded {e.id} ({'pending: attaches to your next commit' if pending else 'published (auto mode)' if shared else 'private'})")
+
+
+def auto_publish(r, e):
+    """Publish mode auto: share a note as soon as it is written, redacted exactly as `logbook publish` would. A note the checks refuse
+    (pasted table rows, too big, a teammate already shared the same words) stays private. Pushing is still `logbook sync`."""
+    if r.publish_mode() != "auto" or e.provenance == "auto-copied":
+        return False
+    try:
+        c, _ = share_copy(r, e, False, False)
+        if r.duplicate_of(c):
+            return False
+        r.publish([c])
+    except (SystemExit, ValueError) as ex:
+        print(f"logbook: not shared automatically ({ex}); it stays private", file=sys.stderr)
+        return False
+    r.drop_private(e.id)
+    return True
 
 
 def share_copy(r, e, include_evidence, allow_table):
@@ -153,8 +172,8 @@ def share_copy(r, e, include_evidence, allow_table):
 
 def cmd_publish(a):
     r = need_repo()
-    if not r.policy().get("publish", True):
-        raise SystemExit("logbook: this repo's policy has publishing turned off (.logbook/policy.json)")
+    if r.publish_mode() == "never":
+        raise SystemExit("logbook: publishing is off: the publish mode is never, or this repo's policy turns it off (.logbook/policy.json)")
     ready = []
     if getattr(a, "all", False):
         ids = r.unpublished()
@@ -421,7 +440,7 @@ def cmd_status(a):
     stale = [s for s in tree.summaries(vs) if not s["fresh"]]
     if stale:
         out(f"{len(stale)} summary(ies) out of date: `logbook summarize` briefs an agent to refresh them")
-    waiting = len(r.unpublished()) if r.policy().get("publish", True) else 0
+    waiting = len(r.unpublished()) if r.publish_mode() != "never" else 0
     if waiting:
         out(f"{waiting} private note(s) not shared yet: `logbook publish`")
     if getattr(a, "check", False):
@@ -549,13 +568,13 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None}
+CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None, "publish": PUBLISH_MODES}
 
 
 def cmd_queue(a):
     """Private notes that are not shared yet. Sharing stays your decision: this only lists, and `publish` previews and asks."""
     r = need_repo()
-    q = r.unpublished() if r.policy().get("publish", True) else []
+    q = r.unpublished() if r.publish_mode() != "never" else []
     if a.hook:
         said = []
         if q:
@@ -585,7 +604,7 @@ def cmd_config(a):
     if a.key not in CONFIG_KEYS:
         raise SystemExit(f"logbook: unknown setting {a.key!r}; choose from {', '.join(CONFIG_KEYS)}")
     if a.value is None:
-        out(str(c.get(a.key, "(default)")))
+        out(r.publish_mode() if a.key == "publish" else str(c.get(a.key, "(default)")))
         return 0
     allowed = CONFIG_KEYS[a.key]
     if allowed and a.value not in allowed:
@@ -774,7 +793,7 @@ def cmd_cites(a):
     vs, _ = views(r)
     recs = cites.records(r, session, vs)
     if a.json:
-        out(json.dumps({"session": session, "sources": recs}, ensure_ascii=False))
+        out(json.dumps({"session": session, "mode": r.publish_mode(), "sources": recs}, ensure_ascii=False))
         return 0
     if not recs:
         out("no notes have been numbered in this chat yet")

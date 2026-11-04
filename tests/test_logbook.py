@@ -1097,6 +1097,60 @@ class TestCitations(CliRepo):
         self.assertEqual(self.run_cli("cites", "--session", "nope")[0], 4)
 
 
+class TestPublishModes(CliRepo):
+    def write(self, summary="total() adds refunded rows"):
+        body = {"kind": "finding", "topic": "refunds", "summary": summary, "why": "no filter", "paths": ["shop/revenue.py"]}
+        return self.run_cli("note", "--json", stdin=json.dumps(body))
+
+    def mode(self, m):
+        self.assertEqual(self.run_cli("config", "publish", m)[0], 0)
+
+    def test_the_default_is_ask_and_only_the_four_modes_are_accepted(self):
+        self.assertEqual(self.run_cli("config", "publish")[1].strip(), "ask")
+        self.mode("claude")
+        self.assertEqual(self.run_cli("config", "publish")[1].strip(), "claude")
+        with self.assertRaises(SystemExit):
+            self.run_cli("config", "publish", "sometimes")
+        self.assertEqual(json.loads(self.run_cli("cites", "--json")[1])["mode"], "claude")
+
+    def test_never_refuses_to_publish_and_stops_reminding(self):
+        e = capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
+        self.mode("never")
+        with self.assertRaises(SystemExit):
+            self.run_cli("publish", e.id, "--yes")
+        self.assertNotIn("not shared yet", self.run_cli("status")[1])
+        self.assertIsNotNone(self.r.get_private(e.id))
+
+    def test_a_repo_policy_that_turns_publishing_off_wins_over_any_mode(self):
+        self.mode("auto")
+        (self.d / ".logbook").mkdir()
+        (self.d / ".logbook" / "policy.json").write_text(json.dumps({"publish": False}))
+        self.assertEqual(self.r.publish_mode(), "never")
+
+    def test_ask_and_claude_leave_a_new_note_private(self):
+        for m in ("ask", "claude"):
+            self.mode(m)
+            code, text = self.write(f"note written in {m} mode")
+            self.assertIn("(private)", text)
+        self.assertEqual(self.r.load_shared()[0], [])
+
+    def test_auto_shares_a_note_as_it_is_written_redacted_and_moves_it(self):
+        self.mode("auto")
+        code, text = self.write("mail me at someone@example.com about refunds")
+        self.assertIn("published (auto mode)", text)
+        shared, _ = self.r.load_shared()
+        self.assertEqual(len(shared), 1)
+        self.assertNotIn("someone@example.com", shared[0].entry.body["summary"])
+        self.assertEqual(self.r.load_private(), [], "the private copy was moved")
+
+    def test_auto_keeps_a_note_private_when_the_checks_refuse_it(self):
+        self.mode("auto")
+        code, text = self.write("a|1|x\nb|2|y\nc|3|z")  # looks like pasted table rows
+        self.assertIn("(private)", text)
+        self.assertEqual(self.r.load_shared()[0], [])
+        self.assertEqual(len(self.r.load_private()), 1)
+
+
 class TestShelf(Base):
     """One shelf per person: two machines of the same person write the same ref, and sync merges them."""
 
