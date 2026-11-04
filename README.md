@@ -35,6 +35,16 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
 `.github/copilot-instructions.md`, `GEMINI.md` and `.cursor`. `logbook status --check` shows what is installed.
 
+## The Sources band (Claude Code only, optional)
+
+    /plugin install logbook --marketplace vssehdave/Logbook
+
+A row above the prompt lists the numbered notes the latest answer cited, one line of headers, with **Copy** and **[+]**. Expanded, a note a
+teammate shared also shows its commit or pull request link, who wrote it and when ("Note added by <name> on <date>" when it has no commit).
+Your own and private notes stay one line. It counts the sources cited in this chat and starts again at one after `/clear`. Other agents get
+the same numbers in the answer and `logbook cites` for the list. The band needs the `logbook` command on your PATH. Checked with
+`claude plugin validate` and `claude plugin test`; not yet watched in a long real session.
+
 ## What the agent does
 
 - **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook ask`. Hooks also put

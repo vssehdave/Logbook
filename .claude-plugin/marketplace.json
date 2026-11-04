@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "logbook",
+  "description": "Shared memory for AI-assisted git repos.",
+  "owner": {
+    "name": "Veertej Sehdave",
+    "url": "https://github.com/vssehdave"
+  },
+  "plugins": [
+    {
+      "name": "logbook",
+      "description": "A Sources band above the prompt: the numbered notes behind an answer, with commit or pull request links for notes a teammate shared.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}
