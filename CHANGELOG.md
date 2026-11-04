@@ -3,6 +3,10 @@
 ## Unreleased
 
 - Removed the browser viewer (`logbook serve`, `demo --serve`). It lives on the `viewer` branch.
+- One shared shelf per person instead of one per clone. Two machines of the same person merge on `sync`. Old per-device refs are still read and are folded into the shelf on the next publish or sync (the old names are deleted on the remote after the push).
+- `logbook publish` moves the note: the private copy is removed once the shared copy exists (`--keep` leaves it). It skips a note that is already shared, and one whose text a teammate already shared (`--force` overrides). With no ids it lists your unshared notes and asks which.
+- The pre-push hook now pushes your published notes with the push (it never blocks, times out after 20 s, and only sends what you published). `logbook install` also adds the fetch setting so a plain `git pull` brings teammates' notes.
+- Names are shown by default (`attribution: named`). A person can set `pseudonym`, and a repo's `.logbook/policy.json` can cap it.
 
 ## 0.0.2
 

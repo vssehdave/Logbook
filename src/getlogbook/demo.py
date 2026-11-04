@@ -135,7 +135,7 @@ def run(dir=None):
     check(g.is_shallow(bob), "Bob's clone is shallow (depth 1)")
     check(not g.try_run(["for-each-ref", "refs/logbook-remote"], bob)[1].strip(), "a plain clone has no logbook refs (this is why `join` exists)")
     r = sync.sync(rb, fetch_only=True, depth=1)
-    check(r["entries"] >= 2, f"after join/sync Bob sees {r['entries']} entries from {r['writers']} writer device(s) even on a depth-1 clone")
+    check(r["entries"] >= 2, f"after join/sync Bob sees {r['entries']} entries from {r['writers']} writer(s) even on a depth-1 clone")
     vs, _ = views(rb)
     for v in recall.rank(rb, query="revenue refunds", views=vs)[:3]:
         say(line(v[1]))
