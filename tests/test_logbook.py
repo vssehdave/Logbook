@@ -973,6 +973,81 @@ class TestSquashWithoutCommit(Base):
         self.assertIn("squash", v["rung"])
 
 
+class TestCitations(CliRepo):
+    TEAMMATE = "b" * 10
+
+    def teammate_notes(self, *specs):
+        """Shared notes from a teammate: (topic, sha) pairs. Trusted, so they are injected."""
+        files = {}
+        ids = []
+        for topic, sha in specs:
+            e = Entry(id=new_id(), kind="finding", topic=topic, body={"summary": "s", "why": "w " + topic}, display="Priya N.",
+                      created="2026-10-28T09:00:00", anchor={"sha": sha, "subject": "base", "paths": ["shop/revenue.py"], "names": ["revenue"]})
+            files[f"entries/{e.id}.json"] = e.to_json().encode()
+            ids.append(e.id)
+        self.r._write_ref(f"refs/logbook/log/{self.TEAMMATE}/000000", files, "x", None)
+        c = self.r.cfg()
+        c["trusted"] = [self.TEAMMATE]
+        self.r.save_cfg(c)
+        return ids
+
+    def test_numbers_are_kept_per_chat_and_peeking_does_not_use_one(self):
+        from getlogbook import cites
+        self.assertEqual(cites.peek(self.r, "s1", "a"), 1)
+        self.assertEqual(cites.peek(self.r, "s1", "a"), 1)
+        self.assertEqual([cites.number(self.r, "s1", x) for x in ("a", "b", "a")], [1, 2, 1])
+        self.assertEqual(cites.number(self.r, "s2", "b"), 1, "another chat starts again at one")
+        self.assertEqual(cites.sup(12), "¹²")
+
+    def test_links_for_github_and_gitlab_and_the_pull_request_when_the_subject_has_one(self):
+        from getlogbook import cites
+        sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
+        self.assertEqual(cites.web_url(self.r, "commit", "abc"), "https://github.com/acme/shop/commit/abc")
+        self.assertEqual(cites.web_url(self.r, "pr", "7"), "https://github.com/acme/shop/pull/7")
+        sh("git", "remote", "set-url", "origin", "https://gitlab.com/acme/shop.git", cwd=self.d)
+        self.assertEqual(cites.web_url(self.r, "pr", "7"), "https://gitlab.com/acme/shop/-/merge_requests/7")
+        sh("git", "remote", "set-url", "origin", "file:///tmp/x.git", cwd=self.d)
+        self.assertEqual(cites.web_url(self.r, "commit", "abc"), "", "an unknown host gets no link rather than a wrong one")
+
+    def test_a_teammates_shared_note_gets_link_name_and_date_but_yours_and_private_ones_do_not(self):
+        from getlogbook import cites
+        sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
+        head = sh("git", "rev-parse", "HEAD", cwd=self.d)
+        with_commit, without = self.teammate_notes(("refund rounding", head), ("pricing idea", ""))
+        mine = capture.make_entry(self.r, "finding", "my private note", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"])
+        for e in (with_commit, without, mine.id):
+            cites.number(self.r, "s1", e)
+        vs, _ = tree.all_views(self.r)
+        recs = {r["id"]: r for r in cites.records(self.r, "s1", vs)}
+        a = recs[with_commit]
+        self.assertTrue(a["expandable"])
+        self.assertIn(f"https://github.com/acme/shop/commit/{head}", a["detail"])
+        self.assertIn("Priya N.", a["detail"])
+        self.assertIn("2026-10-28", a["detail"])
+        self.assertEqual(recs[without]["detail"], "Note added by Priya N. on 2026-10-28")
+        self.assertFalse(recs[mine.id]["expandable"])
+        self.assertEqual(recs[mine.id]["detail"], "")
+        text = cites.text(list(recs.values()))
+        self.assertIn("¹", text)
+        self.assertNotIn("my private note  by", text)
+
+    def test_injected_notes_carry_a_number_that_stays_and_a_source_line(self):
+        sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
+        head = sh("git", "rev-parse", "HEAD", cwd=self.d)
+        first, second = self.teammate_notes(("refund rounding", head), ("revenue export", ""))
+        from getlogbook import recall
+        text = recall.digest(self.r, "UserPromptSubmit", "why is revenue wrong?", session="chat1")
+        self.assertIn("[1]", text)
+        self.assertIn("source:", text)
+        self.assertIn("superscript", text)
+        code, listing = self.run_cli("cites", "--session", "chat1")
+        self.assertEqual(code, 0, listing)
+        self.assertIn("¹", listing)
+        data = json.loads(self.run_cli("cites", "--session", "chat1", "--json")[1])
+        self.assertEqual({s["id"] for s in data["sources"]}, {first, second})
+        self.assertEqual(self.run_cli("cites", "--session", "nope")[0], 4)
+
+
 class TestShelf(Base):
     """One shelf per person: two machines of the same person write the same ref, and sync merges them."""
 

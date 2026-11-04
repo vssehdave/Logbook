@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Citations. Notes put in front of an agent are numbered for the whole chat, and the agent cites them as superscripts (¹ ² ³). `logbook cites` maps a number back to the note, a link to the commit or pull request (GitHub, GitLab, Bitbucket, or a `commit_url` template in the config), the author and the date. Links and names are given only for notes a teammate shared; your own and private notes get none. A shared note with no commit reads "Note added by <name> on <date>".
 - The repo is a tree you can walk: `repo` > `branch:<name>` > `commit:<sha>` > `note:<id>`. `logbook ask <address>` opens a node with its path from the root, its summary and what is below it; injected notes name their node. See `docs/SUMMARY-TREE.md`.
 - A note written before its branch had a commit now follows a squash merge once the branch is gone (same files, first PR-numbered commit after the branch point); the rung says so.
 - `wip`, `fixup!`, `squash!` and `amend!` commits are folded out of `logbook log` like chores.
