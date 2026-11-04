@@ -1289,19 +1289,21 @@ class TestGrounding(CliRepo):
         with self.assertRaises(SystemExit):
             self.run_cli("note", "the cache is slow too")
 
-    def test_install_lets_claude_run_the_safe_commands_without_asking_and_nothing_else(self):
+    def test_install_writes_a_permission_hook_and_no_allow_rules_and_clears_the_old_ones(self):
         path, cur = capture.install_claude(self.r, write=True)
-        allow = cur["permissions"]["allow"]
-        self.assertIn("Bash(logbook note:*)", allow)
-        for asks in ("publish", "sync", "purge", "gc", "trust", "config"):
-            self.assertFalse(any(asks in a for a in allow), asks + " must still ask")
-        capture.install_claude(self.r, write=True)
-        self.assertEqual(json.loads(path.read_text())["permissions"]["allow"], allow, "installing twice adds nothing")
-        mine = json.loads(path.read_text())
-        mine["permissions"]["allow"].append("Bash(git status:*)")  # the person's own rule
-        path.write_text(json.dumps(mine))
-        _, after = capture.install_claude(self.r, write=True, remove=True)
-        self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "uninstall removes ours and keeps theirs")
+        self.assertNotIn("permissions", cur, "permissions come from the hook, not from rules in settings")
+        bash = [e for e in cur["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]
+        self.assertEqual(len(bash), 1)
+        self.assertIn("--event Permission", json.dumps(bash))
+        old = json.loads(path.read_text())
+        old["permissions"] = {"allow": list(capture.OLD_ALLOW) + ["Bash(git status:*)"]}  # what 0.0.4 left behind, and the person's own rule
+        path.write_text(json.dumps(old))
+        _, after = capture.install_claude(self.r, write=True)
+        self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "the old rules go, the person's stay")
+        self.assertEqual(len([e for e in after["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]), 1, "installing twice adds nothing")
+        _, gone = capture.install_claude(self.r, write=True, remove=True)
+        self.assertNotIn("PreToolUse", gone.get("hooks", {}))
+
 
     def note(self, *flags, **body):
         obj = {"kind": "finding", "topic": "refund sum", "summary": "x", "why": "y", "evidence": "ran the totals, 4% high", **body}
@@ -1411,6 +1413,54 @@ class TestGrounding(CliRepo):
         self.assertEqual(e.checks["paths"], [1000, 0])
         self.assertEqual(e.checks["names"], [0, 0])
         self.assertEqual((len(e.checks["missing"]), len(e.checks["missing"][0]), len(e.checks["files"]), e.checks["at"]), (8, 80, 20, ""))
+
+
+
+class TestPermissions(CliRepo):
+    """Which logbook commands run without a prompt, from the publish mode and the subcommand."""
+
+    def decide(self, command, mode="ask"):
+        from getlogbook import permissions
+        d = permissions.decide(command, mode)
+        return d[0] if d else None
+
+    def test_the_table(self):
+        for sub in ("note", "ask", "context", "cites", "log", "status", "summarize", "backfill"):
+            for mode in ("never", "ask", "claude", "auto"):
+                self.assertEqual(self.decide(f"logbook {sub} x", mode), "allow", sub)
+        self.assertEqual([self.decide("logbook publish abc", m) for m in ("never", "ask", "claude", "auto")], ["deny", "ask", "allow", "allow"])
+        self.assertEqual([self.decide("logbook sync", m) for m in ("never", "ask", "claude", "auto")], ["ask", "ask", "ask", "allow"])
+        for sub in ("purge", "gc", "trust", "config", "setup", "uninstall"):
+            self.assertEqual(self.decide(f"logbook {sub}", "auto"), "ask", sub)
+        self.assertIsNone(self.decide("logbook someday-command"), "a subcommand not in the table: no opinion")
+        self.assertIsNone(self.decide("git status"), "not logbook: no opinion")
+
+    def test_a_note_with_a_heredoc_is_one_command_and_nothing_else_rides_along(self):
+        note = "logbook note --fields <<'EOF'\nkind: finding\nsummary: a; b | c `d` $(e)\nEOF"
+        self.assertEqual(self.decide(note), "allow", "the body of a quoted heredoc is data")
+        self.assertEqual(self.decide("getlogbook note --fields --check <<'EOF'\nsummary: s\nEOF"), "allow")
+        for sneaky in ("logbook note x && rm -rf ~", "logbook note x; rm y", "logbook note x | sh", "logbook note $(rm y)", "logbook note `rm y`",
+                       "logbook note x > ~/.bashrc", "logbook note x\nrm y",
+                       "logbook note --fields <<'EOF'\nsummary: s\nEOF\nrm y",  # a command after the heredoc
+                       "logbook note --fields <<'EOF'\nsummary: s\nEOF\nrm y\nEOF",  # the heredoc closes early, the rest runs
+                       "logbook note --fields <<EOF\nsummary: $(rm y)\nEOF",  # an unquoted heredoc expands its body
+                       "logbook note --fields <<'EOF'\nsummary: s"):  # never closed
+            self.assertIsNone(self.decide(sneaky), sneaky)
+
+    def test_the_hook_answers_in_claude_codes_shape_and_follows_the_repo_mode(self):
+        self.cd(self.d)
+        payload = lambda c: json.dumps({"cwd": str(self.d), "tool_input": {"command": c}})
+        out = json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook note x")))["hookSpecificOutput"]
+        self.assertEqual((out["hookEventName"], out["permissionDecision"]), ("PreToolUse", "allow"))
+        self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "ask")
+        self.run_cli("config", "publish", "never")
+        self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertEqual(capture.handle_hook("Permission", "claude-code", payload("ls -la")), "", "no opinion on other commands")
+
+    def test_the_readme_table_is_the_code_table(self):
+        from getlogbook import permissions
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn(permissions.readme_table(), readme.replace("\r\n", "\n"))
 
 
 class TestWhoWroteIt(CliRepo):

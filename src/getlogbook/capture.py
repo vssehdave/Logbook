@@ -138,6 +138,10 @@ def handle_hook(event, agent, raw):
         if not cfg.get("user"):
             return ""
         out = ""
+        if event == "Permission":  # PreToolUse on Bash: allow, ask or deny a logbook command from the publish mode; no opinion on anything else
+            from . import permissions
+            ti = payload.get("tool_input")
+            return permissions.hook_output(str(ti.get("command", "")) if isinstance(ti, dict) else "", repo.publish_mode())
         if event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
             from . import recall  # only the prompt-time hooks need retrieval; Stop/SessionEnd stay lean
             files = []
@@ -402,14 +406,15 @@ def claude_snippet(repo, pretool=False):
     py = _py(repo)
     mk = lambda ev: [{"hooks": [{"type": "command", "command": f'"{py}" -m getlogbook capture --event {ev} --agent claude-code'}]}]
     hooks = {ev: mk(ev) for ev in CLAUDE_EVENTS}
+    hooks["PreToolUse"] = [{"matcher": "Bash", **mk("Permission")[0]}]
     if pretool:
-        hooks["PreToolUse"] = [{"matcher": "Read|Edit|Write|MultiEdit", **mk("PreToolUse")[0]}]
+        hooks["PreToolUse"].append({"matcher": "Read|Edit|Write|MultiEdit", **mk("PreToolUse")[0]})
     return {"hooks": hooks}
 
 
-# Commands Claude may run without asking: they only read, or write to your own private notes. Anything that shares, removes or changes
-# settings (publish, sync, purge, gc, trust, config, tidy --apply) is left out, so it still asks.
-ALLOW = ("Bash(logbook note:*)", "Bash(logbook ask:*)", "Bash(logbook context:*)", "Bash(logbook cites:*)", "Bash(logbook log:*)",
+# 0.0.4 wrote these allow rules into settings.local.json. Permissions now come from the PreToolUse hook (permissions.py), so install removes
+# them again: a leftover rule would let a command through without the hook's say.
+OLD_ALLOW = ("Bash(logbook note:*)", "Bash(logbook ask:*)", "Bash(logbook context:*)", "Bash(logbook cites:*)", "Bash(logbook log:*)",
          "Bash(logbook status:*)", "Bash(logbook summarize:*)", "Bash(logbook backfill:*)")
 
 
@@ -434,8 +439,8 @@ def install_claude(repo, path=None, pretool=False, write=False, remove=False):
         cur.pop("hooks")
     perms = cur.setdefault("permissions", {})
     allow = perms.get("allow", [])
-    if isinstance(allow, list):  # the allow list is the person's own: only our exact entries are touched
-        allow = [x for x in allow if x not in ALLOW] + ([] if remove else list(ALLOW))
+    if isinstance(allow, list):  # the allow list is the person's own: only our old exact entries are touched
+        allow = [x for x in allow if x not in OLD_ALLOW]
         if allow:
             perms["allow"] = allow
         else:

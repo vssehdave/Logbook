@@ -66,10 +66,39 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
 - **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook ask`. Hooks also put
   the matching notes in front of it (see below).
 - **While working** it records what it learns, even with no commit: `logbook note --fields <<'EOF' ... EOF` (summary, context, why,
-  wrong, fix, decided, open, scale, paths). The skill shows the shape and a good example.
+  wrong, fix, decided, open, scale, paths). A note an agent writes is 3 to 9 lines and has an `evidence:` line (what it ran or read;
+  naming a file is not enough); a one-line note is refused. The skill shows the shape and a good example.
 - **Before it finishes** a turn that read or searched three or more times and wrote no note, Claude Code is asked once to record
   one. `logbook config nudge context` makes that a reminder on the next prompt instead, `logbook config nudge off` turns it off.
-  In a small test task this took unprompted note-writing from 1 of 4 runs (reminder only) to 4 of 4 (see `docs/DESIGN.md`).
+  How often this works in real sessions is still being measured (`bench/real_session.py`); the earlier 4 of 4 came from a synthetic test.
+
+## What Claude may run without asking (Claude Code)
+
+`logbook setup` adds one `PreToolUse` hook on Bash; it writes no allow rules. The hook answers for a command that is exactly one `logbook` command
+line (plus a quoted heredoc for a note). A command with a second command, a pipe, a substitution or a redirect gets no answer from it, and Claude Code's
+own prompt runs. `ask` lets that normal prompt run. The publish mode is the one in `logbook config publish`.
+
+| command | decision |
+|---|---|
+| `note` | allow |
+| `ask` | allow |
+| `context` | allow |
+| `cites` | allow |
+| `log` | allow |
+| `status` | allow |
+| `summarize` | allow |
+| `backfill` | allow |
+| `publish` | never: deny, ask: ask, claude: allow, auto: allow |
+| `sync` | never: ask, ask: ask, claude: ask, auto: allow |
+| `purge` | ask |
+| `gc` | ask |
+| `trust` | ask |
+| `config` | ask |
+| `setup` | ask |
+| `uninstall` | ask |
+
+Checked in a real `claude -p` session: a hook's `allow` runs a command that would otherwise be refused, `ask` and `deny` do not run it. Not checked: that
+an interactive session skips the prompt on `allow`, and how a hook `allow` interacts with a `deny` rule of your own.
 
 ## Daily use
 
