@@ -504,6 +504,22 @@ class TestNudge(Base):
         self.assertIn("recorded no note", json.loads(first)["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(self.hook("UserPromptSubmit", prompt="and then?"), "", "said once per turn")
 
+    def test_only_the_note_subcommand_counts_as_writing_a_note(self):
+        """A real session found this: `logbook ask "... same note id"` was counted as a note, so no reminder ever came."""
+        from getlogbook import nudge
+        looked = [("Read", {"file_path": f"f{i}.py"}) for i in range(4)]
+
+        def stats(command):
+            self.tpath.write_text("")
+            self.turn(*looked, ("Bash", {"command": command}))
+            return nudge.turn_stats(self.tpath.read_bytes())
+
+        self.assertFalse(stats('logbook ask "publish twice same note id"')["noted"], "a query that says note is not a note")
+        self.assertFalse(stats("logbook context ; logbook cites --note")["noted"])
+        for real in ("logbook note --json <<'EOF'\n{}\nEOF", "echo '{}' | logbook note --json", "python -m getlogbook note \"x\" a.py", "logbook note --check"):
+            self.assertTrue(stats(real)["noted"], real)
+        self.assertEqual(stats('logbook ask "same note id"')["reads"], 4)
+
     def test_no_nudge_when_a_note_was_written_or_the_turn_was_short(self):
         self.turn(*[("Grep", {"pattern": "x"}) for _ in range(7)], ("Bash", {"command": "echo '{}' | logbook note --json"}))
         self.hook("Stop")

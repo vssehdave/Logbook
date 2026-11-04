@@ -16,7 +16,7 @@ from .store import atomic_write
 INVESTIGATE = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
 EDITS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _SEARCHY = re.compile(r"\b(grep|rg|find|cat|ls|git\s+(log|show|diff|blame|grep))\b")
-_NOTING = re.compile(r"\blogbook\b[^|;&\n]*\bnote\b")
+_NOTING = re.compile(r"\b(?:get)?logbook\s+note\b")  # the note subcommand itself: a query that merely says "note" does not count
 NUDGE_AFTER, NUDGE_MAX, BLOCK_AFTER = 6, 3, 3
 BLOCK_TEXT = ("Before you finish: this turn read or searched {n} times and no logbook note was recorded. If you found a cause, ruled "
               "something out, or a decision was made, record it now with `logbook note --json` (see the logbook skill), then give "
