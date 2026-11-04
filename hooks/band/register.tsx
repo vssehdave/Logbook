@@ -241,8 +241,8 @@ export const register: Register = on => {
       if (await setMode($, picked)) await update($, mode, () => picked)
       else $.ui.toast('Could not change the publish mode')
     }
-    // With details on, the mode selector takes the place of the "bibliography" text: every mode is a button, the chosen one is light
-    // yellow in brackets and the rest are grey.
+    // With details on, the mode selector comes after the "bibliography" text and the dot is gone: every mode is a button, the chosen one
+    // is light yellow in brackets and the rest are grey.
     const selector = (
       <Box flexDirection="row" alignItems="center" gap={2}>
         {MODES.map(m => (
@@ -254,18 +254,16 @@ export const register: Register = on => {
     )
     const head = (
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
-        {/* The dot, shaded by mode, and the mode's name: a button that does what "details" does. */}
-        <Button key="dot" plain onPress={toggle}>
-          <Text color={modeColor(current)}>●</Text> <Text>{current}</Text>
-        </Button>
-        {isOpen ? (
-          selector
-        ) : (
-          <Box flexDirection="row" gap={2}>
-            <Text>bibliography</Text>
-            <Text dimColor>{sources.length} cited in this chat</Text>
-          </Box>
+        {/* Compact: the dot, shaded by mode, and the mode's name: a button that does what "details" does. With details on the selector
+            below replaces it, after the bibliography text. */}
+        {isOpen ? null : (
+          <Button key="dot" plain onPress={toggle}>
+            <Text color={modeColor(current)}>●</Text> <Text>{current}</Text>
+          </Button>
         )}
+        <Text underline>bibliography</Text>
+        <Text dimColor>{sources.length} cited in this chat</Text>
+        {isOpen ? selector : null}
         <Box flexGrow={1} />
         {/* The finder: arrows, the number of the citation clicked in the list (dim "n" until one is), and x/y. Nothing can be typed:
             a text field makes the engine draw an enter hint and its width cannot be controlled. The number is the one the list set. */}
