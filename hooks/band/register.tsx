@@ -3,10 +3,13 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Source } from './types'
 
-// The Sources band: above the prompt, every numbered note cited so far in this chat (it stays until /clear, and grows as answers cite
-// more). Compact it is one line of titles; expanded it adds, for a note a teammate shared, the commit or pull request header and link,
-// who wrote it and when. Your own and private notes stay one line.
+// The Bibliography band, above the prompt. It is always there: a title, how many sources this chat has cited, and a finder that jumps
+// through the chat to the answers that cite a given number. Under it, the sources cited so far, kept until /clear. Compact they are
+// `[n] title` buttons that fit the width; expanded each teammate-shared note also shows its commit or pull request header as a link,
+// who wrote it and when. Clicking `[n]` scrolls the chat to the first answer that cites it.
 const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
+const where = atom({ plugin: 'logbook', key: 'where' } as const, {} as Record<string, string[]>)
+const find = atom({ plugin: 'logbook', key: 'find' } as const, { text: '', at: 0 })
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
 
 const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹'
@@ -28,11 +31,40 @@ export const mergeSources = (was: readonly Source[], fresh: readonly Source[]): 
   return [...byId.values()].sort((a, b) => a.n - b.n)
 }
 
-// What Copy puts on the clipboard: the full bibliography, whichever view is open.
-export const bibliography = (sources: readonly Source[]): string =>
-  sources.map(s => `${s.mark} ${s.expandable ? s.detail : s.header}`).join('\n')
+// Which chat messages cite which number, in the order they were first drawn. One message counts once however often it cites.
+export const addInstances = (was: Record<string, string[]>, marks: readonly number[], requestId: string): Record<string, string[]> => {
+  let next = was
+  for (const n of marks) {
+    const ids = was[String(n)] ?? []
+    if (!ids.includes(requestId)) next = { ...next, [String(n)]: [...ids, requestId] }
+  }
+  return next
+}
 
-const short = (text: string, max = 48): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+// "2", "[2]" and "²" all mean citation 2; anything without a digit means none.
+export const queryNumber = (text: string): number | undefined => {
+  const digits = [...text].map(ch => (SUPERSCRIPT.includes(ch) ? String(SUPERSCRIPT.indexOf(ch)) : /[0-9]/.test(ch) ? ch : '')).join('')
+  return digits === '' ? undefined : Number(digits)
+}
+
+// The next or previous instance, going round at the ends.
+export const stepInstance = (at: number, total: number, by: 1 | -1): number => (total === 0 ? 0 : (at + by + total) % total)
+
+const short = (text: string, max = 28): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
+
+// How many `[n] title` items fit one row of `columns` cells (each takes its title, the number, a gap), and how many are left over.
+export const fitCompact = (sources: readonly Source[], columns: number): { fits: Source[]; more: number } => {
+  const room = Math.max(10, columns - 34) // the finder and the toggle live in the row above
+  let used = 0
+  const fits: Source[] = []
+  for (const s of sources) {
+    const cost = short(s.header).length + String(s.n).length + 5
+    if (used + cost > room && fits.length > 0) break
+    used += cost
+    fits.push(s)
+  }
+  return { fits, more: sources.length - fits.length }
+}
 
 let runner: readonly string[] | undefined
 
@@ -52,6 +84,12 @@ async function sourcesOf($: EngineInterface, session: string): Promise<Source[]>
   return []
 }
 
+// Scrolls the chat to one answer. The engine allows it only while answering the person's own click or typing, which is when this runs.
+async function goTo($: EngineInterface, requestId: string): Promise<void> {
+  const done = await $.ui.scroll({ to: { requestId }, block: 'center' })
+  if (done.deny) $.ui.toast(`Could not scroll there: ${done.deny}`)
+}
+
 export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId && e.reason === 'answer') {
@@ -65,62 +103,115 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Note which messages cite which number, as they are drawn, so the finder can walk them.
+  on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    const marks = citedNumbers(e.props.text)
+    if (marks.length) await update($, where, was => addInstances(was, marks, e.requestId))
+    return next(e)
+  })
+
   // /clear starts a new chat, and numbering starts again at one with it.
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await update($, shown, () => [])
+      await update($, where, () => ({}))
+      await update($, find, () => ({ text: '', at: 0 }))
     }
     return next(e)
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const sources = await read($, shown)
-    if (e.props.hasSurvey || sources.length === 0) return next(e)
+    if (e.props.hasSurvey) return next(e)
     // Other mods share this slot: draw theirs below ours instead of replacing it.
     const below = await next(e).catch(() => undefined)
+    const sources = await read($, shown)
     const isOpen = await read($, open)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const seen = await read($, where)
+    const query = await read($, find)
+    const wanted = queryNumber(query.text)
+    const ids = wanted === undefined ? [] : (seen[String(wanted)] ?? [])
+    const at = ids.length ? Math.min(query.at, ids.length - 1) : 0
+    const { Box, Button, Input, Link, Text } = $.ui.resolve(e)
     const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
 
     const toggle = () => update($, open, was => !was)
-    const copy = async () => {
-      const done = await $.ui.copy({ text: bibliography(sources), surface: e.surface })
-      $.ui.toast(done.isCopied ? 'Sources copied' : `Copy failed: ${done.reason}`)
+    const move = async (by: 1 | -1) => {
+      if (ids.length === 0) return
+      const to = stepInstance(at, ids.length, by)
+      await update($, find, was => ({ ...was, at: to }))
+      await goTo($, ids[to] as string)
+    }
+    // A click on [n]: make it the finder's number and go to the first answer that cites it.
+    const pick = async (n: number) => {
+      const found = seen[String(n)] ?? []
+      await update($, find, () => ({ text: String(n), at: 0 }))
+      if (found.length) await goTo($, found[0] as string)
+      else $.ui.toast(`[${n}] has no answer in this chat yet`)
+    }
+    const typed = async (text: string) => {
+      await update($, find, () => ({ text, at: 0 }))
+      const n = queryNumber(text)
+      const found = n === undefined ? [] : (seen[String(n)] ?? [])
+      if (found.length) await goTo($, found[0] as string)
     }
 
     const head = (
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
-        <Text dimColor>Sources</Text>
-        {isOpen ? (
-          <Text dimColor>{sources.length} cited in this chat</Text>
-        ) : (
-          <Text wrap="truncate-end">{sources.map(s => `${s.mark} ${short(s.header)}`).join(' · ')}</Text>
-        )}
+        <Text>Bibliography</Text>
+        <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
-        <Button key="copy" plain label="Copy" onPress={copy} />
+        <Button key="prev" plain label="↑" onPress={() => move(-1)} />
+        <Button key="next" plain label="↓" onPress={() => move(1)} />
+        <Box width={9}>
+          <Input key="find" placeholder="[n]" value={query.text} onInput={typed} onSubmit={typed} />
+        </Box>
+        <Text dimColor>
+          {ids.length ? at + 1 : 0}/{ids.length}
+        </Text>
         <Button key="toggle" plain label={isOpen ? 'collapse [-]' : 'expand [+]'} onPress={toggle} />
       </Box>
     )
 
-    const body = isOpen ? (
+    const fit = fitCompact(sources, width ?? 80)
+    const compact =
+      sources.length === 0 ? null : (
+        <Box flexDirection="row" gap={2} width={width}>
+          {fit.fits.map(s => (
+            <Box key={s.id} flexDirection="row" gap={1}>
+              <Button key={`src:${s.n}`} plain label={`[${s.n}]`} onPress={() => pick(s.n)} />
+              <Text>{short(s.header)}</Text>
+            </Box>
+          ))}
+          {fit.more > 0 ? <Text dimColor>+{fit.more} more</Text> : null}
+        </Box>
+      )
+
+    // Taller than the band may be, the engine scrolls it (the wheel, or the keys while the band is focused) and says how many rows are hidden.
+    const list = (
       <Box flexDirection="column" width={width}>
         {sources.map(s => (
           <Box key={s.id} flexDirection="column">
-            <Text>
-              {s.mark} {s.header}
-              {s.expandable && s.has_commit ? <Text dimColor>{`  ${s.commit_header}  ·  ${s.author}, ${s.date}`}</Text> : null}
-            </Text>
-            {s.expandable && s.has_commit && s.url !== '' ? <Text dimColor>{`  ${s.url}`}</Text> : null}
-            {s.expandable && !s.has_commit ? <Text dimColor>{`  Note added by ${s.author} on ${s.date}`}</Text> : null}
+            <Box flexDirection="row" gap={1}>
+              <Button key={`src:${s.n}`} plain label={`[${s.n}]`} onPress={() => pick(s.n)} />
+              <Text>{s.header}</Text>
+            </Box>
+            {s.expandable && s.has_commit ? (
+              <Box flexDirection="row" gap={1}>
+                <Text>{'    '}</Text>
+                {s.url !== '' ? <Link href={s.url} label={s.commit_header} /> : <Text dimColor>{s.commit_header}</Text>}
+                <Text dimColor>{`· ${s.author}, ${s.date}`}</Text>
+              </Box>
+            ) : null}
+            {s.expandable && !s.has_commit ? <Text dimColor>{`    Note added by ${s.author} on ${s.date}`}</Text> : null}
           </Box>
         ))}
       </Box>
-    ) : null
+    )
 
     const mine = (
       <Box flexDirection="column">
         {head}
-        {body}
+        {isOpen ? list : compact}
       </Box>
     )
     return below ? (

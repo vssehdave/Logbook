@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { bibliography, citedNumbers, mergeSources } from '../hooks/band/register'
+import { addInstances, citedNumbers, fitCompact, mergeSources, queryNumber, stepInstance } from '../hooks/band/register'
 import type { Source } from '../hooks/band/types'
 
 const source = (over: Partial<Source>): Source => ({
@@ -43,12 +43,44 @@ describe('the chat bibliography', () => {
   })
 })
 
-describe('the bibliography Copy puts on the clipboard', () => {
-  test('a teammate note carries its detail; your own and private notes stay one line', () => {
-    const text = bibliography([
-      source({ n: 1, mark: '¹', header: 'fix refund rounding', expandable: true, scope: 'shared', mine: false, detail: 'fix refund rounding  by Priya N., 2026-10-28  https://github.com/acme/shop/pull/14' }),
-      source({ n: 2, mark: '²', id: 'b', header: 'my private note' }),
-    ])
-    expect(text).toBe('¹ fix refund rounding  by Priya N., 2026-10-28  https://github.com/acme/shop/pull/14\n² my private note')
+describe('the finder', () => {
+  test('remembers which messages cite which number, once each, in the order drawn', () => {
+    let seen = addInstances({}, [1, 2], 'm1')
+    seen = addInstances(seen, [2], 'm2')
+    seen = addInstances(seen, [2], 'm2')
+    expect(seen).toEqual({ '1': ['m1'], '2': ['m1', 'm2'] })
+  })
+
+  test('hands back the same object when nothing is new, so drawing a message again does not redraw the band', () => {
+    const seen = addInstances({}, [1], 'm1')
+    expect(addInstances(seen, [1], 'm1')).toBe(seen)
+  })
+
+  test('takes 2, [2] and the superscript as the same number, and nothing else as none', () => {
+    expect(queryNumber('2')).toBe(2)
+    expect(queryNumber('[2]')).toBe(2)
+    expect(queryNumber('²')).toBe(2)
+    expect(queryNumber('[12]')).toBe(12)
+    expect(queryNumber('')).toBeUndefined()
+    expect(queryNumber('abc')).toBeUndefined()
+  })
+
+  test('steps through instances and goes round at both ends', () => {
+    expect(stepInstance(0, 3, 1)).toBe(1)
+    expect(stepInstance(2, 3, 1)).toBe(0)
+    expect(stepInstance(0, 3, -1)).toBe(2)
+    expect(stepInstance(0, 0, 1)).toBe(0)
+  })
+})
+
+describe('many citations', () => {
+  test('the compact row shows what fits the width and counts the rest', () => {
+    const many = Array.from({ length: 12 }, (_, i) => source({ n: i + 1, id: `s${i}`, header: 'a fairly long note title here' }))
+    const narrow = fitCompact(many, 80)
+    expect(narrow.fits.length).toBeGreaterThan(0)
+    expect(narrow.fits.length + narrow.more).toBe(12)
+    expect(narrow.more).toBeGreaterThan(0)
+    expect(fitCompact(many, 600).more).toBe(0)
+    expect(fitCompact(many, 10).fits.length).toBe(1) // never an empty row when there are sources
   })
 })
