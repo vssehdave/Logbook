@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from . import git as g
-from .store import BRANCH_PREFIX, PREFIX, REMOTE_NS, Repo
+from .store import BRANCH_PREFIX, PREFIX, REMOTE_NS, SHELF, Repo, _apply_tombstones
 
 
 _REFUSED = re.compile(r"denied|declined|refusing|not permitted|protected|forbidden|403|pre-receive|hook|unable to create", re.I)
@@ -37,25 +37,82 @@ def fetch(repo, remote="origin", depth=None):
     return {"ok": rc == 0, "error": err.strip() if rc else ""}
 
 
-def push(repo, remote="origin", force=False):
+def _remote_ref(repo, remote):
+    kind = "branchlog" if repo.cfg().get("transport") == "branches" else "log"
+    return f"{REMOTE_NS}/{remote}/{kind}/{repo.user}/{SHELF}"
+
+
+def _sha(repo, ref):
+    return g.try_run(["rev-parse", "--verify", "-q", ref], repo.root)[1].strip()
+
+
+def merge_remote(repo, remote="origin"):
+    """Bring your shelf and the fetched remote copy of it together (the same person on two machines).
+    Returns (state, needs_force). Entries are never edited, so the merge is the union of both trees; a purge's
+    tombstone wins, and then the result is a fresh parentless commit that must be force-pushed (a merge commit
+    would keep the purged text reachable through its parent)."""
+    ref, rref = repo.own_ref(), _remote_ref(repo, remote)
+    rtip, ltip = _sha(repo, rref), _sha(repo, ref)
+    if not rtip or rtip == ltip:
+        return "same", False
+    if not ltip:
+        g.run(["update-ref", ref, rtip], repo.root)
+        return "adopted", False
+    if g.try_run(["merge-base", "--is-ancestor", rtip, ltip], repo.root)[0] == 0:
+        return "ahead", False
+    if g.try_run(["merge-base", "--is-ancestor", ltip, rtip], repo.root)[0] == 0:
+        g.run(["update-ref", ref, rtip], repo.root)
+        return "fast-forward", False
+    merged = {**repo._tree_files(rref), **repo._tree_files(ref)}
+    kept = _apply_tombstones(merged)
+    purged = len(kept) != len(merged)
+    repo._write_ref(ref, kept, "logbook: merge two machines", None if purged else [ltip, rtip])
+    return ("rewritten" if purged else "merged"), purged
+
+
+def _drop_legacy_remote(repo, remote):
+    """Delete the old per-device names of your own refs on the remote, once the shelf is pushed."""
+    names = repo.cfg().get("legacy_remote", [])
+    left = []
+    for n in names:
+        rc, _, err = g.try_run(["push", "--quiet", remote, f":{n}"], repo.root)
+        if rc and "exist" not in err:
+            left.append(n)
+    if left != names:
+        c = repo.cfg()
+        c["legacy_remote"] = left
+        repo.save_cfg(c)
+
+
+def push(repo, remote="origin", force=False, timeout=None):
+    repo.adopt_legacy()
     ref = repo.own_ref()
     if g.try_run(["rev-parse", "--verify", "-q", ref], repo.root)[0]:
         return {"ok": True, "via": "nothing to push", "ref": ref}
-    flag = []
-    if force:  # single writer per ref, so force is safe; the lease still protects against a surprise remote tip
-        tip = g.try_run(["ls-remote", remote, ref], repo.root)[1].split()
-        flag = [f"--force-with-lease={ref}:{tip[0]}"] if tip else ["--force"]
-    rc, _, err = g.try_run(["push", "--quiet", *flag, remote, f"{ref}:{ref}"], repo.root)
-    if rc == 0:
-        return {"ok": True, "via": repo.cfg().get("transport", "refs"), "ref": ref}
+    err = ""
+    for attempt in range(3):
+        flag = []
+        if force:  # one person per ref, so force is safe; the lease still protects against a surprise remote tip
+            tip = g.try_run(["ls-remote", remote, ref], repo.root)[1].split()
+            flag = [f"--force-with-lease={ref}:{tip[0]}"] if tip else ["--force"]
+        rc, _, err = g.try_run(["push", "--quiet", *flag, remote, f"{ref}:{ref}"], repo.root, timeout=timeout)
+        if rc == 0:
+            _drop_legacy_remote(repo, remote)
+            return {"ok": True, "via": repo.cfg().get("transport", "refs"), "ref": ref}
+        if not _DIVERGED.search(err) or attempt == 2:
+            break
+        # the same person pushed from another machine first: fetch their copy, merge, try again
+        if not fetch(repo, remote)["ok"]:
+            break
+        force = merge_remote(repo, remote)[1] or force
     if _DIVERGED.search(err):
-        return {"ok": False, "error": "remote copy of your ref diverged (another clone of this device id?): " + err.strip(), "ref": ref}
+        return {"ok": False, "error": "remote copy of your shelf kept changing while merging; run `logbook sync` again: " + err.strip(), "ref": ref}
     if repo.cfg().get("transport") != "branches" and _REFUSED.search(err):
         # host refused a custom ref namespace: fall back to orphan branches and remember the choice
-        bref = f"{BRANCH_PREFIX}/{repo.user}/{repo.device}"
+        bref = f"{BRANCH_PREFIX}/{repo.user}/{SHELF}"
         tip = g.run(["rev-parse", ref], repo.root).strip()
         g.run(["update-ref", bref, tip], repo.root)
-        rc2, _, err2 = g.try_run(["push", "--quiet", *flag, remote, f"{bref}:{bref}"], repo.root)
+        rc2, _, err2 = g.try_run(["push", "--quiet", *flag, remote, f"{bref}:{bref}"], repo.root, timeout=timeout)
         if rc2 == 0:
             c = repo.cfg()
             c["transport"] = "branches"
@@ -66,11 +123,14 @@ def push(repo, remote="origin", force=False):
 
 
 def sync(repo, remote="origin", fetch_only=False, depth=None):
+    repo.adopt_legacy()
     out = {"fetch": fetch(repo, remote, depth)}
+    if out["fetch"]["ok"]:
+        out["merge"] = merge_remote(repo, remote)[0]
     if not fetch_only:
         out["push"] = push(repo, remote)
     shared, _ = repo.load_shared()
-    out["writers"] = len({(l.user, l.device) for l in shared})
+    out["writers"] = len({l.user for l in shared})
     out["entries"] = len(shared)
     return out
 

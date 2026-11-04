@@ -12,7 +12,7 @@ import time
 from importlib import resources
 from pathlib import Path
 
-from . import capture
+from . import capture, sync
 from . import git as g
 from .store import atomic_write
 
@@ -193,6 +193,8 @@ def apply(repo, targets, remove=False, pretool=True):
     else:
         capture.install_git_hook(repo)
         capture.install_pre_push_hook(repo)
+        if "origin" in sync.remotes(repo):  # so a plain `git pull` also brings teammates' notes
+            sync.ensure_fetch_config(repo)
     for s in steps:
         s.apply(repo)
     return steps

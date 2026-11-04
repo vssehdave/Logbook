@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from . import capture, recall, sync, tree
@@ -65,7 +66,7 @@ def cmd_init(a):
     if a.attribution:
         c["attribution"] = a.attribution
         r.save_cfg(c)
-    out(f"initialised. you are {c['user']} (device {c['device']}); attribution: {r.attribution()}")
+    out(f"initialised. you are {c['user']}; attribution: {r.attribution()}")
     out("next: `logbook install-hook` (git floor) and `logbook install --agent claude-code --write`")
 
 
@@ -75,10 +76,10 @@ def cmd_join(a):
     added = sync.ensure_fetch_config(r, a.remote) if a.remote in sync.remotes(r) else 0
     res = sync.fetch(r, a.remote) if a.remote in sync.remotes(r) else {"ok": False, "error": "no such remote"}
     shared, _ = r.load_shared()
-    writers = {(l.user, l.device) for l in shared}
+    writers = {l.user for l in shared}
     out(f"joined. fetch refspecs added: {added}; fetch {'ok' if res['ok'] else 'failed: ' + res['error']}")
-    out(f"found {len({u for u, _ in writers})} writers on {len(writers)} devices, {len(shared)} entries")
-    for u in sorted({u for u, _ in writers}):
+    out(f"found {len(writers)} writers, {len(shared)} entries")
+    for u in sorted(writers):
         out(f"  writer {u}{'  (you)' if u == r.user else '  [not trusted: searchable, never auto-injected; `logbook trust ' + u + '`]' if u not in r.trusted() else '  [trusted]'}")
 
 
@@ -156,7 +157,12 @@ def cmd_publish(a):
     if not r.policy().get("publish", True):
         raise SystemExit("logbook: this repo's policy has publishing turned off (.logbook/policy.json)")
     ready = []
-    ids = r.unpublished() if getattr(a, "all", False) else a.ids
+    if getattr(a, "all", False):
+        ids = r.unpublished()
+    elif a.ids:
+        ids = a.ids
+    else:
+        ids = _pick_unpublished(r)
     ids = [e.id if hasattr(e, "id") else e for e in ids]
     if not ids:
         out("nothing to publish.")
@@ -166,10 +172,20 @@ def cmd_publish(a):
         if not e:
             raise SystemExit(f"logbook: no private entry {eid}")
         c, found = share_copy(r, e, a.include_evidence, a.allow_table)
+        dup = r.duplicate_of(c)
+        if dup and dup[0] == "same-id":
+            out(f"skipped {eid}: already shared.")
+            continue
+        if dup and not getattr(a, "force", False):
+            out(f"skipped {eid}: {r.label(dup[1])} already shared the same text ({dup[1].entry.id}). --force publishes it anyway.")
+            continue
         text = c.to_json()
         out(f"--- would publish {eid} (redaction: {len(found)} item(s) masked{': ' + ', '.join(sorted(set(found))) if found else ''})")
         out(text)
         ready.append((c, digest_hash(text)))
+    if not ready:
+        out("nothing new to publish.")
+        return 0
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
     if not a.yes and input("Publish exactly the text above? [y/N] ").strip().lower() != "y":
         raise SystemExit("aborted; nothing published")
@@ -177,13 +193,43 @@ def cmd_publish(a):
         if digest_hash(c.to_json()) != h:
             raise SystemExit("logbook: entry changed after preview; aborting")
     ref = r.publish([c for c, _ in ready])
-    out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref} (local). `logbook sync` pushes it.")
+    keep = getattr(a, "keep", False)
+    if not keep:  # a move, not a copy: the shared (redacted) text replaces the private original
+        for c, _ in ready:
+            r.drop_private(c.id)
+    out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref} (local"
+        f"{'' if keep else '; the private copy was removed, --keep leaves it'}). `logbook sync` pushes it.")
     if a.push:
         out(json.dumps(sync.push(r)))
 
 
+def _pick_unpublished(r):
+    """Numbered list of private notes not shared yet; asks which ones when a person is at the keyboard."""
+    q = sorted(r.unpublished(), key=lambda e: e.id, reverse=True)
+    for i, e in enumerate(q, 1):
+        out(f"  {i}. {e.id}  {e.kind:<8} {e.topic[:70]}")
+    if not q:
+        return []
+    if not sys.stdin.isatty():
+        out("pass ids to publish, or --all")
+        return []
+    ans = input("which ones? (numbers like 1,3 / all / empty to cancel) ").strip().lower()
+    if ans == "all":
+        return q
+    want = {int(x) for x in ans.replace(" ", "").split(",") if x.isdigit()}
+    return [e for i, e in enumerate(q, 1) if i in want]
+
+
 def cmd_sync(a):
     r = need_repo()
+    if a.hook:  # called by the pre-push hook: never block or fail the push it is attached to
+        if os.environ.get("LOGBOOK_PUSHING") or a.remote not in sync.remotes(r):
+            return 0
+        os.environ["LOGBOOK_PUSHING"] = "1"  # the push below fires the same hook again
+        res = sync.push(r, a.remote, timeout=20)
+        if not res["ok"]:
+            print(f"logbook: your notes were not pushed ({res['error'][:120]}). `logbook sync` retries.", file=sys.stderr)
+        return 0
     res = sync.sync(r, a.remote, a.fetch_only, a.depth)
     out(json.dumps(res, indent=2))
     return 0 if res["fetch"]["ok"] and res.get("push", {"ok": True})["ok"] else 1
@@ -262,9 +308,9 @@ def cmd_status(a):
     shared, _ = r.load_shared()
     spool = list((r.cdir / "spool").glob("*.json")) if (r.cdir / "spool").exists() else []
     sess = [p for p in (r.cdir / "sessions").iterdir()] if (r.cdir / "sessions").exists() else []
-    out(f"you: {r.user}  device: {r.device}  attribution: {r.attribution()}  transport: {r.cfg().get('transport', 'refs')}")
+    out(f"you: {r.user}  attribution: {r.attribution()}  transport: {r.cfg().get('transport', 'refs')}")
     out(f"entries: {len(vs)} visible ({sum(1 for v in vs if v['scope'] == 'private')} private, "
-        f"{sum(1 for v in vs if v['scope'] == 'shared')} shared) from {len({(l.user, l.device) for l in shared})} writer devices")
+        f"{sum(1 for v in vs if v['scope'] == 'shared')} shared) from {len({l.user for l in shared})} writers")
     out(f"capture: {len(spool)} spooled events waiting, {len([s for s in sess if s.is_dir()])} sessions seen")
     if an.shallow:
         out("note: shallow clone; some anchors are unverified")
@@ -639,8 +685,11 @@ def build_parser():
     s.add_argument("--push", action="store_true")
     s.add_argument("--include-evidence", action="store_true")
     s.add_argument("--allow-table", action="store_true")
+    s.add_argument("--keep", action="store_true", help="leave the private copy in place after publishing")
+    s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
     s = add("sync", cmd_sync, "fetch teammates' entries and push yours")
     s.add_argument("--remote", default="origin")
+    s.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--fetch-only", action="store_true")
     s.add_argument("--depth", type=int)
     s = add("query", cmd_query, "search entries")

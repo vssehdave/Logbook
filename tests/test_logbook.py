@@ -135,8 +135,8 @@ class TestSync(Base):
         self.assertTrue(g.is_shallow(bob))
         self.assertEqual(sync.sync(rb, fetch_only=True, depth=1)["entries"], 1)
         self.ra.purge(e.id)
-        self.assertFalse(sync.push(self.ra)["ok"], "a plain push of a rewritten ref must not clobber the remote silently")
-        self.assertTrue(sync.push(self.ra, force=True)["ok"])
+        # the rewritten shelf diverges from the remote: push fetches, merges (the tombstone wins) and pushes with a lease
+        self.assertTrue(sync.push(self.ra)["ok"])
         sync.sync(rb, fetch_only=True, depth=1)
         self.assertEqual(rb.all_entries(), [])
 
@@ -298,12 +298,16 @@ class TestPolicyAndTrust(Base):
         commit(d, "b", {"a.txt": "x"})
         r = Repo(d)
         r.init()
-        self.assertEqual(r.attribution(), "pseudonym")
+        self.assertEqual(r.attribution(), "named", "names are on by default")
         c = r.cfg()
+        c["attribution"] = "pseudonym"
+        r.save_cfg(c)
+        self.assertEqual(r.attribution(), "pseudonym", "a person can choose to stay pseudonymous")
         c["attribution"] = "named"
         r.save_cfg(c)
-        self.assertEqual(r.attribution(), "pseudonym", "the default policy ceiling keeps names off")
         (d / ".logbook").mkdir()
+        (d / ".logbook" / "policy.json").write_text(json.dumps({"attribution": "pseudonym"}))
+        self.assertEqual(r.attribution(), "pseudonym", "a repo policy can cap names off")
         (d / ".logbook" / "policy.json").write_text(json.dumps({"publish": False, "inject_from": "self", "attribution": "named"}))
         self.assertEqual(r.attribution(), "named")
         c["trusted"] = ["abc"]
@@ -889,6 +893,101 @@ class TestMergeCards(Base):
         self.assertEqual([x["id"] for c in m["merge"]["commits"] if c["sha"] == s2 for x in c["entries"]], [e.id])
         self.assertEqual(t["unplaced"], [])
         self.assertEqual(tree.merged_branch("Merge pull request #7 from acme/fix-refunds"), "fix-refunds")
+
+
+class TestShelf(Base):
+    """One shelf per person: two machines of the same person write the same ref, and sync merges them."""
+
+    def clones(self):
+        self.remote = self.bare()
+        seed = make_repo(self.root, "seed", "a@x.io", self.remote)
+        commit(seed, "init", {"a.txt": "x"})
+        sh("git", "push", "-q", "origin", "HEAD", cwd=seed)
+        out = []
+        for name in ("laptop", "desktop"):
+            r = Repo(make_repo(self.root, name, "a@x.io", self.remote))
+            r.init()
+            out.append(r)
+        return out
+
+    def reader(self):
+        r = Repo(make_repo(self.root, "carol", "c@x.io", self.remote))
+        r.init()
+        sync.sync(r, fetch_only=True)
+        return {l.entry.id for l in r.all_entries()}
+
+    def test_two_machines_of_one_person_share_one_shelf_and_merge(self):
+        lap, desk = self.clones()
+        self.assertEqual(lap.own_ref(), desk.own_ref())
+        self.assertTrue(lap.own_ref().endswith("/000000"))
+        e1 = capture.make_entry(lap, "finding", "from laptop", {"summary": "s", "why": "w"})
+        e2 = capture.make_entry(desk, "finding", "from desktop", {"summary": "s", "why": "w"})
+        lap.publish([e1])
+        desk.publish([e2])
+        self.assertTrue(sync.push(lap)["ok"])
+        res = sync.push(desk)
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(self.reader(), {e1.id, e2.id})
+
+    def test_a_purge_beats_a_merge(self):
+        lap, desk = self.clones()
+        e1 = capture.make_entry(lap, "finding", "secret", {"summary": "s", "why": "w"})
+        lap.publish([e1])
+        sync.push(lap)
+        sync.sync(desk)
+        lap.purge(e1.id)
+        self.assertTrue(sync.push(lap, force=True)["ok"])
+        e2 = capture.make_entry(desk, "finding", "later", {"summary": "s", "why": "w"})
+        desk.publish([e2])
+        self.assertTrue(sync.push(desk)["ok"])
+        self.assertEqual(self.reader(), {e2.id}, "the purged note must not come back through the other machine")
+
+    def test_old_per_device_refs_are_folded_into_the_shelf(self):
+        lap, _ = self.clones()
+        e = capture.make_entry(lap, "finding", "old", {"summary": "s", "why": "w"})
+        old = f"refs/logbook/log/{lap.user}/abc123"
+        lap._write_ref(old, {f"entries/{e.id}.json": e.to_json().encode()}, "0.0.2 style", None)
+        self.assertEqual(lap.legacy_refs(), [old])
+        lap.adopt_legacy()
+        self.assertEqual(lap.legacy_refs(), [])
+        self.assertEqual([l.entry.id for l in lap.load_shared()[0]], [e.id])
+        self.assertEqual(lap.cfg()["legacy_remote"], [old])
+
+
+class TestPublishMoves(CliRepo):
+    def test_publish_moves_the_note_and_skips_what_is_already_shared(self):
+        e = capture.make_entry(self.r, "finding", "t1", {"summary": "s", "why": "w"})
+        self.run_cli("publish", e.id, "--yes", "--keep")
+        self.assertIsNotNone(self.r.get_private(e.id), "--keep leaves the private copy")
+        self.assertIn("already shared", self.run_cli("publish", e.id, "--yes")[1])
+        e2 = capture.make_entry(self.r, "finding", "t2", {"summary": "s", "why": "w"})
+        self.run_cli("publish", e2.id, "--yes")
+        self.assertIsNone(self.r.get_private(e2.id), "publish moves the note out of the private log")
+        self.assertIn(e2.id, {l.entry.id for l in self.r.load_shared()[0]})
+
+    def test_the_same_words_from_a_teammate_are_not_published_again(self):
+        theirs = capture.make_entry(self.r, "finding", "refund rounding", {"summary": "round half-even", "why": "finance"})
+        self.r.drop_private(theirs.id)
+        self.r._write_ref(f"refs/logbook/log/{'b' * 10}/000000", {f"entries/{theirs.id}.json": theirs.to_json().encode()}, "x", None)
+        mine = capture.make_entry(self.r, "finding", "Refund  rounding", {"summary": "round half-even", "why": "finance"})
+        self.assertIn("already shared the same text", self.run_cli("publish", mine.id, "--yes")[1])
+        self.assertIsNotNone(self.r.get_private(mine.id), "a skipped note stays private")
+        self.assertIn("would publish", self.run_cli("publish", mine.id, "--yes", "--force")[1])
+
+    def test_pre_push_hook_pushes_published_notes_and_never_the_private_ones(self):
+        self.run_cli("install", "--yes", "--agent", "agents-md")
+        remote = self.root / "remote.git"
+        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
+        sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+        shared = capture.make_entry(self.r, "finding", "shared one", {"summary": "s", "why": "w"})
+        private = capture.make_entry(self.r, "finding", "private one", {"summary": "s", "why": "w"})
+        self.run_cli("publish", shared.id, "--yes")
+        p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+        names = sh("git", "ls-tree", "-r", "--name-only", self.r.own_ref(), cwd=self.d)
+        self.assertIn(shared.id, names)
+        self.assertNotIn(private.id, names)
 
 
 if __name__ == "__main__":
