@@ -228,7 +228,7 @@ class TestCapture(Base):
     def test_session_start_injects_only_trusted_why_entries(self):
         d, r = self.repo()
         capture.make_entry(r, "finding", "x late", {"summary": "s", "why": "export stalled", "wrong": "low"}, paths=["models/marts/fct_x.sql"])
-        capture.make_entry(r, "finding", "no reason", {"summary": "s"}, paths=["models/marts/fct_x.sql"])
+        capture.make_entry(r, "finding", "no reason", {"summary": "s"}, paths=["models/marts/fct_x.sql"], provenance="agent-written")  # a person's own note needs no why; an agent's does
         (d / "models/marts/fct_x.sql").write_text("select 3\n")
         out = json.loads(capture.handle_hook("SessionStart", "claude-code", json.dumps({"cwd": str(d), "session_id": "s9"})))
         txt = out["hookSpecificOutput"]["additionalContext"]
@@ -504,6 +504,22 @@ class TestNudge(Base):
         self.assertIn("recorded no note", json.loads(first)["hookSpecificOutput"]["additionalContext"])
         self.assertEqual(self.hook("UserPromptSubmit", prompt="and then?"), "", "said once per turn")
 
+    def test_only_the_note_subcommand_counts_as_writing_a_note(self):
+        """A real session found this: `logbook ask "... same note id"` was counted as a note, so no reminder ever came."""
+        from getlogbook import nudge
+        looked = [("Read", {"file_path": f"f{i}.py"}) for i in range(4)]
+
+        def stats(command):
+            self.tpath.write_text("")
+            self.turn(*looked, ("Bash", {"command": command}))
+            return nudge.turn_stats(self.tpath.read_bytes())
+
+        self.assertFalse(stats('logbook ask "publish twice same note id"')["noted"], "a query that says note is not a note")
+        self.assertFalse(stats("logbook context ; logbook cites --note")["noted"])
+        for real in ("logbook note --json <<'EOF'\n{}\nEOF", "echo '{}' | logbook note --json", "python -m getlogbook note \"x\" a.py", "logbook note --check"):
+            self.assertTrue(stats(real)["noted"], real)
+        self.assertEqual(stats('logbook ask "same note id"')["reads"], 4)
+
     def test_no_nudge_when_a_note_was_written_or_the_turn_was_short(self):
         self.turn(*[("Grep", {"pattern": "x"}) for _ in range(7)], ("Bash", {"command": "echo '{}' | logbook note --json"}))
         self.hook("Stop")
@@ -616,7 +632,7 @@ class TestContext(CliRepo):
         self.assertIn("def total(rows)", text, "the diff is included")
         self.assertNotIn("chore: tidy", text)
         self.assertNotIn("fix: skip refunds", text)
-        self.assertIn('"commit"', text)
+        self.assertIn("commit: <sha>", text)
         explicit = self.run_cli("backfill", b[:10])[1]
         self.assertIn("fix: skip refunds", explicit)
         self.assertIn("nothing to backfill", self.run_cli("backfill", "--scan", "1")[1])
@@ -1174,6 +1190,155 @@ class TestPublishModes(CliRepo):
         self.assertIn("(private)", text)
         self.assertEqual(self.r.load_shared()[0], [])
         self.assertEqual(len(self.r.load_private()), 1)
+
+
+class TestGrounding(CliRepo):
+    """What can be checked about a note is checked; what cannot is not passed off as checked."""
+
+    def setUp(self):
+        super().setUp()
+        self.head = commit(self.d, "add total", {"shop/revenue.py": "def total(rows):\n    return sum(rows)\n"})
+        import unittest.mock
+        env = unittest.mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "test-session"})  # these notes are written from inside an agent
+        env.start()
+        self.addCleanup(env.stop)
+
+    def as_a_person(self):
+        os.environ.pop("CLAUDE_CODE_SESSION_ID", None)  # setUp's patch restores it afterwards
+
+    def test_a_note_can_be_written_as_key_value_lines_with_no_braces_or_quotes(self):
+        """Claude Code refuses a shell command holding a brace and a quote (it looks like obfuscation) until a person approves it, so an agent
+        cannot save a JSON note unattended. Key: value lines have neither."""
+        text = ("kind: finding\ntopic: refund sum\nsummary: `total()` sums rows,\n  and nothing filters refunds\nwhy: no filter\n"
+                "paths: shop/revenue.py, shop/other.py\nsupersedes:\nbefore_commit: no\n")
+        self.assertNotIn("{", text)
+        obj = cli._parse_fields(text)
+        self.assertEqual(obj["summary"], "`total()` sums rows,\n  and nothing filters refunds")
+        self.assertEqual((obj["paths"], obj["supersedes"], obj["before_commit"]), (["shop/revenue.py", "shop/other.py"], [], False))
+        code, out = self.run_cli("note", "--fields", stdin=text)
+        self.assertIn("recorded", out)
+        (e,) = self.r.load_private()
+        self.assertEqual((e.topic, e.body["why"], e.anchor["paths"][0], e.checks["paths"]), ("refund sum", "no filter", "shop/revenue.py", [2, 2]))  # both files exist
+        self.assertIn("nothing filters refunds", e.body["summary"])
+
+    def test_title_is_taken_as_the_topic(self):
+        """A real Claude session wrote `title:`; it was silently dropped and the topic fell back to the start of the summary."""
+        self.assertEqual(cli._parse_fields("kind: finding\ntitle: the short name\nsummary: s\n")["topic"], "the short name")
+
+    def test_check_works_on_key_value_lines_and_a_line_that_is_not_a_key_belongs_to_the_value_above(self):
+        code, out = self.run_cli("note", "--fields", "--check", stdin="topic: t\nsummary: see `shop/gone.py`\nnote: this is prose, not a key\npaths: shop/revenue.py\n")
+        self.assertIn("! not found: shop/gone.py", out)
+        self.assertEqual(self.r.load_private(), [])
+
+    def test_a_person_writes_a_note_in_plain_words_and_it_needs_no_why(self):
+        self.as_a_person()
+        code, text = self.run_cli("note", "Revenue dips come from the stalled export", "shop/revenue.py")
+        (e,) = self.r.load_private()
+        self.assertEqual((e.provenance, e.body["summary"], e.anchor["paths"]), ("user-written", "Revenue dips come from the stalled export", ["shop/revenue.py"]))
+        self.assertNotIn("never injected", text)
+        vs, _ = tree.all_views(self.r)
+        from getlogbook import recall
+        self.assertTrue(recall.injectable({**vs[0], "trusted": True}), "a person's own note is shown to the agent without a why")
+
+    def test_a_person_is_not_held_to_evidence_but_an_agent_is(self):
+        self.as_a_person()
+        self.assertEqual(self.run_cli("note", "the cache is slow")[0] or 0, 0)
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "test-session"
+        with self.assertRaises(SystemExit):
+            self.run_cli("note", "the cache is slow too")
+
+    def test_install_lets_claude_run_the_safe_commands_without_asking_and_nothing_else(self):
+        path, cur = capture.install_claude(self.r, write=True)
+        allow = cur["permissions"]["allow"]
+        self.assertIn("Bash(logbook note:*)", allow)
+        for asks in ("publish", "sync", "purge", "gc", "trust", "config"):
+            self.assertFalse(any(asks in a for a in allow), asks + " must still ask")
+        capture.install_claude(self.r, write=True)
+        self.assertEqual(json.loads(path.read_text())["permissions"]["allow"], allow, "installing twice adds nothing")
+        mine = json.loads(path.read_text())
+        mine["permissions"]["allow"].append("Bash(git status:*)")  # the person's own rule
+        path.write_text(json.dumps(mine))
+        _, after = capture.install_claude(self.r, write=True, remove=True)
+        self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "uninstall removes ours and keeps theirs")
+
+    def note(self, *flags, **body):
+        obj = {"kind": "finding", "topic": "refund sum", "summary": "x", "why": "y", **body}
+        return self.run_cli("note", "--json", *flags, stdin=json.dumps(obj))
+
+    def test_it_looks_up_the_files_names_and_commits_a_note_names(self):
+        from getlogbook import ground
+        said = f"`total()` in `shop/revenue.py` sums rows, not `shop/missing.py`, nor `no_such_function`. Fixed in {self.head[:10]} and deadbee1234."
+        c = ground.check(self.r, {"summary": said}, "t", [], None)
+        self.assertEqual((c["paths"], c["names"], c["commits"]), ([1, 2], [1, 2], [1, 2]))
+        self.assertEqual(c["files"], ["shop/revenue.py"])
+        self.assertEqual(set(c["missing"]), {"shop/missing.py", "no_such_function", "deadbee1234"})
+        self.assertTrue(c["evidence"])
+
+    def test_a_number_or_an_ordinary_word_is_not_taken_for_a_commit_or_a_name(self):
+        from getlogbook import ground
+        c = ground.check(self.r, {"summary": "Version 1234567 had 100000000 rows; see `True` and `x`; added a deadbeef of cache."}, "t", [], None)
+        self.assertEqual((c["commits"], c["names"]), ([0, 0], [0, 0]))
+
+    def test_a_finding_that_points_at_nothing_is_refused_unless_you_say_so(self):
+        with self.assertRaises(SystemExit):
+            self.note(summary="the cache is slow")
+        code, text = self.note("--allow-ungrounded", summary="the cache is slow")
+        (e,) = self.r.load_private()
+        self.assertFalse(e.checks["evidence"])
+        self.assertIn("it points at nothing", "; ".join(__import__("getlogbook").ground.problems(e.checks)))
+
+    def test_check_reports_and_saves_nothing(self):
+        code, text = self.note("--check", summary="`total()` sums rows in `shop/missing.py`", paths=["shop/revenue.py"])
+        self.assertEqual(code or 0, 0)
+        self.assertIn("grounding: files 1/2", text)
+        self.assertIn("! not found: shop/missing.py", text)
+        self.assertIn("checked only", text)
+        self.assertEqual(self.r.load_private(), [])
+
+    def test_the_result_is_saved_with_the_note_and_survives_publishing(self):
+        self.note(summary="`total()` sums rows", paths=["shop/revenue.py"])
+        (e,) = self.r.load_private()
+        self.assertEqual((e.checks["paths"], e.checks["names"], e.checks["evidence"]), ([1, 1], [1, 1], True))
+        self.assertEqual(e.checks["files"], ["shop/revenue.py"])
+        c, _ = cli.share_copy(self.r, e, False, False)
+        self.assertEqual(c.checks, e.checks)
+
+    def test_it_suggests_the_note_on_the_same_files_that_says_much_the_same(self):
+        old = capture.make_entry(self.r, "finding", "refund sum is wrong", {"summary": "total sums refunded rows", "why": "no filter"},
+                                 paths=["shop/revenue.py"])
+        code, text = self.note("--check", topic="refund sum is wrong", summary="total sums the refunded rows too", paths=["shop/revenue.py"])
+        self.assertIn(f"may overlap {old.id}", text)
+        code, text = self.note("--check", topic="pricing tiers", summary="gold plan costs more", paths=["shop/revenue.py"])
+        self.assertNotIn("may overlap", text)
+
+    def test_a_note_can_supersede_your_own_and_nobody_elses(self):
+        old = capture.make_entry(self.r, "finding", "old take", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"])
+        self.note(summary="`total()` newer take", paths=["shop/revenue.py"], supersedes=[old.id])
+        self.assertNotIn(old.id, {l.entry.id for l in self.r.all_entries()}, "the superseded note is hidden")
+        with self.assertRaises(SystemExit):
+            self.note(summary="`total()` x", paths=["shop/revenue.py"], supersedes=["1a1a5684310-5ba7d17c"])
+
+    def test_an_injected_note_that_names_something_missing_says_so_and_ranks_lower(self):
+        from getlogbook import recall
+        capture.make_entry(self.r, "finding", "refund sum", {"summary": "total sums rows", "why": "w"}, paths=["shop/revenue.py"],
+                           checks={"paths": [1, 2], "names": [0, 0], "commits": [0, 0], "files": ["shop/revenue.py"], "missing": ["shop/gone.py"], "evidence": True, "at": ""})
+        vs, _ = tree.all_views(self.r)
+        self.assertIn("unverified: not found: shop/gone.py", recall._fmt(1, vs[0]))
+
+    def test_auto_mode_does_not_share_a_note_with_something_missing_on_its_own(self):
+        self.run_cli("config", "publish", "auto")
+        code, text = self.note(summary="`total()` sums rows, `shop/gone.py` too", paths=["shop/revenue.py"])
+        self.assertIn("(private)", text)
+        self.assertEqual(self.r.load_shared()[0], [])
+        code, text = self.note(summary="`total()` sums rows", paths=["shop/revenue.py"])
+        self.assertIn("published (auto mode)", text)
+
+    def test_a_hostile_checks_record_is_coerced(self):
+        e = from_dict({"id": new_id(), "kind": "finding", "topic": "t", "body": {"summary": "s"},
+                       "checks": {"paths": [10 ** 9, -5], "names": "x", "missing": ["m" * 500] * 50, "files": ["f"] * 99, "at": "--output=x", "evidence": 1}})
+        self.assertEqual(e.checks["paths"], [1000, 0])
+        self.assertEqual(e.checks["names"], [0, 0])
+        self.assertEqual((len(e.checks["missing"]), len(e.checks["missing"][0]), len(e.checks["files"]), e.checks["at"]), (8, 80, 20, ""))
 
 
 class TestWhoWroteIt(CliRepo):

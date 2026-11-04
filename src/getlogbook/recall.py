@@ -10,7 +10,7 @@ import json
 import re
 import time
 
-from . import cites
+from . import cites, ground
 from . import git as g
 from . import tree
 from .safety import sanitize
@@ -60,6 +60,7 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
         s += 1 if v["kind"] == "finding" else 0
         s += 1 if (body.get("why") or body.get("wrong")) else 0
         s -= 1 if v["state"] in ("orphaned", "unknown") else 0
+        s -= 1 if ground.problems(v["checks"], v["provenance"] != "user-written") else 0  # it names something that is not there, or points at nothing
         s -= 1 if (v["behind"] or 0) > 200 else 0
         scored.append((s, v))
     scored.sort(key=lambda x: x[1]["id"], reverse=True)  # newest first on ties
@@ -68,14 +69,15 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
 
 
 def injectable(v):
-    return v["trusted"] and bool(v["body"].get("why") or v["body"].get("wrong"))
+    return v["trusted"] and bool(v["body"].get("why") or v["body"].get("wrong") or v["provenance"] == "user-written")  # a person's own note needs no why
 
 
 def _fmt(i, v, src=""):
     bits = [v["kind"], v["author"], v["provenance"],
             "unverified anchor" if v["state"] in ("orphaned", "unknown") else
             (f"{v['behind']} commits behind HEAD" if v["behind"] is not None else "anchor unknown"),
-            ("re-anchored by " + v["rung"] if v["state"] == "rewritten" else "")]
+            ("re-anchored by " + v["rung"] if v["state"] == "rewritten" else ""),
+            ("unverified: " + "; ".join(ground.problems(v["checks"], v["provenance"] != "user-written"))[:90] if ground.problems(v["checks"], v["provenance"] != "user-written") else "")]
     if v["age_days"] is not None:
         bits.append(f"{v['age_days']}d old")
     lines = [f"[{i}] " + sanitize(" | ".join(str(b) for b in bits if b), 160) + " | verify first"]

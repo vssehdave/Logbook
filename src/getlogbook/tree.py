@@ -379,7 +379,7 @@ def view(repo, loaded, anch):
             "age_days": age_days(e.created), "created": e.created, "captured_via": e.captured_via,
             "branch": a.get("branch", ""), "subject": a.get("subject", ""), "sha": a.get("sha", ""), "placed": sha or "",
             "paths": a.get("paths", []), "names": a.get("names", []), "dirty": a.get("dirty", False),
-            "supersedes": e.supersedes, "redacted": e.redacted, "level": e.level, "sources": e.sources,
+            "supersedes": e.supersedes, "checks": e.checks, "redacted": e.redacted, "level": e.level, "sources": e.sources,
             "merge_base": a.get("merge_base", ""), "base": a.get("base", "")}
 
 

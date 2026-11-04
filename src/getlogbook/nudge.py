@@ -16,14 +16,14 @@ from .store import atomic_write
 INVESTIGATE = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
 EDITS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 _SEARCHY = re.compile(r"\b(grep|rg|find|cat|ls|git\s+(log|show|diff|blame|grep))\b")
-_NOTING = re.compile(r"\blogbook\b[^|;&\n]*\bnote\b")
+_NOTING = re.compile(r"\b(?:get)?logbook\s+note\b")  # the note subcommand itself: a query that merely says "note" does not count
 NUDGE_AFTER, NUDGE_MAX, BLOCK_AFTER = 6, 3, 3
 BLOCK_TEXT = ("Before you finish: this turn read or searched {n} times and no logbook note was recorded. If you found a cause, ruled "
-              "something out, or a decision was made, record it now with `logbook note --json` (see the logbook skill), then give "
+              "something out, or a decision was made, record it now with `logbook note --fields` (see the logbook skill), then give "
               "your final answer again. If nothing is worth keeping, say so in one line and finish.")
 NUDGE_TEXT = ("Logbook: your last turn read or searched {n} times and recorded no note. If you learned something a teammate's "
               "agent would otherwise have to rediscover (a cause, a wrong assumption, a dead end, a decision), record it now "
-              "with `logbook note --json` (see the logbook skill). If nothing is worth keeping, ignore this.")
+              "with `logbook note --fields` (see the logbook skill). If nothing is worth keeping, ignore this.")
 
 
 def turn_stats(data):

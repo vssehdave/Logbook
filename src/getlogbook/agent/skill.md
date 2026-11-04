@@ -32,20 +32,30 @@ Record a note when any of these happen, without waiting for a commit:
 
 Do not write a note for a chore: a rename, a formatting or comment edit, a dependency bump with no surprise. A note nobody needs costs everyone's tokens.
 
-Pass the note as JSON on stdin so quotes and newlines survive:
+Pass the note as `key: value` lines on stdin. A value can run over several lines. There are no braces and no quotes, so nothing needs escaping, and Claude Code's check for obfuscated shell does not stop the command for your approval (it does for JSON, which is why this is the way):
 
 ```
-echo '{"kind":"finding","topic":"short title","summary":"3-5 sentences: what was found and why it matters",
-"context":"what was asked and what was tried, in order","why":"the cause","wrong":"what was wrong or assumed",
-"fix":"what changed, if anything","decided":"the choice made and the alternatives rejected, with the reason",
-"open":"what is still unknown","scale":"how much: rows, percent, users, days","paths":["src/app/orders.py"]}' | logbook note --json
+logbook note --fields <<'EOF'
+kind: finding
+topic: short title
+summary: 3-5 sentences: what was found and why it matters
+context: what was asked and what was tried, in order
+why: the cause
+wrong: what was wrong or assumed
+fix: what changed, if anything
+decided: the choice made and the alternatives rejected, with the reason
+open: what is still unknown
+scale: how much: rows, percent, users, days
+paths: src/app/orders.py
+evidence: what you ran or read: a command and its result, or file:line
+EOF
 ```
 
 Leave out fields you have nothing true to say in. `summary` is required.
 
 - `kind` is `finding` for something learned, `change` for the reason behind a commit.
-- For a change you are about to commit, run `logbook context` first. It says whether the change needs a note (whitespace-only and rename-only changes do not) and lists your earlier findings that touch the same files. Then add `"before_commit": true` and `"sources": ["<finding id>", ...]` to a `change` note and commit as usual; the note attaches to that commit and cites the findings it grew out of, so one commit's note can be built from several sessions' findings.
-- To write about an earlier commit, add `"commit": "<sha>"`.
+- For a change you are about to commit, run `logbook context` first. It says whether the change needs a note (whitespace-only and rename-only changes do not) and lists your earlier findings that touch the same files. Then add the lines `before_commit: yes` and `sources: <finding id>, <finding id>` to a `change` note and commit as usual; the note attaches to that commit and cites the findings it grew out of, so one commit's note can be built from several sessions' findings.
+- To write about an earlier commit, add the line `commit: <sha>`.
 - Write the way you would brief a colleague who joins tomorrow: the ask, the path, the dead ends, the decision, what is left. Not one line.
 
 Good: "Checkout totals ran 4% high. Compared one week of orders with the processor report and the gap matched refunded rows exactly. total() summed them because the payments loader keeps refunded rows for other reports. Fixed in total(), not in the loader, for that reason. Still open: whether partial refunds are handled."
@@ -54,15 +64,19 @@ Bad: "fixed refund bug".
 
 ## Where a note belongs
 
-Put long research, a trail of dead ends or a summary of a whole piece of work on the branch: `"level": "branch"`. Keep a commit's own note short, about what that commit changed and why, so the branch holds the story and each commit holds its part. A note written before the branch has a commit still hangs off the branch and follows it through the merge.
+Put long research, a trail of dead ends or a summary of a whole piece of work on the branch: `level: branch`. Keep a commit's own note short, about what that commit changed and why, so the branch holds the story and each commit holds its part. A note written before the branch has a commit still hangs off the branch and follows it through the merge.
+
+## Check before you save
+
+Run the same note through `logbook note --fields --check` first. It looks up every file, name in backticks and commit id the note mentions, in the repo as it is now, and prints `grounding: files 2/2, names 3/4, commits 1/1, evidence yes`, with each thing it could not find after a `!`. A name that is not in the code means the note is wrong, vague or about something that has changed: fix the note, do not save it as it is. A finding that names no file that exists, no commit and no evidence is refused. It also lists notes on the same files that say much the same, after a `~`: if your note replaces one of yours, add a line `supersedes: <id>`; if both stand, say why in the note. The check only shows that what you name exists; whether what you say is true is still on you, so cite what you ran or read in `evidence`.
 
 ## Commits that have no note
 
-`logbook backfill` lists recent commits with no note saying why, with each message and diff. For ones that needed real thought, write a note with `"commit": "<sha>"`, based only on the message and diff: say "not verified" for anything you inferred and do not invent motives. Skip chores. When a conversation exists, what was said in it is a better source than the diff.
+`logbook backfill` lists recent commits with no note saying why, with each message and diff. For ones that needed real thought, write a note with the line `commit: <sha>`, based only on the message and diff: say "not verified" for anything you inferred and do not invent motives. Skip chores. When a conversation exists, what was said in it is a better source than the diff.
 
 ## Summaries
 
-A summary is a short note about a whole node: the repo, or a branch. Teammates' agents are shown a fresh one at the start of a session, so it saves them reading every note. When the user asks for an overview, or `logbook status` says a summary is out of date, run `logbook summarize`. It lists the notes under that node; write 4 to 8 sentences from them (what is known, decided and open) and record it with `logbook note --json` using `"kind": "summary"`, the `"level"` it gave you and the `sources` it listed. Add nothing the notes do not support. A summary goes stale as soon as a covered note is added, and a stale one is not shown.
+A summary is a short note about a whole node: the repo, or a branch. Teammates' agents are shown a fresh one at the start of a session, so it saves them reading every note. When the user asks for an overview, or `logbook status` says a summary is out of date, run `logbook summarize`. It lists the notes under that node; write 4 to 8 sentences from them (what is known, decided and open) and record it with `logbook note --fields` using `kind: summary`, the `level:` it gave you and the `sources` it listed. Add nothing the notes do not support. A summary goes stale as soon as a covered note is added, and a stale one is not shown.
 
 ## Rules
 

@@ -65,7 +65,7 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
 
 - **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook ask`. Hooks also put
   the matching notes in front of it (see below).
-- **While working** it records what it learns, even with no commit: `echo '{...}' | logbook note --json` (summary, context, why,
+- **While working** it records what it learns, even with no commit: `logbook note --fields <<'EOF' ... EOF` (summary, context, why,
   wrong, fix, decided, open, scale, paths). The skill shows the shape and a good example.
 - **Before it finishes** a turn that read or searched three or more times and wrote no note, Claude Code is asked once to record
   one. `logbook config nudge context` makes that a reminder on the next prompt instead, `logbook config nudge off` turns it off.
@@ -73,7 +73,8 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
 
 ## Daily use
 
-    logbook note --json                       # the whole note as JSON on stdin (safest for agents)
+    logbook note --fields                     # the whole note as `key: value` lines on stdin: what an agent uses (no braces or quotes)
+    logbook note --json                       # the same as a JSON object
     logbook note --kind finding --topic "late payments" --summary "revenue dip" --why "export stalled" --wrong "1 day under"
     logbook note --kind change --before-commit --summary "..." --why "..." --wrong "..." --fix "..."   # then commit as usual
     logbook note --commit <sha> --summary "..."   # a note about an earlier commit
