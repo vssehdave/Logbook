@@ -21,3 +21,4 @@ Thumbs.db
 .claude/settings.local.json
 
 .playwright-cli/
+bench/real_session.json
