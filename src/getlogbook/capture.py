@@ -406,6 +406,12 @@ def claude_snippet(repo, pretool=False):
     return {"hooks": hooks}
 
 
+# Commands Claude may run without asking: they only read, or write to your own private notes. Anything that shares, removes or changes
+# settings (publish, sync, purge, gc, trust, config, tidy --apply) is left out, so it still asks.
+ALLOW = ("Bash(logbook note:*)", "Bash(logbook ask:*)", "Bash(logbook context:*)", "Bash(logbook cites:*)", "Bash(logbook log:*)",
+         "Bash(logbook status:*)", "Bash(logbook summarize:*)", "Bash(logbook backfill:*)")
+
+
 def install_claude(repo, path=None, pretool=False, write=False, remove=False):
     path = Path(path or repo.root / ".claude" / "settings.local.json")  # local: it holds a machine-specific interpreter path
     try:
@@ -425,6 +431,16 @@ def install_claude(repo, path=None, pretool=False, write=False, remove=False):
             hooks.setdefault(ev, []).extend(entries)
     if not hooks:
         cur.pop("hooks")
+    perms = cur.setdefault("permissions", {})
+    allow = perms.get("allow", [])
+    if isinstance(allow, list):  # the allow list is the person's own: only our exact entries are touched
+        allow = [x for x in allow if x not in ALLOW] + ([] if remove else list(ALLOW))
+        if allow:
+            perms["allow"] = allow
+        else:
+            perms.pop("allow", None)
+    if not perms:
+        cur.pop("permissions")
     if write:
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, json.dumps(cur, indent=2))

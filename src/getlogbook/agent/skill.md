@@ -35,10 +35,12 @@ Do not write a note for a chore: a rename, a formatting or comment edit, a depen
 Pass the note as JSON on stdin so quotes and newlines survive:
 
 ```
-echo '{"kind":"finding","topic":"short title","summary":"3-5 sentences: what was found and why it matters",
+logbook note --json <<'EOF'
+{"kind":"finding","topic":"short title","summary":"3-5 sentences: what was found and why it matters",
 "context":"what was asked and what was tried, in order","why":"the cause","wrong":"what was wrong or assumed",
 "fix":"what changed, if anything","decided":"the choice made and the alternatives rejected, with the reason",
-"open":"what is still unknown","scale":"how much: rows, percent, users, days","paths":["src/app/orders.py"]}' | logbook note --json
+"open":"what is still unknown","scale":"how much: rows, percent, users, days","paths":["src/app/orders.py"],"evidence":"what you ran or read: a command and its result, or file:line"}
+EOF
 ```
 
 Leave out fields you have nothing true to say in. `summary` is required.

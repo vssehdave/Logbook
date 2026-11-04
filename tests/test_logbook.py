@@ -1182,6 +1182,44 @@ class TestGrounding(CliRepo):
     def setUp(self):
         super().setUp()
         self.head = commit(self.d, "add total", {"shop/revenue.py": "def total(rows):\n    return sum(rows)\n"})
+        import unittest.mock
+        env = unittest.mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "test-session"})  # these notes are written from inside an agent
+        env.start()
+        self.addCleanup(env.stop)
+
+    def as_a_person(self):
+        os.environ.pop("CLAUDE_CODE_SESSION_ID", None)  # setUp's patch restores it afterwards
+
+    def test_a_person_writes_a_note_in_plain_words_and_it_needs_no_why(self):
+        self.as_a_person()
+        code, text = self.run_cli("note", "Revenue dips come from the stalled export", "shop/revenue.py")
+        (e,) = self.r.load_private()
+        self.assertEqual((e.provenance, e.body["summary"], e.anchor["paths"]), ("user-written", "Revenue dips come from the stalled export", ["shop/revenue.py"]))
+        self.assertNotIn("never injected", text)
+        vs, _ = tree.all_views(self.r)
+        from getlogbook import recall
+        self.assertTrue(recall.injectable({**vs[0], "trusted": True}), "a person's own note is shown to the agent without a why")
+
+    def test_a_person_is_not_held_to_evidence_but_an_agent_is(self):
+        self.as_a_person()
+        self.assertEqual(self.run_cli("note", "the cache is slow")[0] or 0, 0)
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "test-session"
+        with self.assertRaises(SystemExit):
+            self.run_cli("note", "the cache is slow too")
+
+    def test_install_lets_claude_run_the_safe_commands_without_asking_and_nothing_else(self):
+        path, cur = capture.install_claude(self.r, write=True)
+        allow = cur["permissions"]["allow"]
+        self.assertIn("Bash(logbook note:*)", allow)
+        for asks in ("publish", "sync", "purge", "gc", "trust", "config"):
+            self.assertFalse(any(asks in a for a in allow), asks + " must still ask")
+        capture.install_claude(self.r, write=True)
+        self.assertEqual(json.loads(path.read_text())["permissions"]["allow"], allow, "installing twice adds nothing")
+        mine = json.loads(path.read_text())
+        mine["permissions"]["allow"].append("Bash(git status:*)")  # the person's own rule
+        path.write_text(json.dumps(mine))
+        _, after = capture.install_claude(self.r, write=True, remove=True)
+        self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "uninstall removes ours and keeps theirs")
 
     def note(self, *flags, **body):
         obj = {"kind": "finding", "topic": "refund sum", "summary": "x", "why": "y", **body}

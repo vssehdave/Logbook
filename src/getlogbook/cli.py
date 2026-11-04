@@ -88,7 +88,12 @@ def _note_input(a):
         body = {k: getattr(a, k) for k in BODY_FIELDS if getattr(a, k, None)}
         if a.from_stdin:
             body["summary"] = sys.stdin.read().strip()[:MAX_SUMMARY]
-        return (a.kind, a.topic, body, (a.paths.split(",") if a.paths else None), a.commit, a.before_commit, "",
+        words = getattr(a, "text", None) or []  # logbook note "what you found" [files...]: the plain way a person writes one
+        if words and not body.get("summary"):
+            body["summary"], files = words[0][:MAX_SUMMARY], words[1:]
+        else:
+            files = words
+        return (a.kind, a.topic, body, (a.paths.split(",") if a.paths else (files or None)), a.commit, a.before_commit, "",
                 a.sources.split(",") if a.sources else [], a.supersedes.split(",") if a.supersedes else [])
     try:
         obj = json.loads(sys.stdin.read())
@@ -118,7 +123,7 @@ def cmd_note(a):
         raise SystemExit(f"logbook: {foreign[0]} is not one of your notes; only the author can supersede a note")
     if not body.get("summary"):
         raise SystemExit("logbook: a summary is required (what happened, in a few sentences)")
-    if kind == "finding" and not (body.get("why") or body.get("wrong")):
+    if kind == "finding" and not (body.get("why") or body.get("wrong")) and capture.writer() == "agent-written":
         out("note: no why/wrong given; this entry will be searchable but never injected into agent context")
     sha = None
     if commit:
@@ -135,7 +140,7 @@ def cmd_note(a):
     near = [o for o in (ground.overlaps(views(r)[0], topic, body["summary"], cks["files"]) if kind != "summary" else [])
             if o["id"] not in supersedes]
     out("grounding: " + ground.line(cks))
-    for p in ground.problems(cks):
+    for p in ground.problems(cks, capture.writer() == "agent-written"):
         out("  ! " + p)
     for o in near:
         out(f"  ~ may overlap {o['id']} ({'yours' if o['mine'] else 'a teammate'}): {o['topic'][:70]}")
@@ -144,7 +149,7 @@ def cmd_note(a):
     if a.check:
         out("(checked only: nothing was saved)")
         return 0
-    if kind == "finding" and not cks["evidence"] and not a.allow_ungrounded:
+    if kind == "finding" and not cks["evidence"] and not a.allow_ungrounded and capture.writer() == "agent-written":
         raise SystemExit("logbook: not saving a finding that points at nothing. Name a file that exists (paths), a commit, or add an evidence "
                          "field. --allow-ungrounded saves it anyway, marked unverified.")
     e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
@@ -158,8 +163,9 @@ def auto_publish(r, e):
     (pasted table rows, too big, a teammate already shared the same words) stays private. Pushing is still `logbook sync`."""
     if r.publish_mode() != "auto" or e.provenance == "auto-copied":
         return False
-    if ground.problems(e.checks):  # a note that names something that is not there, or points at nothing, is not shared on its own
-        print("logbook: not shared automatically (" + "; ".join(ground.problems(e.checks))[:120] + "); it stays private", file=sys.stderr)
+    bad = ground.problems(e.checks, e.provenance != "user-written")
+    if bad:  # a note that names something that is not there, or an agent's that points at nothing, is not shared on its own
+        print("logbook: not shared automatically (" + "; ".join(bad)[:120] + "); it stays private", file=sys.stderr)
         return False
     try:
         c, _ = share_copy(r, e, False, False)
@@ -875,6 +881,7 @@ def build_parser():
     s = add("join", cmd_join, "init + fetch teammates' entries (run this after cloning)")
     s.add_argument("--remote", default="origin")
     s = add("note", cmd_note, "record a finding or change in your private log")
+    s.add_argument("text", nargs="*", help="the note, in plain words, then the files it is about: logbook note \"late export dips revenue\" shop/revenue.py")
     s.add_argument("--kind", choices=["finding", "change", "summary"], default="finding")
     s.add_argument("--topic")
     for k in BODY_FIELDS:

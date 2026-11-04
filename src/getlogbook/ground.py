@@ -61,12 +61,13 @@ def check(repo, body, topic, paths, sha=None):
             "evidence": bool(body.get("evidence") or found_f or found_c), "at": g.head_sha(repo.root) or ""}
 
 
-def problems(cks):
-    """What is wrong with a checked note, in words: empty when everything it names exists and it points at something."""
+def problems(cks, strict=True):
+    """What is wrong with a checked note, in words: empty when everything it names exists and it points at something. A person's own note
+    is not held to the second rule (strict=False): their word is the evidence; a note an agent wrote is."""
     if not cks:
         return []
     out = [f"not found: {m}" for m in cks.get("missing", [])]
-    if not cks.get("evidence"):
+    if strict and not cks.get("evidence"):
         out.append("it points at nothing: no file that exists, no commit, no evidence")
     return out
 
