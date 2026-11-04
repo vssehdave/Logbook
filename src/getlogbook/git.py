@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -99,12 +100,20 @@ def config_get(cwd, key):
     return out.strip() if rc == 0 else ""
 
 
+def _is_rev(sha):
+    """A commit id and nothing else. Whatever starts with a dash would reach git as an option (`show --output=<file>` writes a file),
+    so the helpers below refuse anything that is not hex, however it got here."""
+    return bool(sha) and bool(re.match(r"^[0-9a-fA-F]{4,64}$", sha))
+
+
 def commit_exists(cwd, sha):
-    return bool(sha) and try_run(["cat-file", "-e", f"{sha}^{{commit}}"], cwd)[0] == 0
+    return _is_rev(sha) and try_run(["cat-file", "-e", f"{sha}^{{commit}}"], cwd)[0] == 0
 
 
 def commit_info(cwd, sha):
     """Return dict(sha, tree, parent, author, date, subject) or None."""
+    if not _is_rev(sha):
+        return None
     rc, out, _ = try_run(["show", "-s", "--format=%H%x1f%T%x1f%P%x1f%an%x1f%aI%x1f%s", sha], cwd)
     if rc:
         return None
@@ -114,6 +123,8 @@ def commit_info(cwd, sha):
 
 def patch_id(cwd, sha):
     """Stable patch-id of a single-parent commit, else None."""
+    if not _is_rev(sha):
+        return None
     rc, patch, _ = try_run(["diff-tree", "-p", "--root", sha], cwd)
     if rc or not patch.strip():
         return None
@@ -122,6 +133,8 @@ def patch_id(cwd, sha):
 
 
 def changed_paths(cwd, sha):
+    if not _is_rev(sha):
+        return []
     rc, out, _ = try_run(["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha], cwd)
     return [l for l in out.splitlines() if l] if rc == 0 else []
 

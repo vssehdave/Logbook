@@ -28,22 +28,32 @@ injected into an agent's prompt. The only measurements so far are two small smok
     logbook setup          # shows what it will change and asks; --yes to apply, --dry-run to only look
     logbook uninstall      # puts every file back (your notes are kept)
 
-One command starts the repo, fetches teammates' notes when there is a remote, chains a git post-commit hook and a pre-push hook (it never
-blocks a push and only sends notes you already published), and for each agent it finds writes that agent's hooks, an
+One command starts the repo, fetches teammates' notes when there is a remote, chains a git post-commit hook and a pre-push hook (it only reminds
+you of unshared notes, never blocks a push and never sends notes: `logbook sync` does), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
 `.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
 `.github/copilot-instructions.md`, `GEMINI.md` and `.cursor`. `logbook status --check` shows what is installed.
 
-## The Sources band (Claude Code only, optional)
+## The Bibliography band (Claude Code only, optional)
 
     /plugin install logbook --marketplace vssehdave/Logbook
 
-A row above the prompt lists the numbered notes the latest answer cited, one line of headers, with **Copy** and **[+]**. Expanded, a note a
-teammate shared also shows its commit or pull request link, who wrote it and when ("Note added by <name> on <date>" when it has no commit).
-Your own and private notes stay one line. It counts the sources cited in this chat and starts again at one after `/clear`. Other agents get
-the same numbers in the answer and `logbook cites` for the list. The band needs the `logbook` command on your PATH. Checked with
-`claude plugin validate` and `claude plugin test`; not yet watched in a long real session.
+A row above the prompt, always there: **bibliography**, then a dot shaded by the publish mode (light grey never, pale yellow ask, yellow claude, darker yellow auto) and the mode's name, which does what **details** does, then how many sources this chat has cited (in grey), a finder on the right, and
+**details** (it reads **compact** while the details are showing). Under it, the sources cited so far, as `¹ title` buttons that fit the width (`+N more` when they do
+not). With details on, the mode selector (`never  ask  [ claude ]  auto`, each a button that changes the mode, the chosen one in light yellow) sits right after the underlined "bibliography" text (the dot and the count are hidden meanwhile), a rule closes the header, and a note a teammate shared also shows its commit or pull request header as a link (set `commit_url` and `pr_url` in
+`.git/logbook/config.json` for a host Logbook does not know), who wrote it and when ("Note added by
+<name> on <date>" when it has no commit). Your own and private notes stay one line. When there are more rows than the band may take, the
+band scrolls (mouse wheel, or the keys while it is focused) and says how many are hidden.
+
+Click `¹` and a peek appears under the header: the words around that citation in the closest answer that cites it, the latest. The finder
+on the right shows the number and `x/y` (this is the xth of y answers that cite it, counted over the whole chat); up goes to
+an earlier answer, down to a later one. Click the peek and the chat scrolls to that answer. The engine only lets a mod scroll the chat in
+answer to your own click. The band finds the answers by asking `logbook cites --where N`, which reads Claude Code's transcript of the chat, so
+it works for every answer and survives reloads; the jump uses the transcript row's id. Nothing can be typed into the finder. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
+the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. Checked with `claude plugin validate` and
+`claude plugin test` and, for the first version, in a live session; scrolling the chat to a citation and the finder are new and
+unproven at narrow widths.
 
 ## What the agent does
 

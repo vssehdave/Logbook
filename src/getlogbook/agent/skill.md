@@ -67,5 +67,5 @@ A summary is a short note about a whole node: the repo, or a branch. Teammates' 
 ## Rules
 
 - Never put secrets, personal data or pasted data rows in a note. Publishing is a separate, explicit step the user decides on.
-- Notes are private until published. Do not run `logbook publish` unless the user asks, and then show the preview and wait for the user's yes before confirming. Publishing moves the note: the shared copy replaces the private one.
+- Whether a note is shared follows the publish mode; `logbook config publish` prints it. ask (the default): publish only when the user asks, and wait for their yes to the preview. claude: you may publish a note you judge worth sharing with `logbook publish <id> --yes`, never one with secrets or personal data. auto: notes are shared as they are written, nothing to do. never: do not publish. Publishing moves the note: the shared copy replaces the private one.
 - Stay short on chores and honest on uncertainty: say "not verified" rather than guessing.

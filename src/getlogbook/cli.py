@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 
 from . import capture, cites, nav, recall, sync, tree
@@ -11,7 +10,7 @@ from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
 from .safety import sanitize as safety_sanitize
-from .store import Repo
+from .store import PUBLISH_MODES, Repo
 
 SHARE_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale")  # allowlist: evidence is opt-in
 
@@ -126,7 +125,26 @@ def cmd_note(a):
         sha = full.strip()
     e = capture.make_entry(r, kind, topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha, level=level, sources=sources,
                            pending=(kind == "change" and before_commit))
-    out(f"recorded {e.id} ({'pending: attaches to your next commit' if before_commit and kind == 'change' else 'private'})")
+    pending = before_commit and kind == "change"
+    shared = not pending and auto_publish(r, e)
+    out(f"recorded {e.id} ({'pending: attaches to your next commit' if pending else 'published (auto mode)' if shared else 'private'})")
+
+
+def auto_publish(r, e):
+    """Publish mode auto: share a note as soon as it is written, redacted exactly as `logbook publish` would. A note the checks refuse
+    (pasted table rows, too big, a teammate already shared the same words) stays private. Pushing is still `logbook sync`."""
+    if r.publish_mode() != "auto" or e.provenance == "auto-copied":
+        return False
+    try:
+        c, _ = share_copy(r, e, False, False)
+        if r.duplicate_of(c):
+            return False
+        r.publish([c])
+    except (SystemExit, ValueError) as ex:
+        print(f"logbook: not shared automatically ({ex}); it stays private", file=sys.stderr)
+        return False
+    r.drop_private(e.id)
+    return True
 
 
 def share_copy(r, e, include_evidence, allow_table):
@@ -154,8 +172,8 @@ def share_copy(r, e, include_evidence, allow_table):
 
 def cmd_publish(a):
     r = need_repo()
-    if not r.policy().get("publish", True):
-        raise SystemExit("logbook: this repo's policy has publishing turned off (.logbook/policy.json)")
+    if r.publish_mode() == "never":
+        raise SystemExit("logbook: publishing is off: the publish mode is never, or this repo's policy turns it off (.logbook/policy.json)")
     ready = []
     if getattr(a, "all", False):
         ids = r.unpublished()
@@ -187,7 +205,7 @@ def cmd_publish(a):
         out("nothing new to publish.")
         return 0
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
-    if not a.yes and input("Publish exactly the text above? [y/N] ").strip().lower() != "y":
+    if not a.yes and _ask("Publish exactly the text above? [y/N] ").strip().lower() != "y":
         raise SystemExit("aborted; nothing published")
     for c, h in ready:
         if digest_hash(c.to_json()) != h:
@@ -203,6 +221,13 @@ def cmd_publish(a):
         out(json.dumps(sync.push(r)))
 
 
+def _ask(prompt):
+    try:
+        return input(prompt)
+    except EOFError:
+        return ""
+
+
 def _pick_unpublished(r):
     """Numbered list of private notes not shared yet; asks which ones when a person is at the keyboard."""
     q = sorted(r.unpublished(), key=lambda e: e.id, reverse=True)
@@ -213,7 +238,10 @@ def _pick_unpublished(r):
     if not sys.stdin.isatty():
         out("pass ids to publish, or --all")
         return []
-    ans = input("which ones? (numbers like 1,3 / all / empty to cancel) ").strip().lower()
+    try:
+        ans = input("which ones? (numbers like 1,3 / all / empty to cancel) ").strip().lower()
+    except EOFError:
+        return []
     if ans == "all":
         return q
     want = {int(x) for x in ans.replace(" ", "").split(",") if x.isdigit()}
@@ -222,14 +250,6 @@ def _pick_unpublished(r):
 
 def cmd_sync(a):
     r = need_repo()
-    if a.hook:  # called by the pre-push hook: never block or fail the push it is attached to
-        if os.environ.get("LOGBOOK_PUSHING") or a.remote not in sync.remotes(r):
-            return 0
-        os.environ["LOGBOOK_PUSHING"] = "1"  # the push below fires the same hook again
-        res = sync.push(r, a.remote, timeout=20)
-        if not res["ok"]:
-            print(f"logbook: your notes were not pushed ({res['error'][:120]}). `logbook sync` retries.", file=sys.stderr)
-        return 0
     res = sync.sync(r, a.remote, a.fetch_only, a.depth)
     out(json.dumps(res, indent=2))
     return 0 if res["fetch"]["ok"] and res.get("push", {"ok": True})["ok"] else 1
@@ -420,7 +440,7 @@ def cmd_status(a):
     stale = [s for s in tree.summaries(vs) if not s["fresh"]]
     if stale:
         out(f"{len(stale)} summary(ies) out of date: `logbook summarize` briefs an agent to refresh them")
-    waiting = len(r.unpublished()) if r.policy().get("publish", True) else 0
+    waiting = len(r.unpublished()) if r.publish_mode() != "never" else 0
     if waiting:
         out(f"{waiting} private note(s) not shared yet: `logbook publish`")
     if getattr(a, "check", False):
@@ -548,17 +568,21 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None}
+CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None, "publish": PUBLISH_MODES}
 
 
 def cmd_queue(a):
     """Private notes that are not shared yet. Sharing stays your decision: this only lists, and `publish` previews and asks."""
     r = need_repo()
-    q = r.unpublished() if r.policy().get("publish", True) else []
+    q = r.unpublished() if r.publish_mode() != "never" else []
     if a.hook:
+        said = []
         if q:
-            print(f"logbook: {len(q)} private note(s) are not shared with your team yet. "
-                  "`logbook publish --all` shows what would be shared and asks first.", file=sys.stderr)
+            said.append(f"{len(q)} private note(s) are not shared with your team yet (`logbook publish` shows what would be shared and asks first).")
+        if "origin" in sync.remotes(r) and sync.unpushed(r):
+            said.append("your published notes are not pushed yet (`logbook sync` pushes them).")
+        if said:
+            print("logbook: " + " ".join(said), file=sys.stderr)
         return 0
     if not q:
         out("nothing waiting: every note of yours is shared, auto-copied, or publishing is off for this repo.")
@@ -580,7 +604,7 @@ def cmd_config(a):
     if a.key not in CONFIG_KEYS:
         raise SystemExit(f"logbook: unknown setting {a.key!r}; choose from {', '.join(CONFIG_KEYS)}")
     if a.value is None:
-        out(str(c.get(a.key, "(default)")))
+        out(r.publish_mode() if a.key == "publish" else str(c.get(a.key, "(default)")))
         return 0
     allowed = CONFIG_KEYS[a.key]
     if allowed and a.value not in allowed:
@@ -766,10 +790,13 @@ def cmd_cites(a):
     """The numbered sources behind an answer in this chat. Teammates' shared notes carry a link, a name and a date."""
     r = need_repo()
     session = a.session or cites.latest_session(r)
+    if a.where:  # the answers in this chat that cite this number, from Claude Code's transcript of it
+        out(json.dumps({"session": session, "hits": cites.hits(session, a.where)}, ensure_ascii=False))
+        return 0
     vs, _ = views(r)
     recs = cites.records(r, session, vs)
     if a.json:
-        out(json.dumps({"session": session, "sources": recs}, ensure_ascii=False))
+        out(json.dumps({"session": session, "mode": r.publish_mode(), "sources": recs}, ensure_ascii=False))
         return 0
     if not recs:
         out("no notes have been numbered in this chat yet")
@@ -843,7 +870,6 @@ def build_parser():
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
     s = add("sync", cmd_sync, "fetch teammates' entries and push yours")
     s.add_argument("--remote", default="origin")
-    s.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--fetch-only", action="store_true")
     s.add_argument("--depth", type=int)
     s = add("query", cmd_query, "search entries")
@@ -912,6 +938,7 @@ def build_parser():
     s.add_argument("--session", help="the chat's id (default: the most recent one)")
     s.add_argument("--json", action="store_true")
     s.add_argument("--compact", action="store_true", help="one short line per source, no links")
+    s.add_argument("--where", type=int, help="the answers in this chat that cite this number, as JSON (the band uses it)")
     add("snippet", cmd_snippet, "text to paste into CLAUDE.md / AGENTS.md / copilot-instructions for agents without hooks")
     s = add("demo", cmd_demo, "build a scratch two-person team and walk through it")
     s.add_argument("--dir")

@@ -24,6 +24,7 @@ _REF_RE = re.compile(r"/(?:branch)?log/([0-9a-f]{6,16})/([0-9a-f]{2,16})$")
 # One shelf per person. The second path part used to be a per-clone device id; it is now this constant, still hex so that
 # 0.0.2 readers match it, and git refuses `log/<user>` next to `log/<user>/<device>`, so the path shape cannot change.
 SHELF = "000000"
+PUBLISH_MODES = ("never", "ask", "claude", "auto")  # least to most hands-off
 MAX_BLOB = 65536
 MAX_PER_REF = 5000
 DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "named",
@@ -120,6 +121,14 @@ class Repo:
         want = self.cfg().get("attribution", "named")
         cap = self.policy().get("attribution", "named")
         return order[min(order.index(want) if want in order else 1, order.index(cap) if cap in order else 1)]
+
+    def publish_mode(self):
+        """How notes reach the shared log: never (refused), ask (you confirm a preview each time; the default), claude (the agent may
+        publish what it judges worth sharing), auto (every note, as it is written). A repo policy that turns publishing off wins."""
+        if not self.policy().get("publish", True):
+            return "never"
+        mode = self.cfg().get("publish", "ask")
+        return mode if mode in PUBLISH_MODES else "ask"
 
     def committers(self):
         """Ids of people with commits on this branch's first-parent line (set for free by the Anchorer, else one git log)."""

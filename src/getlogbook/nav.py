@@ -8,6 +8,7 @@ Addresses: `repo`, `branch:<name>`, `commit:<sha prefix>`, `note:<id prefix>`.
 """
 from __future__ import annotations
 
+from . import git as g
 from . import tree
 
 KINDS = ("branch", "commit", "note")
@@ -40,11 +41,19 @@ def build(repo):
     cur = [commit_node(c, f"branch:{here}") for c in t["commits"] if c["entries"] or not c["trivial"]]
     branches = {here: cur}
     for u in t["unplaced"]:  # notes about a branch's work that no commit carries yet: they hang off the branch node
-        kids = []
+        kids, top = [], f"branch:{u['branch']}"
         for v in u["entries"]:
-            nid = f"note:{v['id']}"
-            nodes[nid] = _node(nid, "note", v["topic"], f"branch:{u['branch']}", view=v)
-            kids.append(nid)
+            parent = top
+            if v["placed"]:  # on a commit that is not on this clone's main line (an old ref, a shallow clone): it still gets a node
+                parent = f"commit:{v['placed'][:8]}"
+                if parent not in nodes:
+                    info = g.commit_info(repo.root, v["placed"]) or {}
+                    nodes[parent] = _node(parent, "commit", info.get("subject") or v["subject"], top, sha=v["placed"])
+                    kids.append(parent)
+                nodes[parent]["children"].append(f"note:{v['id']}")
+            else:
+                kids.append(f"note:{v['id']}")
+            nodes[f"note:{v['id']}"] = _node(f"note:{v['id']}", "note", v["topic"], parent, view=v)
         branches[u["branch"]] = kids + branches.get(u["branch"], [])
     for (level, b), _s in by_branch.items():
         if level == "branch":

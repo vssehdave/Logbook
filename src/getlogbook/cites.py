@@ -10,7 +10,9 @@ with no commit says "Note added by <name> on <date>".
 from __future__ import annotations
 
 import json
+import os
 import re
+from pathlib import Path
 
 from . import git as g
 from .safety import sanitize
@@ -61,12 +63,59 @@ def latest_session(repo):
     return files[-1].stem if files else ""
 
 
+_RUNS = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
+
+
+def transcript_path(session):
+    """Claude Code's transcript of a chat: <config dir>/projects/<project>/<session>.jsonl, the config dir being CLAUDE_CONFIG_DIR or ~/.claude."""
+    safe = _SAFE.sub("", session or "")
+    if not safe:
+        return None
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "projects"
+    return next(base.glob(f"*/{safe}.jsonl"), None)
+
+
+def _clean(s):
+    return re.sub(r"\s+", " ", s)  # runs of whitespace become one space; the edges keep theirs, so "²" and the next word stay apart
+
+
+def hits(session, n):
+    """The answers in this chat that cite number n, oldest first, from the transcript, so it does not matter what is on screen:
+    [{uuid, before, after}], the uuid being the row's id (what a client scrolls to) and before/after the words around the citation.
+    A run of superscript digits counts only when it is exactly n: the citation 2 is not part of 22 or 12."""
+    path = transcript_path(session)
+    if path is None:
+        return []
+    mark, out = sup(n), []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    for line in lines:
+        if '"type":"assistant"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("type") != "assistant" or d.get("isSidechain") or not isinstance(d.get("uuid"), str):
+            continue
+        content = (d.get("message") or {}).get("content")
+        text = content if isinstance(content, str) else " ".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+        run = next((m for m in _RUNS.finditer(text) if m.group(0) == mark), None)
+        if run:
+            out.append({"uuid": d["uuid"], "before": _clean(text[max(0, run.start() - 70):run.start()]),
+                        "after": _clean(text[run.end():run.end() + 40])})
+    return out
+
+
 def web_url(repo, kind, ident):
-    """Link to a commit or a pull request on GitHub, GitLab or Bitbucket; '' elsewhere (set `commit_url` in the config to add a host)."""
+    """Link to a commit or a pull request on GitHub, GitLab or Bitbucket; '' elsewhere. For another host, or a local remote, set
+    `commit_url` (with {sha}) and `pr_url` (with {n}) in the config."""
     url = g.try_run(["remote", "get-url", "origin"], repo.root)[1].strip()
-    tmpl = repo.cfg().get("commit_url")
-    if tmpl and kind == "commit":
-        return tmpl.replace("{sha}", ident)
+    tmpl = repo.cfg().get("commit_url" if kind == "commit" else "pr_url")
+    if tmpl:
+        return tmpl.replace("{sha}" if kind == "commit" else "{n}", ident)
     m = _REMOTE.match(url)
     if not m:
         return ""
@@ -85,20 +134,20 @@ def record(repo, v, n):
     """Everything known about one citation. `expandable` is true for a note a teammate shared: those get a link and a name."""
     sha = v["placed"] or v["sha"]
     info = (g.commit_info(repo.root, sha) or {}) if sha else {}
-    header = info.get("subject") or v["subject"] or v["topic"]
-    pr = _PR.search(header or "")
+    commit_header = info.get("subject") or v["subject"]
+    pr = _PR.search(commit_header or "")
     if not v["mine"]:  # words from a teammate: shown to people and agents, so they go through the same filter as injected notes
-        header, v = sanitize(header, 200), {**v, "author": sanitize(v["author"], 60), "topic": sanitize(v["topic"], 200)}
+        commit_header, v = sanitize(commit_header, 200), {**v, "author": sanitize(v["author"], 60), "topic": sanitize(v["topic"], 200)}
     url = ""
-    if sha:
-        url = web_url(repo, "pr", pr.group(1) or pr.group(2)) if pr else web_url(repo, "commit", sha)
+    if sha:  # the pull request when the header names one and the host has an address for it, else the commit
+        url = (web_url(repo, "pr", pr.group(1) or pr.group(2)) if pr else "") or web_url(repo, "commit", sha)
     date = (v["created"] or "")[:10]
     expandable = v["scope"] == "shared" and not v["mine"]
     if sha:
-        detail = f"{header}  by {v['author']}, {date}" + (f"  {url}" if url else f"  commit {sha[:8]}")
+        detail = f"{v['topic']} | {commit_header}  by {v['author']}, {date}" + (f"  {url}" if url else f"  commit {sha[:8]}")
     else:
         detail = f"Note added by {v['author']} on {date}"
-    return {"n": n, "mark": sup(n), "id": v["id"], "header": header if sha else v["topic"], "url": url, "author": v["author"],
+    return {"n": n, "mark": sup(n), "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
             "date": date, "scope": v["scope"], "mine": v["mine"], "has_commit": bool(sha), "expandable": expandable,
             "detail": detail if expandable else ""}
 

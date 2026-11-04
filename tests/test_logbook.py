@@ -943,6 +943,19 @@ class TestTreeNav(CliRepo):
         self.assertIn("refunds are summed", leaf)
         self.assertEqual(self.run_cli("ask", "commit:zzzz")[0], 4)
 
+    def test_a_note_on_a_commit_off_the_main_line_still_has_a_node(self):
+        """An injected note names `commit:<sha>`; that address must open, also when the commit is not on this clone's main line."""
+        main = sh("git", "branch", "--show-current", cwd=self.d)
+        sh("git", "switch", "-q", "-c", "side", cwd=self.d)
+        side = commit(self.d, "side work", {"s.txt": "x\n"})
+        sh("git", "switch", "-q", main, cwd=self.d)
+        e = capture.make_entry(self.r, "finding", "side finding", {"summary": "s", "why": "w"}, sha=side)
+        code, text = self.run_cli("ask", f"commit:{side[:8]}")
+        self.assertEqual(code, 0, text)
+        self.assertIn(f"note:{e.id}", text)
+        self.assertIn("side work", text)
+        self.assertIn(f"commit:{side[:8]}", self.run_cli("ask", f"note:{e.id[:14]}")[1], "the path from the root goes through the commit")
+
     def test_drafts_are_folded_out_of_the_log_until_asked_for(self):
         commit(self.d, "wip: half done", {"shop/other.py": "y = 2\n"})
         commit(self.d, "fixup! base", {"shop/other.py": "y = 3\n"})
@@ -1031,6 +1044,66 @@ class TestCitations(CliRepo):
         self.assertIn("¹", text)
         self.assertNotIn("my private note  by", text)
 
+    def test_every_answer_that_cites_a_number_is_found_in_the_transcript_whatever_is_on_screen(self):
+        import os
+        import unittest.mock
+        from getlogbook import cites
+        proj = self.root / "claude" / "projects" / "p"
+        proj.mkdir(parents=True)
+
+        def row(uuid, kind, text, side=False):
+            return json.dumps({"type": kind, "uuid": uuid, "isSidechain": side, "message": {"role": kind, "content": [{"type": "text", "text": text}]}},
+                              ensure_ascii=False, separators=(",", ":"))
+
+        rows = [row("u1", "user", "why? ²"), row("a1", "assistant", "Refunds counted as revenue² and the export is late¹."),
+                row("a2", "assistant", "Nothing cited here."), row("a3", "assistant", "Again²,\n  the same."),
+                row("a4", "assistant", "A number like ²² is another, and so is ¹²."), row("a5", "assistant", "side chain²", side=True)]
+        (proj / "chat9.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+        with unittest.mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.root / "claude")}):
+            found = cites.hits("chat9", 2)
+            self.assertEqual([h["uuid"] for h in found], ["a1", "a3"], "oldest first; not the user's row, not a side chain, not 22 or 12")
+            self.assertEqual((found[0]["before"], found[0]["after"]), ("Refunds counted as revenue", " and the export is late¹."))
+            self.assertEqual(found[1]["after"], ", the same.")
+            self.assertEqual([h["uuid"] for h in cites.hits("chat9", 22)], ["a4"])
+            self.assertEqual(cites.hits("no-such-chat", 2), [])
+            data = json.loads(self.run_cli("cites", "--where", "2", "--session", "chat9")[1])
+            self.assertEqual([h["uuid"] for h in data["hits"]], ["a1", "a3"])
+
+    def test_a_hostile_anchor_cannot_make_git_write_a_file(self):
+        """`git show --output=<file>` overwrites a file. A teammate's note carries its anchor sha into git arguments, so it must be hex."""
+        victim = self.d / "victim.txt"
+        victim.write_text("precious\n")
+        sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
+        (note,) = self.teammate_notes(("evil", "--output=victim.txt"))
+        from getlogbook import cites
+        vs, _ = tree.all_views(self.r)
+        view = next(v for v in vs if v["id"] == note)
+        self.assertEqual(view["sha"], "", "a sha that is not hex is dropped when the entry is read")
+        cites.number(self.r, "s1", note)
+        self.run_cli("cites", "--session", "s1")
+        self.run_cli("inject", "--prompt", "why is revenue wrong?", "--session", "s2")
+        self.assertEqual(victim.read_text(), "precious\n", "the file was not touched")
+        self.assertIsNone(g.commit_info(self.d, "--output=victim.txt"), "the git helpers refuse it too")
+        self.assertFalse(g.commit_exists(self.d, "--output=victim.txt"))
+        self.assertEqual(g.changed_paths(self.d, "--output=victim.txt"), [])
+        self.assertEqual(victim.read_text(), "precious\n")
+
+    def test_a_local_remote_has_no_link_until_a_template_gives_one_and_a_pr_header_falls_back_to_the_commit(self):
+        from getlogbook import cites
+        head = commit(self.d, "Fix refunds (#12)", {"shop/revenue.py": "x = 3\n"})
+        (note,) = self.teammate_notes(("refund fix", head))
+        vs, _ = tree.all_views(self.r)
+        view = next(v for v in vs if v["id"] == note)
+        self.assertEqual(cites.record(self.r, view, 1)["url"], "", "no remote, no address, so no link")
+        c = self.r.cfg()
+        c["commit_url"] = "https://git.example/acme/shop/c/{sha}"
+        self.r.save_cfg(c)
+        self.assertEqual(cites.record(self.r, view, 1)["url"], f"https://git.example/acme/shop/c/{head}", "no pr_url: the commit")
+        c["pr_url"] = "https://git.example/acme/shop/pr/{n}"
+        self.r.save_cfg(c)
+        self.assertEqual(cites.record(self.r, view, 1)["url"], "https://git.example/acme/shop/pr/12")
+        self.assertEqual(cites.record(self.r, view, 1)["mark"], "¹")
+
     def test_injected_notes_carry_a_number_that_stays_and_a_source_line(self):
         sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
         head = sh("git", "rev-parse", "HEAD", cwd=self.d)
@@ -1039,6 +1112,7 @@ class TestCitations(CliRepo):
         text = recall.digest(self.r, "UserPromptSubmit", "why is revenue wrong?", session="chat1")
         self.assertIn("[1]", text)
         self.assertIn("source:", text)
+        self.assertIn("¹ ", self.run_cli("cites", "--session", "chat1")[1], "the label is the bare superscript")
         self.assertIn("superscript", text)
         code, listing = self.run_cli("cites", "--session", "chat1")
         self.assertEqual(code, 0, listing)
@@ -1046,6 +1120,60 @@ class TestCitations(CliRepo):
         data = json.loads(self.run_cli("cites", "--session", "chat1", "--json")[1])
         self.assertEqual({s["id"] for s in data["sources"]}, {first, second})
         self.assertEqual(self.run_cli("cites", "--session", "nope")[0], 4)
+
+
+class TestPublishModes(CliRepo):
+    def write(self, summary="total() adds refunded rows"):
+        body = {"kind": "finding", "topic": "refunds", "summary": summary, "why": "no filter", "paths": ["shop/revenue.py"]}
+        return self.run_cli("note", "--json", stdin=json.dumps(body))
+
+    def mode(self, m):
+        self.assertEqual(self.run_cli("config", "publish", m)[0], 0)
+
+    def test_the_default_is_ask_and_only_the_four_modes_are_accepted(self):
+        self.assertEqual(self.run_cli("config", "publish")[1].strip(), "ask")
+        self.mode("claude")
+        self.assertEqual(self.run_cli("config", "publish")[1].strip(), "claude")
+        with self.assertRaises(SystemExit):
+            self.run_cli("config", "publish", "sometimes")
+        self.assertEqual(json.loads(self.run_cli("cites", "--json")[1])["mode"], "claude")
+
+    def test_never_refuses_to_publish_and_stops_reminding(self):
+        e = capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
+        self.mode("never")
+        with self.assertRaises(SystemExit):
+            self.run_cli("publish", e.id, "--yes")
+        self.assertNotIn("not shared yet", self.run_cli("status")[1])
+        self.assertIsNotNone(self.r.get_private(e.id))
+
+    def test_a_repo_policy_that_turns_publishing_off_wins_over_any_mode(self):
+        self.mode("auto")
+        (self.d / ".logbook").mkdir()
+        (self.d / ".logbook" / "policy.json").write_text(json.dumps({"publish": False}))
+        self.assertEqual(self.r.publish_mode(), "never")
+
+    def test_ask_and_claude_leave_a_new_note_private(self):
+        for m in ("ask", "claude"):
+            self.mode(m)
+            code, text = self.write(f"note written in {m} mode")
+            self.assertIn("(private)", text)
+        self.assertEqual(self.r.load_shared()[0], [])
+
+    def test_auto_shares_a_note_as_it_is_written_redacted_and_moves_it(self):
+        self.mode("auto")
+        code, text = self.write("mail me at someone@example.com about refunds")
+        self.assertIn("published (auto mode)", text)
+        shared, _ = self.r.load_shared()
+        self.assertEqual(len(shared), 1)
+        self.assertNotIn("someone@example.com", shared[0].entry.body["summary"])
+        self.assertEqual(self.r.load_private(), [], "the private copy was moved")
+
+    def test_auto_keeps_a_note_private_when_the_checks_refuse_it(self):
+        self.mode("auto")
+        code, text = self.write("a|1|x\nb|2|y\nc|3|z")  # looks like pasted table rows
+        self.assertIn("(private)", text)
+        self.assertEqual(self.r.load_shared()[0], [])
+        self.assertEqual(len(self.r.load_private()), 1)
 
 
 class TestShelf(Base):
@@ -1127,16 +1255,46 @@ class TestPublishMoves(CliRepo):
         self.assertIsNotNone(self.r.get_private(mine.id), "a skipped note stays private")
         self.assertIn("would publish", self.run_cli("publish", mine.id, "--yes", "--force")[1])
 
-    def test_pre_push_hook_pushes_published_notes_and_never_the_private_ones(self):
+    def remote_with_hooks(self):
         self.run_cli("install", "--yes", "--agent", "agents-md")
         remote = self.root / "remote.git"
         sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
         sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+
+    def git_push(self):
+        p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stderr
+
+    def test_git_push_only_reminds_and_logbook_sync_is_what_pushes_notes(self):
+        self.remote_with_hooks()
+        e = capture.make_entry(self.r, "finding", "one", {"summary": "s", "why": "w"})
+        self.run_cli("publish", e.id, "--yes")
+        self.assertIn("published notes are not pushed yet", self.git_push())
+        self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d), "git push never sends notes")
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+        self.assertNotIn("not pushed yet", self.git_push(), "nothing left to remind about")
+        e2 = capture.make_entry(self.r, "finding", "two", {"summary": "s", "why": "w"})
+        self.run_cli("publish", e2.id, "--yes")
+        self.assertIn("not pushed yet", self.git_push())
+        self.assertEqual(self.run_cli("sync")[0], 0, "a second sync with the hook installed works too")
+
+    def test_a_closed_stdin_is_no_answer_not_a_traceback(self):
+        old = sys.stdin
+        sys.stdin = io.StringIO("")
+        try:
+            self.assertEqual(cli._ask("? "), "")
+        finally:
+            sys.stdin = old
+
+    def test_sync_sends_published_notes_and_never_the_private_ones(self):
+        self.remote_with_hooks()
         shared = capture.make_entry(self.r, "finding", "shared one", {"summary": "s", "why": "w"})
         private = capture.make_entry(self.r, "finding", "private one", {"summary": "s", "why": "w"})
         self.run_cli("publish", shared.id, "--yes")
-        p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
-        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.run_cli("sync")[0], 0)
         self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
         names = sh("git", "ls-tree", "-r", "--name-only", self.r.own_ref(), cwd=self.d)
         self.assertIn(shared.id, names)
