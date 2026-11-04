@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.4
 
 - **Notes go in as `key: value` lines (`logbook note --fields`), not JSON.** In a real session Claude's note was refused because Claude Code flags `{"` in a shell command as obfuscation and needs a person to approve it, whatever allow rules exist, so an unattended agent could never save a note (and an attended one was prompted every time). The skill, rules and prompts now use `--fields`; `--json` still works.
 - **Fixed: the "record a note" prompt never came.** The hook decided Claude had already written a note when a command merely contained the word note, so Claude's own `logbook ask "... same note id"` switched the prompt off. Only the `note` subcommand counts now. Found by running a real Claude session on a real question, where it never wrote a note; our earlier 4-of-4 measurement used a toy transcript and missed it.
