@@ -895,6 +895,37 @@ class TestMergeCards(Base):
         self.assertEqual(tree.merged_branch("Merge pull request #7 from acme/fix-refunds"), "fix-refunds")
 
 
+class TestCommands(CliRepo):
+    def test_log_shows_notes_next_to_their_commits(self):
+        capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
+                           paths=["shop/revenue.py"])
+        code, text = self.run_cli("log")
+        self.assertEqual(code, 0)
+        self.assertIn("base", text)
+        self.assertIn("refunds are summed", text)
+        self.assertIn("you, private", text)
+        self.assertNotIn("no filter", text, "the body only shows with -v")
+        self.assertIn("why: no filter", self.run_cli("log", "-v")[1])
+
+    def test_ask_routes_ids_files_text_and_ranges(self):
+        e = capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
+                               paths=["shop/revenue.py"])
+        second = commit(self.d, "second", {"shop/other.py": "y = 2\n"})
+        self.assertIn(e.id, self.run_cli("ask", e.id)[1])
+        self.assertIn(e.id, self.run_cli("ask", "shop/revenue.py")[1])
+        self.assertIn(e.id, self.run_cli("ask", "refunds", "summed")[1])
+        self.assertIn("second", self.run_cli("ask", "HEAD~1..HEAD")[1])
+        self.assertEqual(self.run_cli("ask", "zzzzqq")[0], 4)
+
+    def test_help_lists_the_main_commands_and_old_names_still_run(self):
+        h = cli.build_parser().format_help()
+        for name in ("setup", "note", "publish", "sync", "ask", "log", "status"):
+            self.assertIn(f"  {name}  ", h)
+        for name in ("capture", "post-commit", "query", "install"):
+            self.assertNotIn(f"\n    {name}", h, "hook-only and older names are not listed")
+        self.assertEqual(self.run_cli("query", "zzzzqq")[0], 4, "the old name still works")
+
+
 class TestShelf(Base):
     """One shelf per person: two machines of the same person write the same ref, and sync merges them."""
 

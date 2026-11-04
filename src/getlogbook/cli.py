@@ -51,7 +51,7 @@ def need_repo():
     except Exception:
         raise SystemExit("logbook: not inside a git repository")
     if not r.cfg().get("user"):
-        raise SystemExit("logbook: run `logbook init` (or `logbook join`) first")
+        raise SystemExit("logbook: run `logbook setup` first")
     return r
 
 
@@ -67,7 +67,7 @@ def cmd_init(a):
         c["attribution"] = a.attribution
         r.save_cfg(c)
     out(f"initialised. you are {c['user']}; attribution: {r.attribution()}")
-    out("next: `logbook install-hook` (git floor) and `logbook install --agent claude-code --write`")
+    out("next: `logbook setup`")
 
 
 def cmd_join(a):
@@ -269,7 +269,8 @@ def cmd_explain(a):
         names = cands
     ranked = recall.rank(r, names=names, files=[a.target], views=vs, anch=an)
     if not ranked:
-        out(f"nothing recorded for {a.target}")
+        if not getattr(a, "quiet", False):
+            out(f"nothing recorded for {a.target}")
         return 4
     known = sorted({n for m in names for n in tree.aliases_for(r, m)})
     if len(known) > 1:
@@ -302,6 +303,77 @@ def cmd_path(a):
     return 0
 
 
+def _entry_line(v, verbose):
+    who = v["author"] + (", private" if v["scope"] == "private" else "")
+    head = f"{txt(v, v['topic'], 120)}  ({who}, {v['created'][:10]})"
+    rows = [head]
+    for k in (("summary", "why", "wrong", "fix", "decided", "open") if verbose else ()):
+        if v["body"].get(k):
+            rows.append(f"        {k}: {txt(v, v['body'][k])}")
+    return "\n".join(rows)
+
+
+def _log_commit(c, verbose, indent=""):
+    merge = c.get("merge") or {}
+    out(f"{indent}{c['short']}  {c['subject']}{'  (merge)' if merge else ''}")
+    for v in c["entries"]:
+        out(f"{indent}    - {_entry_line(v, verbose)}")
+    for k in merge.get("commits", []):
+        _log_commit(k, verbose, indent + "    ")
+    if merge.get("more"):
+        out(f"{indent}    ... {merge['more']} more commits in that branch")
+
+
+def cmd_log(a):
+    """The notes next to your commits, newest first, in the terminal."""
+    r = need_repo()
+    t = tree.build(r)
+    for s in t["summaries"]:
+        where = "repo" if s["level"] == "repo" else f"branch {s['branch']}"
+        out(f"[{where} summary{'' if s['fresh'] else ', out of date'}] {s['topic']}")
+        out("    " + (s["summary"] if s["mine"] else safety_sanitize(s["summary"], 600)))
+    rows = [c for c in t["commits"] if a.verbose or c["entries"] or not c["trivial"]][: a.n]
+    for c in rows:
+        _log_commit(c, a.verbose)
+    for u in t["unplaced"]:
+        out(f"notes on branch {u['branch']} (not on this history yet)")
+        for v in u["entries"]:
+            out(f"    - {_entry_line(v, a.verbose)}")
+    cov = t["coverage"]
+    need = cov["commits"] - cov["trivial"]
+    out(f"{cov['with_reason']} of {need} recent commits say why.")
+    return 0
+
+
+def _is_rev(r, w):
+    return g.try_run(["rev-parse", "--verify", "-q", w + "^{commit}"], r.root)[0] == 0
+
+
+def cmd_ask(a):
+    """One way in: a revision range, an id, a file or name, or free text."""
+    r = need_repo()
+    words = a.what
+    if len(words) == 1 and ".." in words[0]:
+        words = words[0].split("..", 1)
+    if len(words) == 2 and all(_is_rev(r, w) for w in words):
+        return cmd_path(argparse.Namespace(a=words[0], b=words[1]))
+    if len(words) == 1:
+        code = cmd_explain(argparse.Namespace(target=words[0], quiet=True))
+        if code != 4:
+            return code
+    return cmd_query(argparse.Namespace(q=" ".join(words), limit=a.limit))
+
+
+def cmd_setup(a):
+    """init (or join, when there is a remote) and install, in one go."""
+    r = Repo(".")
+    if "origin" in sync.remotes(r):
+        cmd_join(argparse.Namespace(remote="origin"))
+    else:
+        cmd_init(argparse.Namespace(attribution=None))
+    return cmd_install(a)
+
+
 def cmd_status(a):
     r = need_repo()
     vs, an = views(r)
@@ -315,7 +387,16 @@ def cmd_status(a):
     if an.shallow:
         out("note: shallow clone; some anchors are unverified")
     if not shared and (r.cdir / "private").exists():
-        out("note: nothing shared yet: `logbook publish <id>` then `logbook sync`; or `logbook join` to fetch teammates' entries")
+        out("note: nothing shared yet: `logbook publish` then `logbook sync`; or `logbook setup` to fetch teammates' entries")
+    waiting = len(r.unpublished()) if r.policy().get("publish", True) else 0
+    if waiting:
+        out(f"{waiting} private note(s) not shared yet: `logbook publish`")
+    if getattr(a, "check", False):
+        out("")
+        cmd_doctor(argparse.Namespace(remote="origin"))
+    if getattr(a, "stats", False):
+        out("")
+        cmd_stats(a)
 
 
 def cmd_doctor(a):
@@ -654,15 +735,39 @@ def cmd_demo(a):
     return demo.run(a.dir)
 
 
+HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
+          "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo"}
+HELP_MORE = """more (run `logbook <name> -h`):
+  trust purge gc config uninstall snippet demo
+agents and hooks call these; you rarely need to:
+  context summarize backfill inject capture post-commit reconcile
+older names that still work:
+  init join query explain path doctor queue stats install install-hook"""
+
+
 def build_parser():
-    p = argparse.ArgumentParser(prog="logbook", description="Commit-anchored shared memory for AI-assisted repos.")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    p = argparse.ArgumentParser(prog="logbook", formatter_class=argparse.RawDescriptionHelpFormatter,
+                                description="Commit-anchored shared memory for AI-assisted repos.", epilog=HELP_MORE)
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="command")
 
     def add(name, fn, help="", **_):
-        sp = sub.add_parser(name, help=help)
+        # hidden ones still run; argparse lists a command only when `help` is passed at all, even as None
+        sp = sub.add_parser(name, **({} if name in HIDDEN else {"help": help}))
         sp.set_defaults(fn=fn)
         return sp
 
+    s = add("setup", cmd_setup, "set up this repo: your id, git hook, agent hooks, skill and rules (asks first)")
+    s.add_argument("--agent", nargs="+", metavar="AGENT", help="claude-code agents-md copilot gemini cursor, or auto (default)")
+    s.add_argument("--yes", action="store_true", help="apply without asking")
+    s.add_argument("--write", action="store_true", help="same as --yes")
+    s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--no-pretool", action="store_true", help="do not add the before-read/edit note lookup")
+    s = add("ask", cmd_ask, "search the notes, or explain an id, a file or name, or a revision range (a..b)")
+    s.add_argument("what", nargs="+")
+    s.add_argument("--limit", type=int, default=10)
+    s = add("log", cmd_log, "the notes next to your commits, newest first")
+    s.add_argument("-n", type=int, default=20, help="how many commits")
+    s.add_argument("-v", "--verbose", action="store_true", help="show each note's text and trivial commits")
     s = add("init", cmd_init, "create your id and config")
     s.add_argument("--attribution", choices=["none", "pseudonym", "named"])
     s = add("join", cmd_join, "init + fetch teammates' entries (run this after cloning)")
@@ -700,7 +805,9 @@ def build_parser():
     s = add("path", cmd_path, "commits (with their entries) between two revisions")
     s.add_argument("a")
     s.add_argument("b")
-    add("status", cmd_status, "what is recorded and what is captured")
+    s = add("status", cmd_status, "what is recorded, what is waiting to be shared (--check for problems)")
+    s.add_argument("--check", action="store_true", help="also run the setup and coverage checks")
+    s.add_argument("--stats", action="store_true", help="also show injection and cost counters")
     s = add("doctor", cmd_doctor, "check setup and capture coverage")
     s.add_argument("--remote", default="origin")
     s = add("reconcile", cmd_reconcile, "process spooled events, recover sessions, record uncovered commits")

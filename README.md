@@ -25,19 +25,19 @@ injected into an agent's prompt. The only measurements so far are two small smok
 
 ## Set it up in a repo
 
-    logbook install        # shows what it will change and asks; --yes to apply, --dry-run to only look
+    logbook setup          # shows what it will change and asks; --yes to apply, --dry-run to only look
     logbook uninstall      # puts every file back (your notes are kept)
 
-One command starts the repo (`init`), chains a git post-commit hook and a pre-push reminder (it never blocks a push and never
-shares anything), and for each agent it finds writes that agent's hooks, an
+One command starts the repo, fetches teammates' notes when there is a remote, chains a git post-commit hook and a pre-push hook (it never
+blocks a push and only sends notes you already published), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
 `.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
-`.github/copilot-instructions.md`, `GEMINI.md` and `.cursor`. `logbook doctor` shows what is installed.
+`.github/copilot-instructions.md`, `GEMINI.md` and `.cursor`. `logbook status --check` shows what is installed.
 
 ## What the agent does
 
-- **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook query` / `explain`. Hooks also put
+- **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook ask`. Hooks also put
   the matching notes in front of it (see below).
 - **While working** it records what it learns, even with no commit: `echo '{...}' | logbook note --json` (summary, context, why,
   wrong, fix, decided, open, scale, paths). The skill shows the shape and a good example.
@@ -52,17 +52,17 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
     logbook note --kind change --before-commit --summary "..." --why "..." --wrong "..." --fix "..."   # then commit as usual
     logbook note --commit <sha> --summary "..."   # a note about an earlier commit
     logbook publish <id>                      # preview + redaction, you confirm; evidence is opt-in
-    logbook queue                             # your private notes that are not shared yet (the pre-push hook counts them)
+    logbook publish                           # lists your private notes that are not shared yet and asks which
     logbook publish --all                     # preview every one of them with redaction, confirm once
     logbook context                           # before a commit: does it need a note, and which of your findings it grew out of
     logbook backfill                          # recent commits with no note saying why, with diffs, for an agent to write
     logbook summarize                         # the notes under the repo or branch, for an agent to write a summary
     logbook sync                              # fetch teammates' entries, push yours
-    logbook query "refunds" | explain orders.py | path <rev> <rev>   # exit 0 found, 3 ambiguous, 4 no match
-    logbook stats                             # injections, nudges sent, notes written
-    logbook doctor                            # setup + what is NOT captured
+    logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match
+    logbook log                               # the notes next to your commits, newest first (-v for their text)
+    logbook status                            # what is recorded and waiting to be shared; --check, --stats
 
-New teammate: clone, then `logbook join`. A plain `git clone`/`git fetch` does not download logbook refs.
+New teammate: clone, then `logbook setup`. A plain `git clone`/`git fetch` does not download logbook refs.
 CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/log/*'` (opt in; off by default).
 
 ## How an agent consults it first
