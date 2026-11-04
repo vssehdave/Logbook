@@ -926,6 +926,53 @@ class TestCommands(CliRepo):
         self.assertEqual(self.run_cli("query", "zzzzqq")[0], 4, "the old name still works")
 
 
+class TestTreeNav(CliRepo):
+    def test_ask_walks_repo_branch_commit_note_with_a_path_from_the_root(self):
+        main = sh("git", "branch", "--show-current", cwd=self.d)
+        e = capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "s", "why": "no filter"}, paths=["shop/revenue.py"])
+        sha8 = sh("git", "rev-parse", "--short=8", "HEAD", cwd=self.d)
+        top = self.run_cli("ask", "repo")[1]
+        self.assertIn(f"branch:{main}", top)
+        self.assertIn("summary: none yet", top)
+        self.assertIn(f"commit:{sha8}", self.run_cli("ask", f"branch:{main}")[1])
+        text = self.run_cli("ask", f"commit:{sha8}")[1]
+        self.assertIn(f"note:{e.id}", text)
+        self.assertIn(f"original: git show {sha8}", text)
+        leaf = self.run_cli("ask", f"note:{e.id[:14]}")[1]
+        self.assertIn(f"path: repo > branch:{main} > commit:{sha8} > note:{e.id}", leaf)
+        self.assertIn("refunds are summed", leaf)
+        self.assertEqual(self.run_cli("ask", "commit:zzzz")[0], 4)
+
+    def test_drafts_are_folded_out_of_the_log_until_asked_for(self):
+        commit(self.d, "wip: half done", {"shop/other.py": "y = 2\n"})
+        commit(self.d, "fixup! base", {"shop/other.py": "y = 3\n"})
+        self.assertNotIn("half done", self.run_cli("log")[1])
+        self.assertIn("half done", self.run_cli("log", "-v")[1])
+
+
+class TestSquashWithoutCommit(Base):
+    def test_note_with_no_commit_follows_a_squash_once_the_branch_is_gone(self):
+        d = make_repo(self.root, "r", "a@x.io")
+        commit(d, "base", {"a.txt": "1\n"})
+        main = sh("git", "branch", "--show-current", cwd=d)
+        r = Repo(d)
+        r.init()
+        self.cd(d)
+        sh("git", "switch", "-q", "-c", "feat", cwd=d)
+        e = capture.make_entry(r, "finding", "t", {"summary": "s", "why": "w"}, paths=["a.txt"])  # the branch has no commit yet
+        commit(d, "feat: change a", {"a.txt": "2\n"})
+        sh("git", "switch", "-q", main, cwd=d)
+        sh("git", "merge", "-q", "--squash", "feat", cwd=d)
+        sh("git", "commit", "-q", "-m", "feat: change a (#7)", cwd=d)
+        squash = sh("git", "rev-parse", "HEAD", cwd=d)
+        views = lambda: next(v for v in tree.all_views(r)[0] if v["id"] == e.id)
+        self.assertEqual(views()["state"], "branch", "while the branch still exists, the note waits with it")
+        sh("git", "branch", "-D", "feat", cwd=d)
+        v = views()
+        self.assertEqual((v["state"], v["placed"]), ("rewritten", squash))
+        self.assertIn("squash", v["rung"])
+
+
 class TestShelf(Base):
     """One shelf per person: two machines of the same person write the same ref, and sync merges them."""
 
