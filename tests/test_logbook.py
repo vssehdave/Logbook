@@ -228,7 +228,7 @@ class TestCapture(Base):
     def test_session_start_injects_only_trusted_why_entries(self):
         d, r = self.repo()
         capture.make_entry(r, "finding", "x late", {"summary": "s", "why": "export stalled", "wrong": "low"}, paths=["models/marts/fct_x.sql"])
-        capture.make_entry(r, "finding", "no reason", {"summary": "s"}, paths=["models/marts/fct_x.sql"])
+        capture.make_entry(r, "finding", "no reason", {"summary": "s"}, paths=["models/marts/fct_x.sql"], provenance="agent-written")  # a person's own note needs no why; an agent's does
         (d / "models/marts/fct_x.sql").write_text("select 3\n")
         out = json.loads(capture.handle_hook("SessionStart", "claude-code", json.dumps({"cwd": str(d), "session_id": "s9"})))
         txt = out["hookSpecificOutput"]["additionalContext"]
@@ -632,7 +632,7 @@ class TestContext(CliRepo):
         self.assertIn("def total(rows)", text, "the diff is included")
         self.assertNotIn("chore: tidy", text)
         self.assertNotIn("fix: skip refunds", text)
-        self.assertIn('"commit"', text)
+        self.assertIn("commit: <sha>", text)
         explicit = self.run_cli("backfill", b[:10])[1]
         self.assertIn("fix: skip refunds", explicit)
         self.assertIn("nothing to backfill", self.run_cli("backfill", "--scan", "1")[1])
