@@ -3,10 +3,10 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Source } from './types'
 
-// The Sources band: above the prompt, the numbered notes the latest answer cited. Compact it is one line of headers; expanded it adds,
-// for a note a teammate shared, the commit or pull request link, who wrote it and when. Your own and private notes stay one line.
+// The Sources band: above the prompt, every numbered note cited so far in this chat (it stays until /clear, and grows as answers cite
+// more). Compact it is one line of titles; expanded it adds, for a note a teammate shared, the commit or pull request header and link,
+// who wrote it and when. Your own and private notes stay one line.
 const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
-const seen = atom({ plugin: 'logbook', key: 'seen' } as const, [] as string[])
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
 
 const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹'
@@ -19,6 +19,13 @@ export const citedNumbers = (answer: string): number[] => {
     found.add(Number([...run].map(ch => SUPERSCRIPT.indexOf(ch)).join('')))
   }
   return [...found]
+}
+
+// The chat's bibliography after an answer cited `fresh`: what was there stays, new sources are added, a source is refreshed, in number order.
+export const mergeSources = (was: readonly Source[], fresh: readonly Source[]): Source[] => {
+  const byId = new Map(was.map(s => [s.id, s] as const))
+  for (const s of fresh) byId.set(s.id, s)
+  return [...byId.values()].sort((a, b) => a.n - b.n)
 }
 
 // What Copy puts on the clipboard: the full bibliography, whichever view is open.
@@ -49,9 +56,11 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId && e.reason === 'answer') {
       const marks = citedNumbers(e.answer)
-      const sources = marks.length ? (await sourcesOf($, await $.session.id())).filter(s => marks.includes(s.n)) : []
-      await update($, shown, () => sources)
-      await update($, seen, was => [...new Set([...was, ...sources.map(s => s.id)])])
+      // An answer that cites nothing leaves the band as it was; the sources are the chat's, not the last answer's.
+      if (marks.length) {
+        const fresh = (await sourcesOf($, await $.session.id())).filter(s => marks.includes(s.n))
+        await update($, shown, was => mergeSources(was, fresh))
+      }
     }
     return next(e)
   })
@@ -60,7 +69,6 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await update($, shown, () => [])
-      await update($, seen, () => [])
     }
     return next(e)
   })
@@ -71,7 +79,6 @@ export const register: Register = on => {
     // Other mods share this slot: draw theirs below ours instead of replacing it.
     const below = await next(e).catch(() => undefined)
     const isOpen = await read($, open)
-    const total = (await read($, seen)).length
     const { Box, Button, Text } = $.ui.resolve(e)
     const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
 
@@ -85,15 +92,13 @@ export const register: Register = on => {
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
         <Text dimColor>Sources</Text>
         {isOpen ? (
-          <Text dimColor>
-            {sources.length} cited here, {total} in this chat
-          </Text>
+          <Text dimColor>{sources.length} cited in this chat</Text>
         ) : (
           <Text wrap="truncate-end">{sources.map(s => `${s.mark} ${short(s.header)}`).join(' · ')}</Text>
         )}
         <Box flexGrow={1} />
         <Button key="copy" plain label="Copy" onPress={copy} />
-        <Button key="toggle" plain label={isOpen ? '[-]' : '[+]'} onPress={toggle} />
+        <Button key="toggle" plain label={isOpen ? 'collapse [-]' : 'expand [+]'} onPress={toggle} />
       </Box>
     )
 

@@ -18,8 +18,7 @@ export type Source = {
 declare module 'claude-code' {
   interface PluginState {
     logbook: {
-      shown: Source[] // the sources cited in the latest answer
-      seen: string[] // note ids cited anywhere in this chat
+      shown: Source[] // every source cited so far in this chat, in number order
       open: boolean // the band is expanded
     }
   }
