@@ -99,6 +99,27 @@ async function sourcesOf($: EngineInterface, session: string): Promise<Source[]>
   return []
 }
 
+// How each system opens an address; the first that starts is used. No shell: the address is one argument.
+const OPENERS: readonly (readonly string[])[] = [['rundll32', 'url.dll,FileProtocolHandler'], ['open'], ['xdg-open']]
+
+// Opens a page in the browser. The commit header in the list is a button that does this and not a Link: a Link is a terminal hyperlink,
+// and where the terminal does not support those the engine draws the address beside the text instead of on it. https only.
+async function openUrl($: EngineInterface, url: string): Promise<void> {
+  if (!/^https:\/\//.test(url)) {
+    $.ui.toast('Not opening an address that is not https')
+    return
+  }
+  for (const argv of OPENERS) {
+    try {
+      await $.process.run([...argv, url], { timeoutMs: 5000 })
+      return
+    } catch {
+      // not this system's opener: try the next
+    }
+  }
+  $.ui.toast('Could not open the link')
+}
+
 // Scrolls the chat to one answer. The engine allows it only while answering the person's own click or typing, which is when this runs.
 async function goTo($: EngineInterface, requestId: string): Promise<void> {
   const done = await $.ui.scroll({ to: { requestId }, block: 'center' })
@@ -158,7 +179,7 @@ export const register: Register = on => {
     const wanted = queryNumber(query.text)
     const ids = wanted === undefined ? [] : (seen[String(wanted)] ?? [])
     const at = ids.length ? Math.min(query.at, ids.length - 1) : 0
-    const { Box, Button, Link, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
 
     const toggle = () => update($, open, was => !was)
@@ -221,11 +242,11 @@ export const register: Register = on => {
             <Text>{s.header}</Text>
             {s.expandable ? <Text dimColor>·</Text> : null}
             {s.expandable && s.has_commit && s.url !== '' ? (
-              <Link href={s.url}>
+              <Button key={`url:${s.n}`} plain onPress={() => openUrl($, s.url)}>
                 <Text dimColor underline>
                   {s.commit_header}
                 </Text>
-              </Link>
+              </Button>
             ) : null}
             {s.expandable && s.has_commit && s.url === '' ? <Text dimColor>{s.commit_header}</Text> : null}
             {s.expandable && s.has_commit ? <Text dimColor>{`· ${s.author}, ${s.date}`}</Text> : null}
