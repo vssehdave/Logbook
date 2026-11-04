@@ -198,7 +198,7 @@ export const register: Register = on => {
           <Box flexDirection="row" alignItems="center">
             <Text dimColor>[</Text>
             <Box width={7}>
-              <Input key="find" placeholder="n" submitLabel="" value={query.text} onInput={typed} />
+              <Input key="find" placeholder="n" submitLabel="" value={query.text} onInput={typed} onSubmit={typed} />
             </Box>
             <Text dimColor>]</Text>
           </Box>
