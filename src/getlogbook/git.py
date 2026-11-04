@@ -17,10 +17,13 @@ def _env(extra=None):
     return e
 
 
-def try_run(args, cwd, input=None, env=None):
+def try_run(args, cwd, input=None, env=None, timeout=None):
     if isinstance(input, str):
         input = input.encode("utf-8")
-    p = subprocess.run(["git", "-C", str(cwd), *args], input=input, capture_output=True, env=_env(env))
+    try:
+        p = subprocess.run(["git", "-C", str(cwd), *args], input=input, capture_output=True, env=_env(env), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "", f"git {args[0]} timed out after {timeout}s"
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 

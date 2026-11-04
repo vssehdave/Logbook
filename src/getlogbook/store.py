@@ -15,16 +15,29 @@ import time
 from pathlib import Path
 
 from . import git as g
-from .entry import Entry, from_dict, from_json
+from .entry import BODY_FIELDS, Entry, from_dict, from_json
 
 PREFIX = "refs/logbook/log"
 REMOTE_NS = "refs/logbook-remote"
 BRANCH_PREFIX = "refs/heads/logbook/log"
 _REF_RE = re.compile(r"/(?:branch)?log/([0-9a-f]{6,16})/([0-9a-f]{2,16})$")
+# One shelf per person. The second path part used to be a per-clone device id; it is now this constant, still hex so that
+# 0.0.2 readers match it, and git refuses `log/<user>` next to `log/<user>/<device>`, so the path shape cannot change.
+SHELF = "000000"
 MAX_BLOB = 65536
 MAX_PER_REF = 5000
-DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "pseudonym",
+DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "named",
                   "max_entry_bytes": 32768, "retention_days": 0}
+
+
+def _apply_tombstones(files):
+    """A purge must win a merge: an entry with a tombstone in the same tree is dropped, so purged notes never come back."""
+    dead = {p[len("tombstones/"):] for p in files if p.startswith("tombstones/")}
+    return {p: o for p, o in files.items() if not (p.startswith("entries/") and p[len("entries/"):] in dead)}
+
+
+def _norm(e):
+    return " ".join(" ".join([e.topic, *(e.body.get(k, "") for k in BODY_FIELDS)]).lower().split())
 
 
 def user_id(email):
@@ -104,8 +117,8 @@ class Repo:
 
     def attribution(self):
         order = ["none", "pseudonym", "named"]  # policy sets the ceiling
-        want = self.cfg().get("attribution", "pseudonym")
-        cap = self.policy().get("attribution", "pseudonym")
+        want = self.cfg().get("attribution", "named")
+        cap = self.policy().get("attribution", "named")
         return order[min(order.index(want) if want in order else 1, order.index(cap) if cap in order else 1)]
 
     def committers(self):
@@ -128,7 +141,32 @@ class Repo:
 
     def own_ref(self):
         base = BRANCH_PREFIX if self.cfg().get("transport") == "branches" else PREFIX
-        return f"{base}/{self.user}/{self.device}"
+        return f"{base}/{self.user}/{SHELF}"
+
+    def legacy_refs(self):
+        """Your own local per-device refs from 0.0.2 (one per clone), which `adopt_legacy` folds into the single shelf."""
+        own = self.own_ref()
+        out = g.try_run(["for-each-ref", "--format=%(refname)", f"{PREFIX}/{self.user}", f"{BRANCH_PREFIX}/{self.user}"], self.root)[1]
+        return [r for r in out.split() if r != own and _REF_RE.search(r)]
+
+    def adopt_legacy(self):
+        """Move entries from old per-device refs into the shelf, then delete the old local refs. Returns the refs that were folded."""
+        old = self.legacy_refs()
+        if not old:
+            return []
+        ref = self.own_ref()
+        tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
+        files = self._tree_files(ref) if tip else {}
+        for r in old:
+            files.update(self._tree_files(r))
+        files = _apply_tombstones(files)
+        self._write_ref(ref, files, "logbook: adopt per-device refs", tip)
+        for r in old:
+            g.run(["update-ref", "-d", r], self.root)
+        c = self.cfg()  # `sync` deletes these names on the remote after the shelf has been pushed
+        c["legacy_remote"] = sorted(set(c.get("legacy_remote", [])) | set(old))
+        self.save_cfg(c)
+        return old
 
     # private log ---------------------------------------------------------
     @property
@@ -198,7 +236,8 @@ class Repo:
             g.run(["update-index", "--index-info"], self.root, input="".join(lines), env=env) if lines else None
             tree = g.run(["write-tree"], self.root, env=env).strip() if lines else \
                 g.run(["hash-object", "-t", "tree", "-w", "--stdin"], self.root, input=b"").strip()
-            args = ["commit-tree", tree, "-m", message] + (["-p", parent] if parent else [])
+            parents = [parent] if isinstance(parent, str) else list(parent or [])
+            args = ["commit-tree", tree, "-m", message] + [x for p in parents for x in ("-p", p)]
             commit = g.run(args, self.root, env=env).strip()
             g.run(["update-ref", ref, commit], self.root)
             return commit
@@ -208,7 +247,22 @@ class Repo:
             except OSError:
                 pass
 
+    def duplicate_of(self, e):
+        """Why `e` should not be published again: ("same-id", loaded) when any writer's ref already holds that id, or
+        ("same-text", loaded) when someone else already shared the same words. None if it is new."""
+        shared, tombs = self.load_shared()
+        text = _norm(e)
+        for l in shared:
+            if (l.user, l.entry.id) in tombs:
+                continue
+            if l.entry.id == e.id:
+                return "same-id", l
+            if l.user != self.user and text and _norm(l.entry) == text:
+                return "same-text", l
+        return None
+
     def publish(self, entries):
+        self.adopt_legacy()
         ref = self.own_ref()
         tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
         files = self._tree_files(ref) if tip else {}
@@ -224,6 +278,7 @@ class Repo:
 
     def purge(self, eid, reason="author request"):
         """Rewrite own ref as a parentless commit without the entry; leave an id-only tombstone."""
+        self.adopt_legacy()
         ref = self.own_ref()
         files = self._tree_files(ref)
         if f"entries/{eid}.json" not in files:
@@ -237,6 +292,7 @@ class Repo:
 
     def squash_own_ref(self):
         """Parentless commit with the same tree (gc). Caller force-pushes with lease."""
+        self.adopt_legacy()
         ref = self.own_ref()
         files = self._tree_files(ref)
         if not files:

@@ -8,7 +8,7 @@ particular stack.
 - Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, no model calls (`backend none`):
   your own agent writes the notes.
 - Two logs: a **private** one under `.git/logbook/` (never tracked), and a **shared** one on git refs
-  (`refs/logbook/log/<user>/<device>`, one writer per ref, so no merge conflicts). Sharing is opt-in per entry.
+  (`refs/logbook/log/<user>/000000`, one shelf per person; two machines of the same person are merged on sync). Sharing is opt-in per entry.
 
 **Status: alpha.** The engine, git-ref storage, sharing and the Claude Code integration work and are tested on Linux,
 macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
