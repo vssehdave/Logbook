@@ -943,6 +943,19 @@ class TestTreeNav(CliRepo):
         self.assertIn("refunds are summed", leaf)
         self.assertEqual(self.run_cli("ask", "commit:zzzz")[0], 4)
 
+    def test_a_note_on_a_commit_off_the_main_line_still_has_a_node(self):
+        """An injected note names `commit:<sha>`; that address must open, also when the commit is not on this clone's main line."""
+        main = sh("git", "branch", "--show-current", cwd=self.d)
+        sh("git", "switch", "-q", "-c", "side", cwd=self.d)
+        side = commit(self.d, "side work", {"s.txt": "x\n"})
+        sh("git", "switch", "-q", main, cwd=self.d)
+        e = capture.make_entry(self.r, "finding", "side finding", {"summary": "s", "why": "w"}, sha=side)
+        code, text = self.run_cli("ask", f"commit:{side[:8]}")
+        self.assertEqual(code, 0, text)
+        self.assertIn(f"note:{e.id}", text)
+        self.assertIn("side work", text)
+        self.assertIn(f"commit:{side[:8]}", self.run_cli("ask", f"note:{e.id[:14]}")[1], "the path from the root goes through the commit")
+
     def test_drafts_are_folded_out_of_the_log_until_asked_for(self):
         commit(self.d, "wip: half done", {"shop/other.py": "y = 2\n"})
         commit(self.d, "fixup! base", {"shop/other.py": "y = 3\n"})
@@ -1127,20 +1140,31 @@ class TestPublishMoves(CliRepo):
         self.assertIsNotNone(self.r.get_private(mine.id), "a skipped note stays private")
         self.assertIn("would publish", self.run_cli("publish", mine.id, "--yes", "--force")[1])
 
-    def test_our_own_push_does_not_fire_the_pre_push_hook_a_second_time(self):
-        """With the hook installed, `logbook sync` used to push the same ref twice: the hook's push won and the outer one was rejected."""
+    def remote_with_hooks(self):
         self.run_cli("install", "--yes", "--agent", "agents-md")
         remote = self.root / "remote.git"
         sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
         sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+
+    def git_push(self):
+        p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stderr
+
+    def test_git_push_only_reminds_and_logbook_sync_is_what_pushes_notes(self):
+        self.remote_with_hooks()
         e = capture.make_entry(self.r, "finding", "one", {"summary": "s", "why": "w"})
         self.run_cli("publish", e.id, "--yes")
-        self.assertTrue(sync.push(self.r)["ok"])
+        self.assertIn("published notes are not pushed yet", self.git_push())
+        self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d), "git push never sends notes")
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+        self.assertNotIn("not pushed yet", self.git_push(), "nothing left to remind about")
         e2 = capture.make_entry(self.r, "finding", "two", {"summary": "s", "why": "w"})
         self.run_cli("publish", e2.id, "--yes")
-        res = sync.push(self.r)  # an update of a ref that exists: this is the push that the hook's own push used to beat
-        self.assertTrue(res["ok"], res)
-        self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+        self.assertIn("not pushed yet", self.git_push())
+        self.assertEqual(self.run_cli("sync")[0], 0, "a second sync with the hook installed works too")
 
     def test_a_closed_stdin_is_no_answer_not_a_traceback(self):
         old = sys.stdin
@@ -1150,16 +1174,12 @@ class TestPublishMoves(CliRepo):
         finally:
             sys.stdin = old
 
-    def test_pre_push_hook_pushes_published_notes_and_never_the_private_ones(self):
-        self.run_cli("install", "--yes", "--agent", "agents-md")
-        remote = self.root / "remote.git"
-        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
-        sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+    def test_sync_sends_published_notes_and_never_the_private_ones(self):
+        self.remote_with_hooks()
         shared = capture.make_entry(self.r, "finding", "shared one", {"summary": "s", "why": "w"})
         private = capture.make_entry(self.r, "finding", "private one", {"summary": "s", "why": "w"})
         self.run_cli("publish", shared.id, "--yes")
-        p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
-        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.run_cli("sync")[0], 0)
         self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
         names = sh("git", "ls-tree", "-r", "--name-only", self.r.own_ref(), cwd=self.d)
         self.assertIn(shared.id, names)

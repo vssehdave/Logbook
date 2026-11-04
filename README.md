@@ -28,8 +28,8 @@ injected into an agent's prompt. The only measurements so far are two small smok
     logbook setup          # shows what it will change and asks; --yes to apply, --dry-run to only look
     logbook uninstall      # puts every file back (your notes are kept)
 
-One command starts the repo, fetches teammates' notes when there is a remote, chains a git post-commit hook and a pre-push hook (it never
-blocks a push and only sends notes you already published), and for each agent it finds writes that agent's hooks, an
+One command starts the repo, fetches teammates' notes when there is a remote, chains a git post-commit hook and a pre-push hook (it only reminds
+you of unshared notes, never blocks a push and never sends notes: `logbook sync` does), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
 `.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,

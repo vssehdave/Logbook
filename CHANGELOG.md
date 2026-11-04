@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fixed: with the pre-push hook installed, `logbook sync` (and `publish --push`) pushed your notes twice, once from the hook and once itself, and the second push was rejected ("incorrect old value provided"). Logbook's own pushes now skip the hook.
+- Changed back: `git push` no longer sends your notes. `logbook sync` is the one command that pushes them (it also fetches teammates' notes and merges your other machines). The pre-push hook only reminds you, now also of notes you published but have not pushed. In 0.0.3 the hook pushed notes too, and with it installed `logbook sync` could be rejected ("incorrect old value provided") because the same ref was pushed twice. If you installed 0.0.3, run `logbook setup --yes` to replace the old hook.
 - Fixed: `logbook publish` with no ids printed a traceback when there was no answer to read (closed input). It now takes that as no answer.
 - The compact label in `logbook cites` and the band is the note's own title, not the commit subject; the commit or pull request header moves to the expanded line.
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 
 from . import capture, cites, nav, recall, sync, tree
@@ -232,14 +231,6 @@ def _pick_unpublished(r):
 
 def cmd_sync(a):
     r = need_repo()
-    if a.hook:  # called by the pre-push hook: never block or fail the push it is attached to
-        if os.environ.get("LOGBOOK_PUSHING") or a.remote not in sync.remotes(r):
-            return 0
-        os.environ["LOGBOOK_PUSHING"] = "1"  # the push below fires the same hook again
-        res = sync.push(r, a.remote, timeout=20)
-        if not res["ok"]:
-            print(f"logbook: your notes were not pushed ({res['error'][:120]}). `logbook sync` retries.", file=sys.stderr)
-        return 0
     res = sync.sync(r, a.remote, a.fetch_only, a.depth)
     out(json.dumps(res, indent=2))
     return 0 if res["fetch"]["ok"] and res.get("push", {"ok": True})["ok"] else 1
@@ -566,9 +557,13 @@ def cmd_queue(a):
     r = need_repo()
     q = r.unpublished() if r.policy().get("publish", True) else []
     if a.hook:
+        said = []
         if q:
-            print(f"logbook: {len(q)} private note(s) are not shared with your team yet. "
-                  "`logbook publish --all` shows what would be shared and asks first.", file=sys.stderr)
+            said.append(f"{len(q)} private note(s) are not shared with your team yet (`logbook publish` shows what would be shared and asks first).")
+        if "origin" in sync.remotes(r) and sync.unpushed(r):
+            said.append("your published notes are not pushed yet (`logbook sync` pushes them).")
+        if said:
+            print("logbook: " + " ".join(said), file=sys.stderr)
         return 0
     if not q:
         out("nothing waiting: every note of yours is shared, auto-copied, or publishing is off for this repo.")
@@ -853,7 +848,6 @@ def build_parser():
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
     s = add("sync", cmd_sync, "fetch teammates' entries and push yours")
     s.add_argument("--remote", default="origin")
-    s.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--fetch-only", action="store_true")
     s.add_argument("--depth", type=int)
     s = add("query", cmd_query, "search entries")

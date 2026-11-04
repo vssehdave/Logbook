@@ -364,15 +364,13 @@ def uninstall_git_hook(repo):
 
 
 def install_pre_push_hook(repo):
-    """Pushes your already-published notes along with the push (the remote is $1), after a reminder on stderr of the notes
-    that are still private. It never blocks the push and never publishes anything: only notes you published go out."""
+    """A reminder on stderr of notes that are still private, or published but not pushed. It never blocks a push and never shares
+    anything: `logbook publish` and `logbook sync` are the only ways notes leave this clone."""
     hooks = _hooks_dir(repo)
     hooks.mkdir(parents=True, exist_ok=True)
     f = hooks / "pre-push"
-    py = _py(repo)
-    block = (f'{MARK_BEGIN}\n"{py}" -m getlogbook queue --hook >&2 || true\n'
-             f'"{py}" -m getlogbook sync --hook --remote "$1" >&2 || true\n{MARK_END}\n')
-    _strip_hook_block(f)  # replace an older block (0.0.2 only reminded) rather than keep it
+    block = f'{MARK_BEGIN}\n"{_py(repo)}" -m getlogbook queue --hook >&2 || true\n{MARK_END}\n'
+    _strip_hook_block(f)  # replace the 0.0.3 block, which also pushed notes, rather than keep it
     text = f.read_text(encoding="utf-8") if f.exists() else "#!/bin/sh\n"
     f.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8", newline="\n")  # chain, never overwrite
     with contextlib.suppress(OSError):

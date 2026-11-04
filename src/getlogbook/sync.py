@@ -17,9 +17,6 @@ def fetch_specs(remote):
     return [f"+{PREFIX}/*:{REMOTE_NS}/{remote}/log/*", f"+{BRANCH_PREFIX}/*:{REMOTE_NS}/{remote}/branchlog/*"]
 
 
-NO_HOOK = {"LOGBOOK_PUSHING": "1"}  # our own push must not fire the pre-push hook, which would push the same ref a second time
-
-
 def remotes(repo):
     return g.run(["remote"], repo.root).split()
 
@@ -78,7 +75,7 @@ def _drop_legacy_remote(repo, remote):
     names = repo.cfg().get("legacy_remote", [])
     left = []
     for n in names:
-        rc, _, err = g.try_run(["push", "--quiet", remote, f":{n}"], repo.root, env=NO_HOOK)
+        rc, _, err = g.try_run(["push", "--quiet", remote, f":{n}"], repo.root)
         if rc and "exist" not in err:
             left.append(n)
     if left != names:
@@ -87,7 +84,18 @@ def _drop_legacy_remote(repo, remote):
         repo.save_cfg(c)
 
 
-def push(repo, remote="origin", force=False, timeout=None):
+def unpushed(repo, remote="origin"):
+    """True when your shelf has commits the remote copy lacks, or the remote has no copy yet."""
+    tip = _sha(repo, repo.own_ref())
+    return bool(tip) and tip != _sha(repo, _remote_ref(repo, remote))
+
+
+def _mark_pushed(repo, remote):
+    """What was just pushed is now the remote copy, so `unpushed` is false until the next change (a fetch would say the same)."""
+    g.try_run(["update-ref", _remote_ref(repo, remote), _sha(repo, repo.own_ref())], repo.root)
+
+
+def push(repo, remote="origin", force=False):
     repo.adopt_legacy()
     ref = repo.own_ref()
     if g.try_run(["rev-parse", "--verify", "-q", ref], repo.root)[0]:
@@ -98,8 +106,9 @@ def push(repo, remote="origin", force=False, timeout=None):
         if force:  # one person per ref, so force is safe; the lease still protects against a surprise remote tip
             tip = g.try_run(["ls-remote", remote, ref], repo.root)[1].split()
             flag = [f"--force-with-lease={ref}:{tip[0]}"] if tip else ["--force"]
-        rc, _, err = g.try_run(["push", "--quiet", *flag, remote, f"{ref}:{ref}"], repo.root, env=NO_HOOK, timeout=timeout)
+        rc, _, err = g.try_run(["push", "--quiet", *flag, remote, f"{ref}:{ref}"], repo.root)
         if rc == 0:
+            _mark_pushed(repo, remote)
             _drop_legacy_remote(repo, remote)
             return {"ok": True, "via": repo.cfg().get("transport", "refs"), "ref": ref}
         if not _DIVERGED.search(err) or attempt == 2:
@@ -115,11 +124,12 @@ def push(repo, remote="origin", force=False, timeout=None):
         bref = f"{BRANCH_PREFIX}/{repo.user}/{SHELF}"
         tip = g.run(["rev-parse", ref], repo.root).strip()
         g.run(["update-ref", bref, tip], repo.root)
-        rc2, _, err2 = g.try_run(["push", "--quiet", *flag, remote, f"{bref}:{bref}"], repo.root, env=NO_HOOK, timeout=timeout)
+        rc2, _, err2 = g.try_run(["push", "--quiet", *flag, remote, f"{bref}:{bref}"], repo.root)
         if rc2 == 0:
             c = repo.cfg()
             c["transport"] = "branches"
             repo.save_cfg(c)
+            _mark_pushed(repo, remote)
             return {"ok": True, "via": "branches (host rejected custom refs)", "ref": bref}
         err = err2 or err
     return {"ok": False, "error": err.strip(), "ref": ref}
