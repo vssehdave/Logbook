@@ -1044,6 +1044,25 @@ class TestCitations(CliRepo):
         self.assertIn("¹", text)
         self.assertNotIn("my private note  by", text)
 
+    def test_a_hostile_anchor_cannot_make_git_write_a_file(self):
+        """`git show --output=<file>` overwrites a file. A teammate's note carries its anchor sha into git arguments, so it must be hex."""
+        victim = self.d / "victim.txt"
+        victim.write_text("precious\n")
+        sh("git", "remote", "add", "origin", "git@github.com:acme/shop.git", cwd=self.d)
+        (note,) = self.teammate_notes(("evil", "--output=victim.txt"))
+        from getlogbook import cites
+        vs, _ = tree.all_views(self.r)
+        view = next(v for v in vs if v["id"] == note)
+        self.assertEqual(view["sha"], "", "a sha that is not hex is dropped when the entry is read")
+        cites.number(self.r, "s1", note)
+        self.run_cli("cites", "--session", "s1")
+        self.run_cli("inject", "--prompt", "why is revenue wrong?", "--session", "s2")
+        self.assertEqual(victim.read_text(), "precious\n", "the file was not touched")
+        self.assertIsNone(g.commit_info(self.d, "--output=victim.txt"), "the git helpers refuse it too")
+        self.assertFalse(g.commit_exists(self.d, "--output=victim.txt"))
+        self.assertEqual(g.changed_paths(self.d, "--output=victim.txt"), [])
+        self.assertEqual(victim.read_text(), "precious\n")
+
     def test_a_local_remote_has_no_link_until_a_template_gives_one_and_a_pr_header_falls_back_to_the_commit(self):
         from getlogbook import cites
         head = commit(self.d, "Fix refunds (#12)", {"shop/revenue.py": "x = 3\n"})

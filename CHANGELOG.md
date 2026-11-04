@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Security fix (affects 0.0.2 and 0.0.3).** A shared note's commit, tree, parent and merge-base ids came from the note and went into `git` arguments unchecked. An id such as `--output=<path>` made `git show` overwrite that file on the reader's machine, which `logbook cites`, the injected source lines and `ask` could trigger for a note from any writer you read. Those ids are now accepted only as hex when an entry is read, and the git helpers refuse anything else too. Upgrade, and treat shared refs from writers you do not trust with care until you have.
 - Citations are written as a bare superscript number (¹ ² ³), and the band uses the same label. `commit_url` and `pr_url` in the config give links for hosts Logbook does not know; a header that names a pull request falls back to the commit when there is no pull request address.
 - Changed back: `git push` no longer sends your notes. `logbook sync` is the one command that pushes them (it also fetches teammates' notes and merges your other machines). The pre-push hook only reminds you, now also of notes you published but have not pushed. In 0.0.3 the hook pushed notes too, and with it installed `logbook sync` could be rejected ("incorrect old value provided") because the same ref was pushed twice. If you installed 0.0.3, run `logbook setup --yes` to replace the old hook.
 - Fixed: `logbook publish` with no ids printed a traceback when there was no answer to read (closed input). It now takes that as no answer.

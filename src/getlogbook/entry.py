@@ -11,6 +11,7 @@ import re
 import time
 
 ID_RE = re.compile(r"^[0-9a-f]{11}-[0-9a-f]{8}$")
+HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")  # a commit, tree or parent id: never anything git could read as an option
 KINDS = ("change", "finding", "summary")
 PROVENANCE = ("agent-written", "user-edited", "auto-copied")  # auto-copied: built by code from git data, carries no reason
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
@@ -82,6 +83,9 @@ def from_dict(d):
     # "models" is the 0.0.1 spelling of "names"; those files are already on people's refs
     anchor.update(paths=_strs(a.get("paths")), names=_strs(a.get("names") or a.get("models")),
                   old_paths=_strs(a.get("old_paths")), dirty=bool(a.get("dirty")))
+    for k in ("sha", "tree", "parent", "merge_base"):  # these reach git as arguments: a value like "--output=<file>" would make it write one
+        if anchor.get(k) and not HEX_RE.match(anchor[k]):
+            anchor[k] = ""
     kind = d.get("kind") if d.get("kind") in KINDS else "finding"
     prov = d.get("provenance")
     prov = "auto-copied" if prov == "inferred" or prov not in PROVENANCE else prov  # "inferred" was the 0.0.1 spelling
