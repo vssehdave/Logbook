@@ -4,6 +4,7 @@
 
 - **A note an agent writes is 3 to 9 lines and carries evidence.** A finding or change note needs an `evidence:` line (what was run or read: a command and its result, or file:line). Naming a file that exists, or a commit, no longer counts as evidence. A one-line note is refused with a message saying what to add, and so is one over nine lines. `--allow-ungrounded` still saves a note with no evidence, marked unverified; the line count has no bypass. A person's own note and a summary note are not held to either rule. The skill now asks for a 2 to 4 sentence summary, not 3 to 5.
 - **A note with a commit shows the commit's whole message.** `logbook ask commit:<sha>` prints the subject and body, and an injected note carries a `commit message:` line (subject and body, cleaned like any teammate text, capped at 400 characters). It is read from git each time; the note itself holds only what git does not have.
+- Fixed: the reminder to record a note counted only the last checkpoint of a turn, so a `PreCompact` or a second `Stop` inside a turn could zero the reads and the note it had seen. Counts now add up over the turn and start again at the next prompt.
 
 ## 0.0.4
 
