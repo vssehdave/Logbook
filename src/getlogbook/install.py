@@ -91,8 +91,8 @@ def write_through(repo, path, text, newline="\n"):
 
 # ---- the plan -----------------------------------------------------------------------------------------------
 class Step:
-    def __init__(self, label, path, old, new, newline="\n", skill=False):
-        self.label, self.path, self.old, self.new, self.newline, self.skill = label, Path(path), old, new, newline, skill
+    def __init__(self, label, path, old, new, newline="\n", skill=False, agent=False):
+        self.label, self.path, self.old, self.new, self.newline, self.skill, self.agent = label, Path(path), old, new, newline, skill, agent
 
     @property
     def verb(self):
@@ -105,6 +105,8 @@ class Step:
             write_through(repo, self.path, self.new, self.newline)
             if self.skill and self.new:
                 (self.path.parent / ".logbook-version").write_text(_version(), encoding="utf-8")
+            if self.agent and not self.new and self.path.parent.exists() and not any(self.path.parent.iterdir()):
+                self.path.parent.rmdir()  # the agents folder, only if we made it and left it empty
             if self.skill and not self.new:
                 (self.path.parent / ".logbook-version").unlink(missing_ok=True)
                 for folder in (self.path.parent, self.path.parent.parent, self.path.parent.parent.parent):
@@ -149,6 +151,14 @@ def plan(repo, targets, remove=False, pretool=True):
                     raise SystemExit(f"logbook: {kp} exists and is not managed by logbook; move it aside first")
                 knew = kold
             steps.append(Step("the logbook skill", kp, kold, knew, knl, skill=True))
+            ap = root / ".claude" / "agents" / "logbook-scribe.md"
+            aold, anl = read_text(ap)
+            anew = "" if remove else asset("scribe.md")
+            if aold and SKILL_MARK not in aold:  # someone else's agent of the same name: never overwrite or delete it
+                if not remove:
+                    raise SystemExit(f"logbook: {ap} exists and is not managed by logbook; move it aside first")
+                anew = aold
+            steps.append(Step("the logbook-scribe agent (writes notes from a turn's facts)", ap, aold, anew, anl, agent=True))
         elif t == "agents-md":
             steps.append(_block_step(root, "AGENTS.md", remove, "always-on rules in AGENTS.md"))
         elif t == "copilot":

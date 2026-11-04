@@ -71,6 +71,11 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
 - **Before it finishes** a turn that read or searched three or more times and wrote no note, Claude Code is asked once to record
   one. `logbook config nudge context` makes that a reminder on the next prompt instead, `logbook config nudge off` turns it off.
   How often this works in real sessions is still being measured (`bench/real_session.py`); the earlier 4 of 4 came from a synthetic test.
+- **The scribe.** `logbook setup` also installs `.claude/agents/logbook-scribe.md`, a subagent on a cheaper model (haiku) that writes a note from facts
+  the main agent hands it, checks them against the code in its own context, and answers in two lines. When it is installed, the reminder above tells the
+  agent to hand over the facts instead of writing the note itself. The permission hook lets it run only `note`, `ask`, `context`, `cites`, `log` and `status`.
+  Measured once, by hand: given a set of facts it wrote a grounded 6-line note for about $0.11. Whether handing over is cheaper or better than the agent
+  writing its own note is not measured yet.
 
 ## What Claude may run without asking (Claude Code)
 
