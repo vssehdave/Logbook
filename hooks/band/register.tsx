@@ -103,7 +103,7 @@ export const register: Register = on => {
           <Box key={s.id} flexDirection="column">
             <Text>
               {s.mark} {s.header}
-              {s.expandable && s.has_commit ? <Text dimColor>{`  ${s.author}, ${s.date}`}</Text> : null}
+              {s.expandable && s.has_commit ? <Text dimColor>{`  ${s.commit_header}  ·  ${s.author}, ${s.date}`}</Text> : null}
             </Text>
             {s.expandable && s.has_commit && s.url !== '' ? <Text dimColor>{`  ${s.url}`}</Text> : null}
             {s.expandable && !s.has_commit ? <Text dimColor>{`  Note added by ${s.author} on ${s.date}`}</Text> : null}

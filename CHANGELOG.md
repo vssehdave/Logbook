@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: with the pre-push hook installed, `logbook sync` (and `publish --push`) pushed your notes twice, once from the hook and once itself, and the second push was rejected ("incorrect old value provided"). Logbook's own pushes now skip the hook.
+- Fixed: `logbook publish` with no ids printed a traceback when there was no answer to read (closed input). It now takes that as no answer.
+- The compact label in `logbook cites` and the band is the note's own title, not the commit subject; the commit or pull request header moves to the expanded line.
+
 ## 0.0.3
 
 - An optional Claude Code plugin in this repo (`.claude-plugin/`, `hooks/band/`): a Sources band above the prompt with Copy and expand/compact, showing the notes the latest answer cited and, for a teammate's shared notes, the link, author and date. Install with `/plugin install logbook --marketplace vssehdave/Logbook`.

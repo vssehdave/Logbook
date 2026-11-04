@@ -3,7 +3,8 @@ export type Source = {
   n: number
   mark: string
   id: string
-  header: string
+  header: string // the note's own title
+  commit_header: string // the commit or pull request it sits under, '' when it has none
   url: string
   author: string
   date: string

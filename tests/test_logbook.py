@@ -1127,6 +1127,29 @@ class TestPublishMoves(CliRepo):
         self.assertIsNotNone(self.r.get_private(mine.id), "a skipped note stays private")
         self.assertIn("would publish", self.run_cli("publish", mine.id, "--yes", "--force")[1])
 
+    def test_our_own_push_does_not_fire_the_pre_push_hook_a_second_time(self):
+        """With the hook installed, `logbook sync` used to push the same ref twice: the hook's push won and the outer one was rejected."""
+        self.run_cli("install", "--yes", "--agent", "agents-md")
+        remote = self.root / "remote.git"
+        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
+        sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+        e = capture.make_entry(self.r, "finding", "one", {"summary": "s", "why": "w"})
+        self.run_cli("publish", e.id, "--yes")
+        self.assertTrue(sync.push(self.r)["ok"])
+        e2 = capture.make_entry(self.r, "finding", "two", {"summary": "s", "why": "w"})
+        self.run_cli("publish", e2.id, "--yes")
+        res = sync.push(self.r)  # an update of a ref that exists: this is the push that the hook's own push used to beat
+        self.assertTrue(res["ok"], res)
+        self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+
+    def test_a_closed_stdin_is_no_answer_not_a_traceback(self):
+        old = sys.stdin
+        sys.stdin = io.StringIO("")
+        try:
+            self.assertEqual(cli._ask("? "), "")
+        finally:
+            sys.stdin = old
+
     def test_pre_push_hook_pushes_published_notes_and_never_the_private_ones(self):
         self.run_cli("install", "--yes", "--agent", "agents-md")
         remote = self.root / "remote.git"

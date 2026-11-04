@@ -85,20 +85,20 @@ def record(repo, v, n):
     """Everything known about one citation. `expandable` is true for a note a teammate shared: those get a link and a name."""
     sha = v["placed"] or v["sha"]
     info = (g.commit_info(repo.root, sha) or {}) if sha else {}
-    header = info.get("subject") or v["subject"] or v["topic"]
-    pr = _PR.search(header or "")
+    commit_header = info.get("subject") or v["subject"]
+    pr = _PR.search(commit_header or "")
     if not v["mine"]:  # words from a teammate: shown to people and agents, so they go through the same filter as injected notes
-        header, v = sanitize(header, 200), {**v, "author": sanitize(v["author"], 60), "topic": sanitize(v["topic"], 200)}
+        commit_header, v = sanitize(commit_header, 200), {**v, "author": sanitize(v["author"], 60), "topic": sanitize(v["topic"], 200)}
     url = ""
     if sha:
         url = web_url(repo, "pr", pr.group(1) or pr.group(2)) if pr else web_url(repo, "commit", sha)
     date = (v["created"] or "")[:10]
     expandable = v["scope"] == "shared" and not v["mine"]
     if sha:
-        detail = f"{header}  by {v['author']}, {date}" + (f"  {url}" if url else f"  commit {sha[:8]}")
+        detail = f"{v['topic']} | {commit_header}  by {v['author']}, {date}" + (f"  {url}" if url else f"  commit {sha[:8]}")
     else:
         detail = f"Note added by {v['author']} on {date}"
-    return {"n": n, "mark": sup(n), "id": v["id"], "header": header if sha else v["topic"], "url": url, "author": v["author"],
+    return {"n": n, "mark": sup(n), "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
             "date": date, "scope": v["scope"], "mine": v["mine"], "has_commit": bool(sha), "expandable": expandable,
             "detail": detail if expandable else ""}
 

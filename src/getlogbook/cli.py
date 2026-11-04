@@ -187,7 +187,7 @@ def cmd_publish(a):
         out("nothing new to publish.")
         return 0
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
-    if not a.yes and input("Publish exactly the text above? [y/N] ").strip().lower() != "y":
+    if not a.yes and _ask("Publish exactly the text above? [y/N] ").strip().lower() != "y":
         raise SystemExit("aborted; nothing published")
     for c, h in ready:
         if digest_hash(c.to_json()) != h:
@@ -203,6 +203,13 @@ def cmd_publish(a):
         out(json.dumps(sync.push(r)))
 
 
+def _ask(prompt):
+    try:
+        return input(prompt)
+    except EOFError:
+        return ""
+
+
 def _pick_unpublished(r):
     """Numbered list of private notes not shared yet; asks which ones when a person is at the keyboard."""
     q = sorted(r.unpublished(), key=lambda e: e.id, reverse=True)
@@ -213,7 +220,10 @@ def _pick_unpublished(r):
     if not sys.stdin.isatty():
         out("pass ids to publish, or --all")
         return []
-    ans = input("which ones? (numbers like 1,3 / all / empty to cancel) ").strip().lower()
+    try:
+        ans = input("which ones? (numbers like 1,3 / all / empty to cancel) ").strip().lower()
+    except EOFError:
+        return []
     if ans == "all":
         return q
     want = {int(x) for x in ans.replace(" ", "").split(",") if x.isdigit()}
