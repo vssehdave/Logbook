@@ -121,6 +121,13 @@ def commit_info(cwd, sha):
     return {"sha": h, "tree": t, "parent": p.split()[0] if p else "", "author": an, "date": ad, "subject": s}
 
 
+def commit_body(cwd, sha):
+    """The commit message below its subject ('' when there is none or the id is not a commit). Read from git each time, never copied into a note."""
+    if not _is_rev(sha):
+        return ""
+    return try_run(["show", "-s", "--format=%b", sha], cwd)[1].strip()
+
+
 def patch_id(cwd, sha):
     """Stable patch-id of a single-parent commit, else None."""
     if not _is_rev(sha):

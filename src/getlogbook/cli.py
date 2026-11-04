@@ -456,6 +456,9 @@ def _show_node(r, address):
     elif n["kind"] in ("repo", "branch"):
         out("summary: none yet (an agent can write one: `logbook summarize`)")
     if n["kind"] == "commit":
+        body = g.commit_body(r.root, n["sha"])
+        if body:  # the whole message comes from git; a note holds only what git does not have
+            out("message:\n" + "\n".join("  " + safety_sanitize(ln, 200) for ln in body.splitlines()[:40]))
         out(f"original: git show {n['sha'][:8]}")
     out(f"below ({len(n['children'])}):")
     for k in n["children"]:

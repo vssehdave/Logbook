@@ -972,6 +972,29 @@ class TestTreeNav(CliRepo):
         self.assertIn("side work", text)
         self.assertIn(f"commit:{side[:8]}", self.run_cli("ask", f"note:{e.id[:14]}")[1], "the path from the root goes through the commit")
 
+    def test_a_commit_shows_its_whole_message_from_git_and_the_note_does_not_hold_it(self):
+        from getlogbook import recall
+        sha = commit(self.d, "fix(total): skip refunds\n\nThe loader keeps refunded rows for other reports,\nso total() must filter them itself.", {"shop/t.py": "x = 1\n"})
+        e = capture.make_entry(self.r, "change", "skip refunds", {"summary": "s", "why": "w"}, sha=sha)
+        text = self.run_cli("ask", f"commit:{sha[:8]}")[1]
+        self.assertIn("message:", text)
+        self.assertIn("so total() must filter them itself.", text)
+        self.assertNotIn("filter them itself", json.dumps(e.body), "read from git, not copied into the note")
+        v = {v["id"]: v for v in tree.all_views(self.r)[0]}[e.id]
+        block = recall._fmt(1, v, "", recall.commit_message(self.r, v))
+        self.assertIn("commit message: fix(total): skip refunds The loader keeps refunded rows", block)
+
+    def test_an_injected_commit_message_is_capped_and_a_note_with_no_commit_has_none(self):
+        from getlogbook import recall
+        sha = commit(self.d, "big change\n\n" + "word " * 500, {"shop/big.py": "x = 1\n"})
+        e = capture.make_entry(self.r, "change", "big", {"summary": "s", "why": "w"}, sha=sha)
+        v = {v["id"]: v for v in tree.all_views(self.r)[0]}[e.id]
+        line = [l for l in recall._fmt(1, v, "", recall.commit_message(self.r, v)).splitlines() if "commit message:" in l][0]
+        self.assertLessEqual(len(line), len("    commit message: ") + recall.MAX_COMMIT_MSG)
+        bare = {**v, "placed": "", "sha": ""}
+        self.assertEqual(recall.commit_message(self.r, bare), "")
+        self.assertNotIn("commit message:", recall._fmt(1, bare, "", recall.commit_message(self.r, bare)))
+
     def test_drafts_are_folded_out_of_the_log_until_asked_for(self):
         commit(self.d, "wip: half done", {"shop/other.py": "y = 2\n"})
         commit(self.d, "fixup! base", {"shop/other.py": "y = 3\n"})
