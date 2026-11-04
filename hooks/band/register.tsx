@@ -241,7 +241,7 @@ export const register: Register = on => {
       if (await setMode($, picked)) await update($, mode, () => picked)
       else $.ui.toast('Could not change the publish mode')
     }
-    // With details on, the mode selector comes after the "bibliography" text and the dot is gone: every mode is a button, the chosen one
+    // With details on, the mode selector sits right after the "bibliography" text, and the dot and the count are gone: every mode is a button, the chosen one
     // is light yellow in brackets and the rest are grey.
     const selector = (
       <Box flexDirection="row" alignItems="center" gap={2}>
@@ -254,16 +254,17 @@ export const register: Register = on => {
     )
     const head = (
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
-        {/* Compact: the dot, shaded by mode, and the mode's name: a button that does what "details" does. With details on the selector
-            below replaces it, after the bibliography text. */}
-        {isOpen ? null : (
+        {/* Always: "bibliography". Compact: then the dot, shaded by mode, and the mode's name (a button that does what "details" does),
+            then the count. With details on, the dot and the count are gone and the mode selector sits right after "bibliography". */}
+        <Text underline>bibliography</Text>
+        {isOpen ? (
+          selector
+        ) : (
           <Button key="dot" plain onPress={toggle}>
             <Text color={modeColor(current)}>●</Text> <Text>{current}</Text>
           </Button>
         )}
-        <Text underline>bibliography</Text>
-        <Text dimColor>{sources.length} cited in this chat</Text>
-        {isOpen ? selector : null}
+        {isOpen ? null : <Text dimColor>{sources.length} cited in this chat</Text>}
         <Box flexGrow={1} />
         {/* The finder: arrows, the number of the citation clicked in the list (dim "n" until one is), and x/y. Nothing can be typed:
             a text field makes the engine draw an enter hint and its width cannot be controlled. The number is the one the list set. */}
