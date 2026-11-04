@@ -11,6 +11,17 @@ const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
 const find = atom({ plugin: 'logbook', key: 'find' } as const, { text: '', at: 0 })
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
 const owner = atom({ plugin: 'logbook', key: 'owner' } as const, '') // the session id the list was built in
+const mode = atom({ plugin: 'logbook', key: 'mode' } as const, 'ask') // the publish mode, as `logbook config publish` prints it
+
+// The publish modes, least to most hands-off, with the shade of the dot beside each: light grey, pale yellow, yellow, darker yellow.
+export const MODES = [
+  { key: 'never', color: '#c8c8c8' },
+  { key: 'ask', color: '#f3eaa8' },
+  { key: 'claude', color: '#e9d44a' },
+  { key: 'auto', color: '#c9a227' },
+] as const
+export const SELECTED = '#f3eaa8' // light yellow: the mode chosen in the selector
+export const modeColor = (key: string): string => MODES.find(m => m.key === key)?.color ?? MODES[0].color
 
 const SUPERSCRIPT = '⁰¹²³⁴⁵⁶⁷⁸⁹'
 const RUNNERS: readonly (readonly string[])[] = [['logbook'], ['python', '-m', 'getlogbook'], ['python3', '-m', 'getlogbook']]
@@ -83,20 +94,37 @@ let runner: readonly string[] | undefined
 // a message as it is drawn is the only way to learn its id. The band reads it when it is drawn, which is after the answer has been.
 let instances: Record<string, string[]> = {}
 
-// The numbered sources of this chat, from the logbook command; [] when it is missing or this is not a Logbook repo.
-async function sourcesOf($: EngineInterface, session: string): Promise<Source[]> {
+// The numbered sources of this chat and the publish mode, from the logbook command; empty when it is missing or this is not a Logbook repo.
+async function sourcesOf($: EngineInterface, session: string): Promise<{ sources: Source[]; mode: string }> {
   for (const argv of runner ? [runner] : RUNNERS) {
     try {
       const done = await $.process.run([...argv, 'cites', '--json', '--session', session], { timeoutMs: 8000 })
       if (done.exitCode === 0) {
         runner = argv
-        return JSON.parse(done.stdout).sources as Source[]
+        const got = JSON.parse(done.stdout)
+        return { sources: got.sources as Source[], mode: String(got.mode ?? '') }
       }
     } catch {
       // that spelling of the command is not installed: try the next
     }
   }
-  return []
+  return { sources: [], mode: '' }
+}
+
+// Changes the publish mode through `logbook config publish`; true when it took.
+async function setMode($: EngineInterface, wanted: string): Promise<boolean> {
+  for (const argv of runner ? [runner] : RUNNERS) {
+    try {
+      const done = await $.process.run([...argv, 'config', 'publish', wanted], { timeoutMs: 8000 })
+      if (done.exitCode === 0) {
+        runner = argv
+        return true
+      }
+    } catch {
+      // that spelling of the command is not installed: try the next
+    }
+  }
+  return false
 }
 
 // How each system opens an address; the first that starts is used. No shell: the address is one argument.
@@ -140,10 +168,22 @@ export const register: Register = on => {
       const marks = citedNumbers(e.answer)
       // An answer that cites nothing leaves the band as it was; the sources are the chat's, not the last answer's.
       if (marks.length) {
-        const all = await sourcesOf($, session)
+        const got = await sourcesOf($, session)
         // The cited ones are added, and the ones already listed are refreshed (a link or a name may have been added since).
-        await update($, shown, was => mergeSources(was, all.filter(s => marks.includes(s.n) || was.some(w => w.id === s.id))))
+        await update($, shown, was => mergeSources(was, got.sources.filter(s => marks.includes(s.n) || was.some(w => w.id === s.id))))
+        if (got.mode) await update($, mode, () => got.mode)
       }
+    }
+    return next(e)
+  })
+
+  // The mode is the repo's, so read it when the band loads and not only when something is cited.
+  on('session.start', async ($, e, next) => {
+    try {
+      const got = await sourcesOf($, await $.session.id())
+      if (got.mode) await update($, mode, () => got.mode)
+    } catch {
+      // no session id yet: the next answer reads it
     }
     return next(e)
   })
@@ -174,6 +214,7 @@ export const register: Register = on => {
     const owned = await read($, owner)
     const sources = owned === '' || owned === (await $.session.id()) ? await read($, shown) : []
     const isOpen = await read($, open)
+    const current = await read($, mode)
     const seen = instances
     const query = await read($, find)
     const wanted = queryNumber(query.text)
@@ -196,10 +237,35 @@ export const register: Register = on => {
       if (found.length) await goTo($, found[0] as string)
       else $.ui.toast(`${label(n)} has no answer on screen yet`)
     }
+    const choose = async (picked: string) => {
+      if (await setMode($, picked)) await update($, mode, () => picked)
+      else $.ui.toast('Could not change the publish mode')
+    }
+    // With details on, the mode selector takes the place of the "bibliography" text: every mode is a button, the chosen one is light
+    // yellow in brackets and the rest are grey.
+    const selector = (
+      <Box flexDirection="row" alignItems="center" gap={2}>
+        {MODES.map(m => (
+          <Button key={`mode:${m.key}`} plain onPress={() => choose(m.key)}>
+            {m.key === current ? <Text color={SELECTED}>{`[ ${m.key} ]`}</Text> : <Text dimColor>{m.key}</Text>}
+          </Button>
+        ))}
+      </Box>
+    )
     const head = (
       <Box flexDirection="row" alignItems="center" gap={2} width={width}>
-        <Text>bibliography</Text>
-        <Text dimColor>{sources.length} cited in this chat</Text>
+        {/* The dot, shaded by mode, and the mode's name: a button that does what "details" does. */}
+        <Button key="dot" plain onPress={toggle}>
+          <Text color={modeColor(current)}>●</Text> <Text>{current}</Text>
+        </Button>
+        {isOpen ? (
+          selector
+        ) : (
+          <Box flexDirection="row" gap={2}>
+            <Text>bibliography</Text>
+            <Text dimColor>{sources.length} cited in this chat</Text>
+          </Box>
+        )}
         <Box flexGrow={1} />
         {/* The finder: arrows, the number of the citation clicked in the list (dim "n" until one is), and x/y. Nothing can be typed:
             a text field makes the engine draw an enter hint and its width cannot be controlled. The number is the one the list set. */}
@@ -256,7 +322,8 @@ export const register: Register = on => {
       </Box>
     )
 
-    // A rule closes the list when details are on, as the line under a table does. Terminal only: it is a row of box-drawing characters.
+    // A rule under the header when details are on, so it is always in view: the list below it can be taller than the band and scrolls.
+    // Terminal only: it is a row of box-drawing characters.
     const rule = (
       <Text dimColor wrap="truncate-end">
         {'─'.repeat(width ?? 0)}
@@ -265,8 +332,8 @@ export const register: Register = on => {
     const mine = (
       <Box flexDirection="column">
         {head}
-        {isOpen ? list : compact}
         {isOpen && width !== undefined ? rule : null}
+        {isOpen ? list : compact}
       </Box>
     )
     return below ? (

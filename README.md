@@ -39,9 +39,9 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
 
     /plugin install logbook --marketplace vssehdave/Logbook
 
-A row above the prompt, always there: **bibliography**, how many sources this chat has cited (in grey), a finder on the right, and
+A row above the prompt, always there: a dot shaded by the publish mode (light grey never, pale yellow ask, yellow claude, darker yellow auto) and the mode's name, which does what **details** does; **bibliography**, how many sources this chat has cited (in grey), a finder on the right, and
 **details** (it reads **compact** while the details are showing). Under it, the sources cited so far, as `¹ title` buttons that fit the width (`+N more` when they do
-not). With details on, a note a teammate shared also shows its commit or pull request header as a link (set `commit_url` and `pr_url` in
+not). With details on, the mode selector (`never  ask  [ claude ]  auto`, each a button that changes the mode, the chosen one in light yellow) takes the place of the "bibliography" text, a rule closes the header, and a note a teammate shared also shows its commit or pull request header as a link (set `commit_url` and `pr_url` in
 `.git/logbook/config.json` for a host Logbook does not know), who wrote it and when ("Note added by
 <name> on <date>" when it has no commit). Your own and private notes stay one line. When there are more rows than the band may take, the
 band scrolls (mouse wheel, or the keys while it is focused) and says how many are hidden.

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addInstances, citedNumbers, fitCompact, label, mergeSources, queryDigits, queryNumber, stepInstance, sup } from '../hooks/band/register'
+import { MODES, SELECTED, addInstances, citedNumbers, fitCompact, label, mergeSources, modeColor, queryDigits, queryNumber, stepInstance, sup } from '../hooks/band/register'
 import type { Source } from '../hooks/band/types'
 
 const source = (over: Partial<Source>): Source => ({
@@ -33,6 +33,16 @@ describe('the citation label', () => {
     expect(label(2)).toBe('²')
     expect(citedNumbers(`claim ${label(2)} and ${label(11)}`)).toEqual([2, 11])
     expect(queryNumber(label(2))).toBe(2)
+  })
+})
+
+describe('the publish modes', () => {
+  test('run from least to most hands-off, each with its own shade, and an unknown mode is the grey one', () => {
+    expect(MODES.map(m => m.key)).toEqual(['never', 'ask', 'claude', 'auto'])
+    expect(new Set(MODES.map(m => m.color)).size).toBe(4)
+    expect(modeColor('auto')).not.toBe(modeColor('ask'))
+    expect(modeColor('whatever')).toBe(modeColor('never'))
+    expect(SELECTED).toBe(modeColor('ask'))
   })
 })
 
