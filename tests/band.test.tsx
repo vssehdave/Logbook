@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { MODES, SELECTED, addInstances, citedNumbers, fitCompact, label, mergeSources, modeColor, queryDigits, queryNumber, stepInstance, sup } from '../hooks/band/register'
+import { MODES, SELECTED, citedNumbers, findDrawn, fitCompact, hitsFor, label, mergeSources, modeColor, queryDigits, queryNumber, stepInstance, sup, upsertDrawn } from '../hooks/band/register'
 import type { Source } from '../hooks/band/types'
 
 const source = (over: Partial<Source>): Source => ({
@@ -63,16 +63,38 @@ describe('the chat bibliography', () => {
 })
 
 describe('the finder', () => {
-  test('remembers which messages cite which number, once each, in the order drawn', () => {
-    let seen = addInstances({}, [1, 2], 'm1')
-    seen = addInstances(seen, [2], 'm2')
-    seen = addInstances(seen, [2], 'm2')
-    expect(seen).toEqual({ '1': ['m1'], '2': ['m1', 'm2'] })
+  test('peeks at every answer that cites a number, oldest first, with the words around the citation', () => {
+    const chat = [
+      { role: 'user', text: 'why is revenue wrong?' },
+      { role: 'assistant', text: 'Refunds were counted as revenue² and the export is late¹.' },
+      { role: 'assistant', text: 'Nothing cited here.' },
+      { role: 'assistant', text: 'Again the refunds²,\n  the same finding.' },
+      { role: 'assistant', text: 'A number like ²² or ¹² is another citation, not ².' },
+    ]
+    const hits = hitsFor(chat, 2)
+    expect(hits.length).toBe(3)
+    expect(hits[0]).toEqual({ before: 'Refunds were counted as revenue', after: ' and the export is late¹.', core: 'efunds were counted as revenue²' }) // the last 30 characters before the citation, and the citation
+    expect(hits[1]?.after).toBe(', the same finding.')
+    expect(hitsFor(chat, 22).length).toBe(1)
+    expect(hitsFor(chat, 9)).toEqual([])
+    expect(hitsFor(chat, 1).length).toBe(1)
   })
 
-  test('hands back the same object when nothing is new, so drawing a message again does not redraw the band', () => {
-    const seen = addInstances({}, [1], 'm1')
-    expect(addInstances(seen, [1], 'm1')).toBe(seen)
+  test('a user message that happens to hold a superscript is not an answer', () => {
+    expect(hitsFor([{ role: 'user', text: 'what is ¹?' }], 1)).toEqual([])
+  })
+
+  test('finds the drawn block of a peek, newest first, and says so when it was never drawn', () => {
+    const [hit] = hitsFor([{ role: 'assistant', text: 'Refunds were counted as revenue² here.' }], 2)
+    let blocks = upsertDrawn([], 'm1', 'older: Refunds were counted as revenue² here.')
+    blocks = upsertDrawn(blocks, 'm2', 'newer:  Refunds were counted\nas revenue² here.')
+    expect(findDrawn(blocks, (hit as { core: string }).core)).toBe('m2')
+    expect(findDrawn([], (hit as { core: string }).core)).toBeUndefined()
+  })
+
+  test('a block drawn again as it streams keeps one entry with the latest text', () => {
+    const blocks = upsertDrawn(upsertDrawn([], 'm1', 'Refunds¹'), 'm1', 'Refunds¹ and more')
+    expect(blocks).toEqual([{ id: 'm1', text: 'Refunds¹ and more' }])
   })
 
   test('takes 2, [2] and the superscript as the same number, and nothing else as none', () => {

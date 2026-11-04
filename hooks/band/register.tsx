@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Source } from './types'
+import type { Drawn, Hit, Source } from './types'
 
 // The bibliography band, above the prompt. It is always there: a title, how many sources this chat has cited, and a finder that shows
 // which citation you clicked and steps (x/y) through the answers that cite it. Under it, the sources cited so far, kept until /clear.
@@ -9,6 +9,7 @@ import type { Source } from './types'
 // header as a link, who wrote it and when. Clicking a citation scrolls the chat to the first answer that cites it.
 const shown = atom({ plugin: 'logbook', key: 'shown' } as const, [] as Source[])
 const find = atom({ plugin: 'logbook', key: 'find' } as const, { text: '', at: 0 })
+const peek = atom({ plugin: 'logbook', key: 'peek' } as const, [] as Hit[]) // the answers that cite the clicked number, oldest first
 const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
 const owner = atom({ plugin: 'logbook', key: 'owner' } as const, '') // the session id the list was built in
 const mode = atom({ plugin: 'logbook', key: 'mode' } as const, 'ask') // the publish mode, as `logbook config publish` prints it
@@ -42,15 +43,38 @@ export const mergeSources = (was: readonly Source[], fresh: readonly Source[]): 
   return [...byId.values()].sort((a, b) => a.n - b.n)
 }
 
-// Which chat messages cite which number, in the order they were first drawn. One message counts once however often it cites.
-export const addInstances = (was: Record<string, string[]>, marks: readonly number[], requestId: string): Record<string, string[]> => {
-  let next = was
-  for (const n of marks) {
-    const ids = was[String(n)] ?? []
-    if (!ids.includes(requestId)) next = { ...next, [String(n)]: [...ids, requestId] }
+const clean = (s: string): string => s.replace(/\s+/g, ' ')
+
+// The assistant messages that cite number n, oldest first, each with a peek: the words before and after the citation. `core` is a short
+// stretch ending at the citation, enough to find the same message among those the engine has drawn. This reads the whole chat as
+// `$.session.messages()` gives it, on screen or not.
+export const hitsFor = (messages: readonly { role: string; text: string }[], n: number): Hit[] => {
+  const mark = sup(n)
+  const out: Hit[] = []
+  for (const m of messages) {
+    if (m.role !== 'assistant') continue
+    // The first run of superscript digits that is exactly this number: ² is not part of ²² or ¹².
+    const runs = /[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g
+    let found = runs.exec(m.text)
+    while (found && found[0] !== mark) found = runs.exec(m.text)
+    if (!found) continue
+    const before = clean(m.text.slice(Math.max(0, found.index - 70), found.index))
+    const after = clean(m.text.slice(found.index + mark.length, found.index + mark.length + 40))
+    out.push({ before, after, core: before.slice(-30) + mark })
   }
-  return next
+  return out
 }
+
+// A message block the engine drew that cites something, kept by id (a block is drawn again as it streams, so the latest text wins).
+export const upsertDrawn = (was: readonly Drawn[], id: string, text: string): Drawn[] => {
+  const rest = was.filter(d => d.id !== id)
+  return [...rest, { id, text }].slice(-400)
+}
+
+// The id of the drawn block that holds a hit's core, newest first; undefined when the engine has not drawn it since the band loaded
+// (the engine gives out a message's id only when it draws the message, and scrolling needs the id).
+export const findDrawn = (drawn: readonly Drawn[], core: string): string | undefined =>
+  [...drawn].reverse().find(d => clean(d.text).includes(core))?.id
 
 // "2", "[2]" and "²" all mean citation 2; anything without a digit means none.
 export const queryNumber = (text: string): number | undefined => {
@@ -90,9 +114,9 @@ export const sup = (n: number): string => [...String(n)].map(d => SUPERSCRIPT[Nu
 export const label = (n: number): string => sup(n)
 
 let runner: readonly string[] | undefined
-// Which chat messages cite which number. Kept here and not in $.state: the engine refuses state writes while a message is drawn, and noting
-// a message as it is drawn is the only way to learn its id. The band reads it when it is drawn, which is after the answer has been.
-let instances: Record<string, string[]> = {}
+// The message blocks that cite something, as the engine drew them. Kept here and not in $.state: the engine refuses state writes while a
+// message is drawn, and noting a block as it is drawn is the only way to learn its id.
+let drawn: Drawn[] = []
 
 // The numbered sources of this chat and the publish mode, from the logbook command; empty when it is missing or this is not a Logbook repo.
 async function sourcesOf($: EngineInterface, session: string): Promise<{ sources: Source[]; mode: string }> {
@@ -148,9 +172,15 @@ async function openUrl($: EngineInterface, url: string): Promise<void> {
   $.ui.toast('Could not open the link')
 }
 
-// Scrolls the chat to one answer. The engine allows it only while answering the person's own click or typing, which is when this runs.
-async function goTo($: EngineInterface, requestId: string): Promise<void> {
-  const done = await $.ui.scroll({ to: { requestId }, block: 'center' })
+// Scrolls the chat to the answer a peek came from. The engine allows it only while answering the person's own click, which is when this
+// runs, and it needs the message's id, which the engine gives out only for a message it has drawn.
+async function scrollToHit($: EngineInterface, core: string): Promise<void> {
+  const id = findDrawn(drawn, core)
+  if (id === undefined) {
+    $.ui.toast('That answer has not been drawn since the band loaded: scroll up to it once, then click again')
+    return
+  }
+  const done = await $.ui.scroll({ to: { requestId: id }, block: 'center' })
   if (done.deny) $.ui.toast(`Could not scroll there: ${done.deny}`)
 }
 
@@ -160,8 +190,9 @@ export const register: Register = on => {
       const session = await $.session.id()
       // A different session id means a new chat (/clear, resume): nothing of the old one may stay.
       if ((await read($, owner)) !== session) {
-        instances = {}
+        drawn = []
         await update($, shown, () => [])
+        await update($, peek, () => [])
         await update($, find, () => ({ text: '', at: 0 }))
         await update($, owner, () => session)
       }
@@ -188,10 +219,9 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Note which messages cite which number, as they are drawn, so the finder can walk them.
+  // Note the message blocks that cite something as they are drawn: that is how a peek finds its message to scroll to.
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
-    const marks = citedNumbers(e.props.text)
-    if (marks.length) instances = addInstances(instances, marks, e.requestId)
+    if (citedNumbers(e.props.text).length) drawn = upsertDrawn(drawn, e.requestId, e.props.text)
     return next(e)
   })
 
@@ -199,7 +229,8 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear') {
       await update($, shown, () => [])
-      instances = {}
+      await update($, peek, () => [])
+      drawn = []
       await update($, find, () => ({ text: '', at: 0 }))
     }
     return next(e)
@@ -215,27 +246,33 @@ export const register: Register = on => {
     const sources = owned === '' || owned === (await $.session.id()) ? await read($, shown) : []
     const isOpen = await read($, open)
     const current = await read($, mode)
-    const seen = instances
+    const hits = await read($, peek)
     const query = await read($, find)
     const wanted = queryNumber(query.text)
-    const ids = wanted === undefined ? [] : (seen[String(wanted)] ?? [])
-    const at = ids.length ? Math.min(query.at, ids.length - 1) : 0
+    const at = hits.length ? Math.min(query.at, hits.length - 1) : 0
+    const hit = hits[at]
     const { Box, Button, Text } = $.ui.resolve(e)
     const width = e.surface === 'terminal' ? e.props.bodyColumns : undefined
 
     const toggle = () => update($, open, was => !was)
+    // The arrows walk the answers that cite the clicked number: up goes to an earlier one, down to a later one. They change the peek; the
+    // peek is what takes you there.
     const move = async (by: 1 | -1) => {
-      if (ids.length === 0) return
-      const to = stepInstance(at, ids.length, by)
+      if (hits.length === 0) return
+      const to = stepInstance(at, hits.length, by)
       await update($, find, was => ({ ...was, at: to }))
-      await goTo($, ids[to] as string)
     }
-    // A click on a citation in the list: make it the finder's number and go to the first answer that cites it.
+    // A click on a citation in the list: read the whole chat for the answers that cite it and peek at the closest one, the latest.
     const pick = async (n: number) => {
-      const found = seen[String(n)] ?? []
-      await update($, find, () => ({ text: String(n), at: 0 }))
-      if (found.length) await goTo($, found[0] as string)
-      else $.ui.toast(`${label(n)} has no answer on screen yet`)
+      const messages = await $.session.messages()
+      if (!Array.isArray(messages)) {
+        $.ui.toast('Could not read the chat')
+        return
+      }
+      const found = hitsFor(messages, n)
+      await update($, peek, () => found)
+      await update($, find, () => ({ text: String(n), at: Math.max(0, found.length - 1) }))
+      if (found.length === 0) $.ui.toast(`${label(n)} is not cited in this chat's messages`)
     }
     const choose = async (picked: string) => {
       if (await setMode($, picked)) await update($, mode, () => picked)
@@ -277,7 +314,7 @@ export const register: Register = on => {
             <Text dimColor>]</Text>
           </Box>
           <Text dimColor>
-            {ids.length ? at + 1 : 0}/{ids.length}
+            {hits.length ? at + 1 : 0}/{hits.length}
           </Text>
         </Box>
         <Button key="toggle" plain label={isOpen ? 'compact' : 'details'} onPress={toggle} />
@@ -331,6 +368,13 @@ export const register: Register = on => {
     const mine = (
       <Box flexDirection="column">
         {head}
+        {hit !== undefined && wanted !== undefined ? (
+          <Button key="peek" plain onPress={() => scrollToHit($, hit.core)}>
+            <Text dimColor>{`▸ …${hit.before}`}</Text>
+            <Text>{label(wanted)}</Text>
+            <Text dimColor>{`${hit.after}…`}</Text>
+          </Button>
+        ) : null}
         {isOpen && width !== undefined ? rule : null}
         {isOpen ? list : compact}
       </Box>
