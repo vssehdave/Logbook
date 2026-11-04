@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1345,7 +1346,9 @@ class TestGrounding(CliRepo):
 
     def test_it_looks_up_the_files_names_and_commits_a_note_names(self):
         from getlogbook import ground
-        said = f"`total()` in `shop/revenue.py` sums rows, not `shop/missing.py`, nor `no_such_function`. Fixed in {self.head[:10]} and deadbee1234."
+        # a hash prefix of only digits is read as a number, not a commit (on purpose), and about 1 in 100 random hashes starts with 10 digits: take a prefix with a letter
+        sha = next(self.head[:n] for n in range(10, 41) if re.search("[a-f]", self.head[:n]) and re.search("[0-9]", self.head[:n]))
+        said = f"`total()` in `shop/revenue.py` sums rows, not `shop/missing.py`, nor `no_such_function`. Fixed in {sha} and deadbee1234."
         c = ground.check(self.r, {"summary": said}, "t", [], None)
         self.assertEqual((c["paths"], c["names"], c["commits"]), ([1, 2], [1, 2], [1, 2]))
         self.assertEqual(c["files"], ["shop/revenue.py"])
