@@ -43,9 +43,17 @@ export const addInstances = (was: Record<string, string[]>, marks: readonly numb
 
 // "2", "[2]" and "²" all mean citation 2; anything without a digit means none.
 export const queryNumber = (text: string): number | undefined => {
-  const digits = [...text].map(ch => (SUPERSCRIPT.includes(ch) ? String(SUPERSCRIPT.indexOf(ch)) : /[0-9]/.test(ch) ? ch : '')).join('')
+  const digits = queryDigits(text)
   return digits === '' ? undefined : Number(digits)
 }
+
+// What the finder keeps of what was typed: the digits only (a superscript counts as its digit), at most three. A chat will not cite a
+// thousand sources, and the field has room for three.
+export const queryDigits = (text: string): string =>
+  [...text]
+    .map(ch => (SUPERSCRIPT.includes(ch) ? String(SUPERSCRIPT.indexOf(ch)) : /[0-9]/.test(ch) ? ch : ''))
+    .join('')
+    .slice(0, 3)
 
 // The next or previous instance, going round at the ends.
 export const stepInstance = (at: number, total: number, by: 1 | -1): number => (total === 0 ? 0 : (at + by + total) % total)
@@ -167,7 +175,8 @@ export const register: Register = on => {
       if (found.length) await goTo($, found[0] as string)
       else $.ui.toast(`${label(n)} has no answer on screen yet`)
     }
-    const typed = async (text: string) => {
+    const typed = async (typedText: string) => {
+      const text = queryDigits(typedText) // anything but the first three digits is dropped
       await update($, find, () => ({ text, at: 0 }))
       const n = queryNumber(text)
       const found = n === undefined ? [] : (seen[String(n)] ?? [])
@@ -179,15 +188,16 @@ export const register: Register = on => {
         <Text>bibliography</Text>
         <Text dimColor>{sources.length} cited in this chat</Text>
         <Box flexGrow={1} />
-        {/* The finder: arrows, an outlined field, x/y. The engine draws a "⏎" beside a focused field and it cannot be turned off, so the
-            field has room for it: a three-digit number, the cursor, a space and the "⏎", six cells. The dim brackets make that room read
-            as the box itself and not as a gap. The number is searched as it is typed; Enter only repeats the search. */}
+        {/* The finder: arrows, an outlined field, x/y. The engine draws " ⏎ " beside a focused field and it cannot be turned off; that
+            takes three of the cells, and the rest holds the text. Three digits and the cursor need four, so seven cells in all. The dim
+            brackets make that room read as the box itself and not as a gap. At most three digits are kept. The number is searched as it
+            is typed; Enter only repeats the search. */}
         <Box flexDirection="row" alignItems="center" gap={1}>
           <Button key="prev" plain label="↑" onPress={() => move(-1)} />
           <Button key="next" plain label="↓" onPress={() => move(1)} />
           <Box flexDirection="row" alignItems="center">
             <Text dimColor>[</Text>
-            <Box width={6}>
+            <Box width={7}>
               <Input key="find" placeholder="n" submitLabel="" value={query.text} onInput={typed} onSubmit={typed} />
             </Box>
             <Text dimColor>]</Text>

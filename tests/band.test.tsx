@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { addInstances, citedNumbers, fitCompact, label, mergeSources, queryNumber, stepInstance, sup } from '../hooks/band/register'
+import { addInstances, citedNumbers, fitCompact, label, mergeSources, queryDigits, queryNumber, stepInstance, sup } from '../hooks/band/register'
 import type { Source } from '../hooks/band/types'
 
 const source = (over: Partial<Source>): Source => ({
@@ -72,6 +72,14 @@ describe('the finder', () => {
     expect(queryNumber('[12]')).toBe(12)
     expect(queryNumber('')).toBeUndefined()
     expect(queryNumber('abc')).toBeUndefined()
+  })
+
+  test('keeps at most the first three digits and drops everything else', () => {
+    expect(queryDigits('123')).toBe('123')
+    expect(queryDigits('1234')).toBe('123')
+    expect(queryDigits('a1b2')).toBe('12')
+    expect(queryDigits('²³')).toBe('23')
+    expect(queryNumber('99999')).toBe(999)
   })
 
   test('steps through instances and goes round at both ends', () => {
