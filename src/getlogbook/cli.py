@@ -5,7 +5,7 @@ import argparse
 import json
 import sys
 
-from . import capture, cites, nav, recall, sync, tree
+from . import capture, cites, ground, nav, recall, sync, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
@@ -83,13 +83,13 @@ def cmd_join(a):
 
 
 def _note_input(a):
-    """The note as (kind, topic, body, paths, commit, before_commit, level, sources), from flags or from JSON on stdin."""
+    """The note as (kind, topic, body, paths, commit, before_commit, level, sources, supersedes), from flags or from JSON on stdin."""
     if not a.json:
         body = {k: getattr(a, k) for k in BODY_FIELDS if getattr(a, k, None)}
         if a.from_stdin:
             body["summary"] = sys.stdin.read().strip()[:MAX_SUMMARY]
         return (a.kind, a.topic, body, (a.paths.split(",") if a.paths else None), a.commit, a.before_commit, "",
-                a.sources.split(",") if a.sources else [])
+                a.sources.split(",") if a.sources else [], a.supersedes.split(",") if a.supersedes else [])
     try:
         obj = json.loads(sys.stdin.read())
     except ValueError as ex:
@@ -99,18 +99,23 @@ def _note_input(a):
     body = {k: str(obj[k]) for k in BODY_FIELDS if obj.get(k)}
     paths = obj.get("paths")
     paths = [str(p) for p in paths] if isinstance(paths, list) else (str(paths).split(",") if paths else None)
+    ids = lambda k: [str(x) for x in obj.get(k) or []] if isinstance(obj.get(k), list) else []
     return (obj.get("kind") if obj.get("kind") in ("finding", "change", "summary") else "finding", str(obj.get("topic") or ""), body, paths,
-            str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""),
-            [str(x) for x in obj.get("sources") or []] if isinstance(obj.get("sources"), list) else [])
+            str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""), ids("sources"), ids("supersedes"))
 
 
 def cmd_note(a):
     r = need_repo()
-    kind, topic, body, paths, commit, before_commit, level, sources = _note_input(a)
+    kind, topic, body, paths, commit, before_commit, level, sources, supersedes = _note_input(a)
     sources = [x.strip() for x in sources if x.strip()]
-    bad = [x for x in sources if not ID_RE.match(x)]
+    supersedes = [x.strip() for x in supersedes if x.strip()]
+    bad = [x for x in sources + supersedes if not ID_RE.match(x)]
     if bad:
-        raise SystemExit(f"logbook: {bad[0]!r} is not a note id (see `logbook context` or `logbook query`)")
+        raise SystemExit(f"logbook: {bad[0]!r} is not a note id (see `logbook context` or `logbook ask`)")
+    mine = {l.entry.id for l in r.all_entries() if l.user == r.user}
+    foreign = [x for x in supersedes if x not in mine]
+    if foreign:
+        raise SystemExit(f"logbook: {foreign[0]} is not one of your notes; only the author can supersede a note")
     if not body.get("summary"):
         raise SystemExit("logbook: a summary is required (what happened, in a few sentences)")
     if kind == "finding" and not (body.get("why") or body.get("wrong")):
@@ -123,9 +128,27 @@ def cmd_note(a):
         if rc != 0 or not full.strip():
             raise SystemExit(f"logbook: no commit {commit!r} in this repo")
         sha = full.strip()
-    e = capture.make_entry(r, kind, topic or body["summary"][:80], body, paths=paths, via="cli", sha=sha, level=level, sources=sources,
-                           pending=(kind == "change" and before_commit))
+    topic = topic or body["summary"][:80]
     pending = before_commit and kind == "change"
+    # Grounding: look up what the note names. Whether it is true cannot be checked; whether it points at something real can.
+    cks = ground.check(r, body, topic, paths if paths is not None else (g.changed_paths(r.root, sha) if sha else []), sha)
+    near = [o for o in (ground.overlaps(views(r)[0], topic, body["summary"], cks["files"]) if kind != "summary" else [])
+            if o["id"] not in supersedes]
+    out("grounding: " + ground.line(cks))
+    for p in ground.problems(cks):
+        out("  ! " + p)
+    for o in near:
+        out(f"  ~ may overlap {o['id']} ({'yours' if o['mine'] else 'a teammate'}): {o['topic'][:70]}")
+    if near:
+        out('    if this replaces it, add "supersedes": ["<id>"] (your own notes only); otherwise say in the note why both stand')
+    if a.check:
+        out("(checked only: nothing was saved)")
+        return 0
+    if kind == "finding" and not cks["evidence"] and not a.allow_ungrounded:
+        raise SystemExit("logbook: not saving a finding that points at nothing. Name a file that exists (paths), a commit, or add an evidence "
+                         "field. --allow-ungrounded saves it anyway, marked unverified.")
+    e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
+                           pending=pending, checks=cks)
     shared = not pending and auto_publish(r, e)
     out(f"recorded {e.id} ({'pending: attaches to your next commit' if pending else 'published (auto mode)' if shared else 'private'})")
 
@@ -134,6 +157,9 @@ def auto_publish(r, e):
     """Publish mode auto: share a note as soon as it is written, redacted exactly as `logbook publish` would. A note the checks refuse
     (pasted table rows, too big, a teammate already shared the same words) stays private. Pushing is still `logbook sync`."""
     if r.publish_mode() != "auto" or e.provenance == "auto-copied":
+        return False
+    if ground.problems(e.checks):  # a note that names something that is not there, or points at nothing, is not shared on its own
+        print("logbook: not shared automatically (" + "; ".join(ground.problems(e.checks))[:120] + "); it stays private", file=sys.stderr)
         return False
     try:
         c, _ = share_copy(r, e, False, False)
@@ -859,6 +885,9 @@ def build_parser():
     s.add_argument("--sources", help="comma-separated ids of the findings this note was written from")
     s.add_argument("--from-stdin", action="store_true", help="read the summary from stdin (for agents without hooks)")
     s.add_argument("--json", action="store_true", help="read the whole note as a JSON object on stdin (safest for agents)")
+    s.add_argument("--supersedes", help="comma-separated ids of your own notes this one replaces")
+    s.add_argument("--check", action="store_true", help="only look up what the note names and report; save nothing")
+    s.add_argument("--allow-ungrounded", action="store_true", help="save a finding that points at no file, commit or evidence, marked unverified")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="*")
     s.add_argument("--all", action="store_true", help="every private note not shared yet (same preview and one confirmation)")

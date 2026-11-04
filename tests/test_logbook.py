@@ -1176,6 +1176,93 @@ class TestPublishModes(CliRepo):
         self.assertEqual(len(self.r.load_private()), 1)
 
 
+class TestGrounding(CliRepo):
+    """What can be checked about a note is checked; what cannot is not passed off as checked."""
+
+    def setUp(self):
+        super().setUp()
+        self.head = commit(self.d, "add total", {"shop/revenue.py": "def total(rows):\n    return sum(rows)\n"})
+
+    def note(self, *flags, **body):
+        obj = {"kind": "finding", "topic": "refund sum", "summary": "x", "why": "y", **body}
+        return self.run_cli("note", "--json", *flags, stdin=json.dumps(obj))
+
+    def test_it_looks_up_the_files_names_and_commits_a_note_names(self):
+        from getlogbook import ground
+        said = f"`total()` in `shop/revenue.py` sums rows, not `shop/missing.py`, nor `no_such_function`. Fixed in {self.head[:10]} and deadbee1234."
+        c = ground.check(self.r, {"summary": said}, "t", [], None)
+        self.assertEqual((c["paths"], c["names"], c["commits"]), ([1, 2], [1, 2], [1, 2]))
+        self.assertEqual(c["files"], ["shop/revenue.py"])
+        self.assertEqual(set(c["missing"]), {"shop/missing.py", "no_such_function", "deadbee1234"})
+        self.assertTrue(c["evidence"])
+
+    def test_a_number_or_an_ordinary_word_is_not_taken_for_a_commit_or_a_name(self):
+        from getlogbook import ground
+        c = ground.check(self.r, {"summary": "Version 1234567 had 100000000 rows; see `True` and `x`; added a deadbeef of cache."}, "t", [], None)
+        self.assertEqual((c["commits"], c["names"]), ([0, 0], [0, 0]))
+
+    def test_a_finding_that_points_at_nothing_is_refused_unless_you_say_so(self):
+        with self.assertRaises(SystemExit):
+            self.note(summary="the cache is slow")
+        code, text = self.note("--allow-ungrounded", summary="the cache is slow")
+        (e,) = self.r.load_private()
+        self.assertFalse(e.checks["evidence"])
+        self.assertIn("it points at nothing", "; ".join(__import__("getlogbook").ground.problems(e.checks)))
+
+    def test_check_reports_and_saves_nothing(self):
+        code, text = self.note("--check", summary="`total()` sums rows in `shop/missing.py`", paths=["shop/revenue.py"])
+        self.assertEqual(code or 0, 0)
+        self.assertIn("grounding: files 1/2", text)
+        self.assertIn("! not found: shop/missing.py", text)
+        self.assertIn("checked only", text)
+        self.assertEqual(self.r.load_private(), [])
+
+    def test_the_result_is_saved_with_the_note_and_survives_publishing(self):
+        self.note(summary="`total()` sums rows", paths=["shop/revenue.py"])
+        (e,) = self.r.load_private()
+        self.assertEqual((e.checks["paths"], e.checks["names"], e.checks["evidence"]), ([1, 1], [1, 1], True))
+        self.assertEqual(e.checks["files"], ["shop/revenue.py"])
+        c, _ = cli.share_copy(self.r, e, False, False)
+        self.assertEqual(c.checks, e.checks)
+
+    def test_it_suggests_the_note_on_the_same_files_that_says_much_the_same(self):
+        old = capture.make_entry(self.r, "finding", "refund sum is wrong", {"summary": "total sums refunded rows", "why": "no filter"},
+                                 paths=["shop/revenue.py"])
+        code, text = self.note("--check", topic="refund sum is wrong", summary="total sums the refunded rows too", paths=["shop/revenue.py"])
+        self.assertIn(f"may overlap {old.id}", text)
+        code, text = self.note("--check", topic="pricing tiers", summary="gold plan costs more", paths=["shop/revenue.py"])
+        self.assertNotIn("may overlap", text)
+
+    def test_a_note_can_supersede_your_own_and_nobody_elses(self):
+        old = capture.make_entry(self.r, "finding", "old take", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"])
+        self.note(summary="`total()` newer take", paths=["shop/revenue.py"], supersedes=[old.id])
+        self.assertNotIn(old.id, {l.entry.id for l in self.r.all_entries()}, "the superseded note is hidden")
+        with self.assertRaises(SystemExit):
+            self.note(summary="`total()` x", paths=["shop/revenue.py"], supersedes=["1a1a5684310-5ba7d17c"])
+
+    def test_an_injected_note_that_names_something_missing_says_so_and_ranks_lower(self):
+        from getlogbook import recall
+        capture.make_entry(self.r, "finding", "refund sum", {"summary": "total sums rows", "why": "w"}, paths=["shop/revenue.py"],
+                           checks={"paths": [1, 2], "names": [0, 0], "commits": [0, 0], "files": ["shop/revenue.py"], "missing": ["shop/gone.py"], "evidence": True, "at": ""})
+        vs, _ = tree.all_views(self.r)
+        self.assertIn("unverified: not found: shop/gone.py", recall._fmt(1, vs[0]))
+
+    def test_auto_mode_does_not_share_a_note_with_something_missing_on_its_own(self):
+        self.run_cli("config", "publish", "auto")
+        code, text = self.note(summary="`total()` sums rows, `shop/gone.py` too", paths=["shop/revenue.py"])
+        self.assertIn("(private)", text)
+        self.assertEqual(self.r.load_shared()[0], [])
+        code, text = self.note(summary="`total()` sums rows", paths=["shop/revenue.py"])
+        self.assertIn("published (auto mode)", text)
+
+    def test_a_hostile_checks_record_is_coerced(self):
+        e = from_dict({"id": new_id(), "kind": "finding", "topic": "t", "body": {"summary": "s"},
+                       "checks": {"paths": [10 ** 9, -5], "names": "x", "missing": ["m" * 500] * 50, "files": ["f"] * 99, "at": "--output=x", "evidence": 1}})
+        self.assertEqual(e.checks["paths"], [1000, 0])
+        self.assertEqual(e.checks["names"], [0, 0])
+        self.assertEqual((len(e.checks["missing"]), len(e.checks["missing"][0]), len(e.checks["files"]), e.checks["at"]), (8, 80, 20, ""))
+
+
 class TestWhoWroteIt(CliRepo):
     """The "agent-written" label belongs to a note Claude wrote, and to no one else's."""
 

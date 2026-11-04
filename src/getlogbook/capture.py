@@ -39,11 +39,11 @@ def writer():
     return "agent-written" if os.environ.get("CLAUDE_CODE_SESSION_ID") else "user-written"
 
 
-def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", pending=False, supersedes=(), sha=None, level="", sources=()):
+def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", pending=False, supersedes=(), sha=None, level="", sources=(), checks=None):
     from . import tree
     body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
     e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance or writer(), captured_via=via,
-              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources), v=2,
+              supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources), v=2, checks=checks,
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
     if pending:  # change entries are written before the commit exists; post-commit attaches the sha
         e.anchor = {"paths": list(paths or [])}

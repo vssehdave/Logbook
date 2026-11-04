@@ -56,6 +56,10 @@ Bad: "fixed refund bug".
 
 Put long research, a trail of dead ends or a summary of a whole piece of work on the branch: `"level": "branch"`. Keep a commit's own note short, about what that commit changed and why, so the branch holds the story and each commit holds its part. A note written before the branch has a commit still hangs off the branch and follows it through the merge.
 
+## Check before you save
+
+Run the same JSON through `logbook note --json --check` first. It looks up every file, name in backticks and commit id the note mentions, in the repo as it is now, and prints `grounding: files 2/2, names 3/4, commits 1/1, evidence yes`, with each thing it could not find after a `!`. A name that is not in the code means the note is wrong, vague or about something that has changed: fix the note, do not save it as it is. A finding that names no file that exists, no commit and no evidence is refused. It also lists notes on the same files that say much the same, after a `~`: if your note replaces one of yours, add `"supersedes": ["<id>"]`; if both stand, say why in the note. The check only shows that what you name exists; whether what you say is true is still on you, so cite what you ran or read in `evidence`.
+
 ## Commits that have no note
 
 `logbook backfill` lists recent commits with no note saying why, with each message and diff. For ones that needed real thought, write a note with `"commit": "<sha>"`, based only on the message and diff: say "not verified" for anything you inferred and do not invent motives. Skip chores. When a conversation exists, what was said in it is a better source than the diff.

@@ -34,16 +34,17 @@ def new_id():
 class Entry:
     """Plain class (not a dataclass): importing dataclasses/inspect costs ~45 ms on every hook invocation."""
     __slots__ = ("id", "kind", "topic", "body", "anchor", "provenance", "captured_via", "supersedes", "display", "created",
-                 "redacted", "v", "level", "sources")
+                 "redacted", "v", "level", "sources", "checks")
 
     def __init__(self, id, kind="finding", topic="", body=None, anchor=None, provenance="user-written", captured_via="cli",
-                 supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None):
+                 supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None, checks=None):
         self.id, self.kind, self.topic = id, kind, topic
         self.body = dict(body or {})
         self.anchor = dict(anchor or {})  # sha tree parent patch_id branch merge_base base subject date pr paths names dirty
         self.provenance, self.captured_via = provenance, captured_via
         self.level, self.sources = level, list(sources or [])  # sources: ids of the entries this one was written from
         self.supersedes = list(supersedes or [])
+        self.checks = dict(checks or {})  # what grounding found when the note was written (see ground.py); empty for older notes
         self.display, self.created, self.redacted, self.v = display, created, redacted, v  # created: display only
 
     def to_dict(self):
@@ -72,6 +73,19 @@ def _strs(v):
     return [_s(x, 300) for x in v[:MAX_LIST] if isinstance(x, str)] if isinstance(v, list) else []
 
 
+def _pair(v):
+    return [min(max(int(x), 0), 1000) for x in v[:2]] if isinstance(v, list) and len(v) >= 2 and all(isinstance(x, int) and not isinstance(x, bool) for x in v[:2]) else [0, 0]
+
+
+def _checks(c):
+    """The grounding record of a note from untrusted data: small numbers, a few short strings, nothing else."""
+    if not isinstance(c, dict) or not c:
+        return {}
+    at = c.get("at") if isinstance(c.get("at"), str) and HEX_RE.match(c["at"]) else ""
+    return {"paths": _pair(c.get("paths")), "names": _pair(c.get("names")), "commits": _pair(c.get("commits")),
+            "files": _strs(c.get("files"))[:20], "missing": [m[:80] for m in _strs(c.get("missing"))[:8]], "evidence": bool(c.get("evidence")), "at": at}
+
+
 def from_dict(d):
     """Build an Entry from untrusted data: coerce types, cap sizes, reject bad ids."""
     if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not ID_RE.match(d["id"]):
@@ -96,7 +110,7 @@ def from_dict(d):
                  supersedes=[x for x in _strs(d.get("supersedes")) if ID_RE.match(x)],
                  display=_s(d.get("display"), 60), created=_s(d.get("created"), 40), redacted=bool(d.get("redacted")), v=version,
                  level=d.get("level") if d.get("level") in LEVELS else "",
-                 sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)])
+                 sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)], checks=_checks(d.get("checks")))
 
 
 def from_json(text):
