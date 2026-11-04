@@ -6,7 +6,7 @@ import json
 import re
 import sys
 
-from . import capture, cites, ground, nav, recall, sync, tree
+from . import capture, cites, ground, nav, recall, sync, tidy, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
@@ -758,6 +758,21 @@ def cmd_summarize(a):
     return 0
 
 
+def cmd_tidy(a):
+    """Notes that may be out of date, repeated or junk, each with the reason. Only lists: judging them and applying a change are not built yet."""
+    r = need_repo()
+    found = tidy.candidates(r, views(r)[0])
+    out(f"{len(found)} candidate{'' if len(found) == 1 else 's'} (nothing was changed; whether each one is really outdated or repeated is for an agent to judge and you to approve)")
+    for c in found[:a.limit]:
+        out(f"  {c['id']}  {'yours' if c['mine'] else 'a teammate'}  {safety_sanitize(c['topic'], 80)}")
+        out(f"      {c['reason']}")
+        for d in c["detail"]:
+            out("      - " + safety_sanitize(d, 120))
+    if len(found) > a.limit:
+        out(f"  ... {len(found) - a.limit} more (--limit {len(found)})")
+    return 0
+
+
 def cmd_backfill(a):
     """Brief an agent on commits that have no note saying why, so it can write one from the diff. Makes no model call itself."""
     r = need_repo()
@@ -883,7 +898,7 @@ def cmd_demo(a):
 
 HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
           "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
-          "cites"}
+          "cites", "tidy"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall snippet demo
 agents and hooks call these; you rarely need to:
@@ -985,7 +1000,9 @@ def build_parser():
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
     s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
     s.add_argument("--branch", help="a named branch")
-    s = add("backfill", cmd_backfill, "brief an agent on commits with no note saying why, so it can write them")
+    s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk (lists only)")
+    s.add_argument("--limit", type=int, default=20)
+    s = add("backfill", cmd_backfill,"brief an agent on commits with no note saying why, so it can write them")
     s.add_argument("shas", nargs="*")
     s.add_argument("--limit", type=int, default=3)
     s.add_argument("--scan", type=int, default=50, help="how many recent commits to look through")
