@@ -1221,6 +1221,10 @@ class TestGrounding(CliRepo):
         self.assertEqual((e.topic, e.body["why"], e.anchor["paths"][0], e.checks["paths"]), ("refund sum", "no filter", "shop/revenue.py", [2, 2]))  # both files exist
         self.assertIn("nothing filters refunds", e.body["summary"])
 
+    def test_title_is_taken_as_the_topic(self):
+        """A real Claude session wrote `title:`; it was silently dropped and the topic fell back to the start of the summary."""
+        self.assertEqual(cli._parse_fields("kind: finding\ntitle: the short name\nsummary: s\n")["topic"], "the short name")
+
     def test_check_works_on_key_value_lines_and_a_line_that_is_not_a_key_belongs_to_the_value_above(self):
         code, out = self.run_cli("note", "--fields", "--check", stdin="topic: t\nsummary: see `shop/gone.py`\nnote: this is prose, not a key\npaths: shop/revenue.py\n")
         self.assertIn("! not found: shop/gone.py", out)

@@ -83,7 +83,7 @@ def cmd_join(a):
         out(f"  writer {u}{'  (you)' if u == r.user else '  [not trusted: searchable, never auto-injected; `logbook trust ' + u + '`]' if u not in r.trusted() else '  [trusted]'}")
 
 
-_FIELD_KEYS = frozenset(("kind", "topic", "commit", "before_commit", "level", "paths", "sources", "supersedes", *BODY_FIELDS))
+_FIELD_KEYS = frozenset(("kind", "topic", "title", "commit", "before_commit", "level", "paths", "sources", "supersedes", *BODY_FIELDS))  # title: what an agent calls the topic
 _LIST_KEYS = ("paths", "sources", "supersedes")
 
 
@@ -99,6 +99,8 @@ def _parse_fields(text):
         elif key is not None:
             out[key] += "\n" + line
     obj = {k: v.strip() for k, v in out.items()}
+    if "title" in obj:
+        obj.setdefault("topic", obj.pop("title"))
     for k in _LIST_KEYS:
         if k in obj:
             obj[k] = [x for x in re.split(r"[,\s]+", obj[k]) if x]
