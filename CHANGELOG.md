@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Seven commands to learn: `setup`, `note`, `publish`, `sync`, `ask`, `log`, `status`. `ask` takes a revision range, an id, a file or name, or free text. `log` shows the notes next to your commits in the terminal. `status --check` and `--stats` fold in `doctor` and `stats`. Every older name (`init`, `join`, `install`, `query`, `explain`, `path`, `doctor`, `queue`, `stats`, and the hook entry points) still runs, so existing installs keep working; they are just not listed in `--help`.
 - Removed the browser viewer (`logbook serve`, `demo --serve`). It lives on the `viewer` branch.
 - One shared shelf per person instead of one per clone. Two machines of the same person merge on `sync`. Old per-device refs are still read and are folded into the shelf on the next publish or sync (the old names are deleted on the remote after the push).
 - `logbook publish` moves the note: the private copy is removed once the shared copy exists (`--keep` leaves it). It skips a note that is already shared, and one whose text a teammate already shared (`--force` overrides). With no ids it lists your unshared notes and asks which.
