@@ -77,9 +77,12 @@ TRIVIAL_TYPES = ("chore", "style", "docs")
 _CC = re.compile(r"^(\w+)(\([^)]*\))?!?:")
 
 
+_DRAFT = re.compile(r"^(?:fixup|squash|amend)! |^wip\b", re.I)  # work in progress that a later commit finishes
+
+
 def trivial_subject(subject):
     m = _CC.match(subject)
-    return bool(m) and m.group(1).lower() in TRIVIAL_TYPES
+    return bool(_DRAFT.match(subject)) or (bool(m) and m.group(1).lower() in TRIVIAL_TYPES)
 
 
 def trivial_shas(repo, commits):
@@ -146,6 +149,7 @@ class Anchorer:
             if m:
                 self.by_pr.setdefault(m.group(1), c["sha"])
         self._pids = None
+        self._branches = None
         self._sides = self._side_shas = None
         self.derived = get_derived(repo, self.sp[0]["sha"] if self.sp else "")
         self.shallow = (repo.common / "shallow").exists()  # no subprocess needed
@@ -184,6 +188,30 @@ class Anchorer:
                 return c["sha"]
         return None
 
+    def _branch_names(self):
+        if self._branches is None:
+            out = g.try_run(["for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes"], self.repo.root)[1]
+            self._branches = {r.split("/", 2)[2] if r.startswith("refs/heads/") else r.split("/", 3)[3] for r in out.split() if r.count("/") >= 2}
+        return self._branches
+
+    def squashed_into(self, a):
+        """A note written before its branch had a commit, where the branch was squash-merged: no merge commit names the branch and
+        the commits are gone. The first single-parent, PR-numbered commit after the branch point that touches one of the note's
+        files, once no local or remote-tracking branch of that name is left. A heuristic, so the rung says so on every entry."""
+        branch, paths, base = a.get("branch", ""), set(a.get("paths") or []), a.get("merge_base", "")
+        if not (branch and paths and base) or branch in self._branch_names():
+            return None
+        stop = self.by_sha.get(base, len(self.sp))
+        cands = [c["sha"] for c in reversed(self.sp[:stop]) if len(c["parents"]) == 1 and _PR.search(c["subject"])][:200]
+        if not cands:
+            return None
+        rc, txt, _ = g.try_run(["log", "--no-walk=unsorted", "--name-only", "--format=%x1e%H", *cands], self.repo.root)
+        for block in txt.split(chr(30))[1:] if rc == 0 else []:
+            lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+            if lines and paths & set(lines[1:]):
+                return lines[0]
+        return None
+
     def follow(self, a):
         """Where a rewritten commit went: by patch-id, by the diff of its whole branch (a squash), by PR number, by tree."""
         if a.get("patch_id") and a["patch_id"] in self.pids():
@@ -205,7 +233,10 @@ class Anchorer:
             return None, "unanchored", ""
         if a.get("merge_base") and a.get("branch") and sha == a["merge_base"] and a["branch"] != a.get("base"):
             hit = self.merged_into(a["branch"], a["merge_base"])
-            return (hit, "rewritten", "merged branch") if hit else (None, "branch", "")
+            if hit:
+                return hit, "rewritten", "merged branch"
+            hit = self.squashed_into(a)
+            return (hit, "rewritten", "squash (same files, branch gone)") if hit else (None, "branch", "")
         if sha in self.by_sha:
             return sha, "exact", "sha"
         if self._has(sha):

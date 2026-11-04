@@ -78,6 +78,7 @@ def _fmt(i, v):
         bits.append(f"{v['age_days']}d old")
     lines = [f"[{i}] " + sanitize(" | ".join(str(b) for b in bits if b), 160) + " | verify first"]
     lines.append("    topic: " + sanitize(v["topic"], 120))
+    lines.append(f"    node: note:{v['id']}" + (f" (under commit:{v['placed'][:8]})" if v["placed"] else ""))
     for k in ("summary", "what", "why", "wrong", "fix"):
         if v["body"].get(k) and k != "evidence":
             lines.append(f"    {k}: " + sanitize(v["body"][k], 300))
@@ -138,7 +139,7 @@ def digest(repo, event, prompt="", files=(), session="", cap=DEFAULT_CAP):
         used.append(v["id"])
     not_shown = len(cands) - len(out)
     if not_shown > 0:
-        foot_extra += f"(+{not_shown} more matching notes; run `logbook query \"<terms>\"`)\n"
+        foot_extra += f"(+{not_shown} more matching notes; run `logbook ask \"<terms>\"`)\n"
     if hidden_untrusted:
         foot_extra += f"({hidden_untrusted} matching notes from authors you have not trusted are searchable but not shown here)\n"
     if not out and not sum_blocks:

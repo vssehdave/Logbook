@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from . import capture, recall, sync, tree
+from . import capture, nav, recall, sync, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
@@ -349,10 +349,39 @@ def _is_rev(r, w):
     return g.try_run(["rev-parse", "--verify", "-q", w + "^{commit}"], r.root)[0] == 0
 
 
+def _show_node(r, address):
+    """One node of the tree: where it sits, its summary, and what is below it. The way down to the original is `git show`."""
+    nodes = nav.build(r)
+    n, why = nav.resolve(nodes, address)
+    if not n:
+        out(why)
+        return 3 if why.startswith("ambiguous") else 4
+    out("path: " + " > ".join(nav.path(nodes, n)))
+    if n["kind"] == "note":
+        out(detail(n["view"]))
+        return 0
+    out(f"{n['addr']}  {n['title']}")
+    s = n["summary"]
+    if s:
+        out(f"summary ({'current' if s['fresh'] else 'out of date'}, from {s['count']} notes, by {s['author']}): "
+            + (s["summary"] if s["mine"] else safety_sanitize(s["summary"], 600)))
+    elif n["kind"] in ("repo", "branch"):
+        out("summary: none yet (an agent can write one: `logbook summarize`)")
+    if n["kind"] == "commit":
+        out(f"original: git show {n['sha'][:8]}")
+    out(f"below ({len(n['children'])}):")
+    for k in n["children"]:
+        c = nodes[k]
+        out(f"  {k}  " + (_entry_line(c["view"], False) if c["kind"] == "note" else c["title"]))
+    return 0
+
+
 def cmd_ask(a):
     """One way in: a revision range, an id, a file or name, or free text."""
     r = need_repo()
     words = a.what
+    if len(words) == 1 and nav.looks_like_address(words[0]):
+        return _show_node(r, words[0])
     if len(words) == 1 and ".." in words[0]:
         words = words[0].split("..", 1)
     if len(words) == 2 and all(_is_rev(r, w) for w in words):
@@ -388,6 +417,9 @@ def cmd_status(a):
         out("note: shallow clone; some anchors are unverified")
     if not shared and (r.cdir / "private").exists():
         out("note: nothing shared yet: `logbook publish` then `logbook sync`; or `logbook setup` to fetch teammates' entries")
+    stale = [s for s in tree.summaries(vs) if not s["fresh"]]
+    if stale:
+        out(f"{len(stale)} summary(ies) out of date: `logbook summarize` briefs an agent to refresh them")
     waiting = len(r.unpublished()) if r.policy().get("publish", True) else 0
     if waiting:
         out(f"{waiting} private note(s) not shared yet: `logbook publish`")
@@ -762,7 +794,7 @@ def build_parser():
     s.add_argument("--write", action="store_true", help="same as --yes")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--no-pretool", action="store_true", help="do not add the before-read/edit note lookup")
-    s = add("ask", cmd_ask, "search the notes, or explain an id, a file or name, or a revision range (a..b)")
+    s = add("ask", cmd_ask, "search the notes; explain an id, a file or name, or a range (a..b); open a node (repo, branch:x, commit:y, note:z)")
     s.add_argument("what", nargs="+")
     s.add_argument("--limit", type=int, default=10)
     s = add("log", cmd_log, "the notes next to your commits, newest first")

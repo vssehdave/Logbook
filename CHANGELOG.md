@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The repo is a tree you can walk: `repo` > `branch:<name>` > `commit:<sha>` > `note:<id>`. `logbook ask <address>` opens a node with its path from the root, its summary and what is below it; injected notes name their node. See `docs/SUMMARY-TREE.md`.
+- A note written before its branch had a commit now follows a squash merge once the branch is gone (same files, first PR-numbered commit after the branch point); the rung says so.
+- `wip`, `fixup!`, `squash!` and `amend!` commits are folded out of `logbook log` like chores.
+- The skill says where a note belongs: long research on the branch, a short note on each commit.
 - Seven commands to learn: `setup`, `note`, `publish`, `sync`, `ask`, `log`, `status`. `ask` takes a revision range, an id, a file or name, or free text. `log` shows the notes next to your commits in the terminal. `status --check` and `--stats` fold in `doctor` and `stats`. Every older name (`init`, `join`, `install`, `query`, `explain`, `path`, `doctor`, `queue`, `stats`, and the hook entry points) still runs, so existing installs keep working; they are just not listed in `--help`.
 - Removed the browser viewer (`logbook serve`, `demo --serve`). It lives on the `viewer` branch.
 - One shared shelf per person instead of one per clone. Two machines of the same person merge on `sync`. Old per-device refs are still read and are folded into the shelf on the next publish or sync (the old names are deleted on the remote after the push).
