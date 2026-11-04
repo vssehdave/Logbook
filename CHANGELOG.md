@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.3
 
 - An optional Claude Code plugin in this repo (`.claude-plugin/`, `hooks/band/`): a Sources band above the prompt with Copy and expand/compact, showing the notes the latest answer cited and, for a teammate's shared notes, the link, author and date. Install with `/plugin install logbook --marketplace vssehdave/Logbook`.
 - Citations. Notes put in front of an agent are numbered for the whole chat, and the agent cites them as superscripts (¹ ² ³). `logbook cites` maps a number back to the note, a link to the commit or pull request (GitHub, GitLab, Bitbucket, or a `commit_url` template in the config), the author and the date. Links and names are given only for notes a teammate shared; your own and private notes get none. A shared note with no commit reads "Note added by <name> on <date>".
