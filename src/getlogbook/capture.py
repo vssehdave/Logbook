@@ -126,13 +126,18 @@ def spool_event(repo, event, agent, payload):
         checkpoint(repo, item["session"], item["transcript"])
 
 
-def _observe(repo, cfg, flush):
-    """Start an observer pass for the current branch if its queue holds anything. A flush also takes a batch too small to be worth a call by itself."""
-    from . import observer, running, worker
-    if worker.is_on(cfg) and worker.available():
-        branch, _ = running.branch_now(repo)
-        if running.Running(repo, branch).pending_bytes() > 0:
-            observer.spawn_pass(repo, branch, flush=flush)
+def _observe(repo, cfg, flush, end=False):
+    """Start an observer pass for the current branch if its queue holds anything. A flush also takes a batch too small to be worth a call by itself.
+    In auto mode a savepoint (`logbook log`, which observes first) starts instead when a commit follows enough new observations, or when the session ends."""
+    from . import observer, running, savepoint, worker
+    if not (worker.is_on(cfg) and worker.available()):
+        return
+    branch, head = running.branch_now(repo)
+    run = running.Running(repo, branch)
+    if repo.publish_mode() == "auto" and branch != "HEAD" and (savepoint.due(repo, branch, head) or (end and (savepoint.own(run) or run.pending_bytes()))):
+        spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "log", "--quiet"], repo.root)
+    elif run.pending_bytes() > 0:
+        observer.spawn_pass(repo, branch, flush=flush)
 
 
 def handle_hook(event, agent, raw):
@@ -176,10 +181,10 @@ def handle_hook(event, agent, raw):
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
             if event in ("Stop", "SessionEnd"):
-                _observe(repo, cfg, flush=event == "SessionEnd")
+                _observe(repo, cfg, flush=event == "SessionEnd", end=event == "SessionEnd")
             if event == "Stop":
-                from . import nudge
-                out = nudge.stop_block(repo, payload)
+                from . import nudge, savepoint
+                out = savepoint.ask_block(repo, payload) or nudge.stop_block(repo, payload)
         if event in ("SessionStart", "PreCompact", "SessionEnd"):
             spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], repo.root)
         if event == "SessionStart":

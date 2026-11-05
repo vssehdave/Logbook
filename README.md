@@ -5,8 +5,8 @@ Commit-anchored shared memory for AI-assisted repos. It records **why** code cha
 teammate or an AI agent can pick up where the last person left off. It works for any repo and knows nothing about any
 particular stack.
 
-- Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, no model calls (`backend none`):
-  your own agent writes the notes.
+- Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, and no key: the optional observer uses your own `claude -p`.
+  The agent writes the notes; the observer and `logbook log` ask a cheap model to condense them.
 - Two logs: a **private** one under `.git/logbook/` (never tracked), and a **shared** one on git refs
   (`refs/logbook/log/<user>/000000`, one shelf per person; two machines of the same person are merged on sync). Sharing is opt-in per entry.
 
@@ -39,9 +39,9 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
 
     /plugin install logbook --marketplace vssehdave/Logbook
 
-A row above the prompt, always there: **bibliography**, then a dot shaded by the publish mode (light grey never, pale yellow ask, yellow claude, darker yellow auto) and the mode's name, which does what **details** does, then how many sources this chat has cited (in grey), a finder on the right, and
+A row above the prompt, always there: **bibliography**, then a dot shaded by the mode (light grey manual, pale yellow ask, darker yellow auto) and the mode's name, which does what **details** does, then how many sources this chat has cited (in grey), a finder on the right, and
 **details** (it reads **compact** while the details are showing). Under it, the sources cited so far, as `¹ title` buttons that fit the width (`+N more` when they do
-not). With details on, the mode selector (`never  ask  [ claude ]  auto`, each a button that changes the mode, the chosen one in light yellow) sits right after the underlined "bibliography" text (the dot and the count are hidden meanwhile), a rule closes the header, and a note a teammate shared also shows its commit or pull request header as a link (set `commit_url` and `pr_url` in
+not). With details on, the mode selector (`manual  [ ask ]  auto`, each a button that changes the mode, the chosen one in light yellow) sits right after the underlined "bibliography" text (the dot and the count are hidden meanwhile), a rule closes the header, and a note a teammate shared also shows its commit or pull request header as a link (set `commit_url` and `pr_url` in
 `.git/logbook/config.json` for a host Logbook does not know), who wrote it and when ("Note added by
 <name> on <date>" when it has no commit). Your own and private notes stay one line. When there are more rows than the band may take, the
 band scrolls (mouse wheel, or the keys while it is focused) and says how many are hidden.
@@ -88,6 +88,24 @@ Cost is bounded: a daily call cap (`logbook config worker_calls`, default 120), 
 not compete with your own session. Its model call runs from an empty directory with settings, MCP servers and slash commands off, which keeps the fixed cost of a
 call to a fraction of a cent. `logbook worker --status` shows what it has spent and what its last pass did; `logbook worker --drain` observes what is queued now.
 
+## Modes and savepoints
+
+`logbook log` is a **savepoint**. It first observes whatever tool uses are still queued, then summarizes the observations made on this branch since the last savepoint
+(request, what was looked at, what was learned, what was done, next steps) and stores the result as a **private log** filed under the branch. The commit is optional: a
+log carries one only when a commit was made since the last savepoint, so it can be saved before or after committing. The summary comes from the same cheap model as the
+observations, or, with `--no-model` or no model available, is put together from the observations by code. The observations it covered move to
+`.git/logbook/running/<branch>/archive/`; the ones a new branch inherited from the main line stay as context. The old view of notes next to commits is `logbook history`.
+
+One setting, `logbook config publish`, decides how much happens by itself:
+
+| mode | `logbook log` (savepoint) | `logbook publish` |
+|---|---|---|
+| `manual` | you run it | you run it |
+| `ask` (default) | after a commit the agent asks you once, then runs it | the agent asks, shows the redacted preview, then runs it |
+| `auto` | by itself, after a commit that follows 5 or more new observations, and when a session ends | notes as they are written (publishing logs when their branch merges is the next step) |
+
+The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A repo policy that turns publishing off (`.logbook/policy.json`) still wins over every mode.
+
 ## What Claude may run without asking (Claude Code)
 
 `logbook setup` adds one `PreToolUse` hook on Bash; it writes no allow rules. The hook answers for a command that is exactly one `logbook` command
@@ -106,8 +124,8 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `backfill` | allow |
 | `tidy` | allow; `--apply` asks |
 | `worker` | allow; `--drain` asks |
-| `publish` | never: deny, ask: ask, claude: allow, auto: allow |
-| `sync` | never: ask, ask: ask, claude: ask, auto: allow |
+| `publish` | never: deny, manual: deny, ask: ask, auto: allow |
+| `sync` | never: ask, manual: ask, ask: ask, auto: allow |
 | `purge` | ask |
 | `gc` | ask |
 | `trust` | ask |
@@ -135,7 +153,8 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
     logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match
     logbook ask repo | branch:<name> | commit:<sha> | note:<id>   # walk the tree from the top (docs/SUMMARY-TREE.md)
     logbook cites                             # the numbered sources behind an answer in this chat (links, names, dates)
-    logbook log                               # the notes next to your commits, newest first (-v for their text)
+    logbook log                               # save a log: summarize this branch's session since the last one (private until you publish)
+    logbook history                           # the notes next to your commits, newest first (-v for their text)
     logbook status                            # what is recorded and waiting to be shared; --check, --stats
 
 New teammate: clone, then `logbook setup`. A plain `git clone`/`git fetch` does not download logbook refs.

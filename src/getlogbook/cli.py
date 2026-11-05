@@ -12,7 +12,7 @@ from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
 from .safety import sanitize as safety_sanitize
-from .store import PUBLISH_MODES, Repo
+from .store import LEGACY_MODES, PUBLISH_MODES, Repo
 
 SHARE_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale")  # allowlist: evidence is opt-in
 
@@ -244,7 +244,7 @@ def share_copy(r, e, include_evidence, allow_table):
 def cmd_publish(a):
     r = need_repo()
     if r.publish_mode() == "never":
-        raise SystemExit("logbook: publishing is off: the publish mode is never, or this repo's policy turns it off (.logbook/policy.json)")
+        raise SystemExit("logbook: publishing is off for this repo: its policy turns it off (.logbook/policy.json)")
     ready = []
     if getattr(a, "all", False):
         ids = r.unpublished()
@@ -416,6 +416,22 @@ def _log_commit(c, verbose, indent=""):
 
 
 def cmd_log(a):
+    """A savepoint: summarize what the observer collected on this branch since the last one and store it as a private log."""
+    from . import running, savepoint
+    r = need_repo()
+    branch = running.branch_now(r)[0]
+    res = savepoint.save(r, branch, use_model=not a.no_model, observe=not a.no_observe)
+    if "saved" not in res:
+        if not a.quiet:
+            out("logbook: " + res["skipped"])
+        return 0 if res["skipped"].startswith("nothing") else 1
+    if not a.quiet:
+        out(f"saved log {res['saved']} on {res['branch']} ({'commit ' + res['commit'][:8] if res['commit'] else 'no commit yet'}): {res['title']}")
+        out(f"  covers {res['observations']} observation(s), summarized by {res['by']}; private until `logbook publish`.")
+    return 0
+
+
+def cmd_history(a):
     """The notes next to your commits, newest first, in the terminal."""
     r = need_repo()
     t = tree.build(r)
@@ -682,6 +698,8 @@ def cmd_config(a):
         out(r.publish_mode() if a.key == "publish" else str(c.get(a.key, "(default)")))
         return 0
     allowed = CONFIG_KEYS[a.key]
+    if a.key == "publish":
+        a.value = LEGACY_MODES.get(a.value, a.value)  # never -> manual, claude -> ask
     if allowed and a.value not in allowed:
         raise SystemExit(f"logbook: {a.key} must be one of {', '.join(allowed)}")
     if not allowed and not a.value.isdigit():
@@ -946,13 +964,14 @@ def cmd_demo(a):
 
 HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
           "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
-          "cites", "tidy", "worker"}
+          "cites", "tidy", "worker", "history"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall snippet demo
 agents and hooks call these; you rarely need to:
   context summarize backfill inject cites capture post-commit reconcile
 older names that still work:
-  init join query explain path doctor queue stats install install-hook"""
+  init join query explain path doctor queue stats install install-hook
+the old `log` view of notes next to commits is now `history`"""
 
 
 def build_parser():
@@ -975,7 +994,11 @@ def build_parser():
     s = add("ask", cmd_ask, "search the notes; explain an id, a file or name, or a range (a..b); open a node (repo, branch:x, commit:y, note:z)")
     s.add_argument("what", nargs="+")
     s.add_argument("--limit", type=int, default=10)
-    s = add("log", cmd_log, "the notes next to your commits, newest first")
+    s = add("log", cmd_log, "save a log: summarize this branch's session since the last one (private until you publish)")
+    s.add_argument("--no-model", action="store_true", help="put the summary together by code, without asking a model")
+    s.add_argument("--no-observe", action="store_true", help="do not first observe the tool uses still queued")
+    s.add_argument("--quiet", action="store_true")
+    s = add("history", cmd_history, "the notes next to your commits, newest first")
     s.add_argument("-n", type=int, default=20, help="how many commits")
     s.add_argument("-v", "--verbose", action="store_true", help="show each note's text and trivial commits")
     s = add("init", cmd_init, "create your id and config")

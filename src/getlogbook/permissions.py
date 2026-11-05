@@ -16,9 +16,9 @@ TABLE = {
     "tidy": "allow", "worker": "allow", "publish": "mode", "sync": "mode",
     "purge": "ask", "gc": "ask", "trust": "ask", "config": "ask", "setup": "ask", "uninstall": "ask",
 }
-# publish: never denies, ask lets the normal prompt run, claude and auto allow. sync: allow only in auto mode, else ask.
-MODE_RULES = {"publish": {"never": "deny", "ask": "ask", "claude": "allow", "auto": "allow"},
-              "sync": {"never": "ask", "ask": "ask", "claude": "ask", "auto": "allow"}}
+# publish: never (policy) and manual deny, ask lets the normal prompt run, auto allows. sync: allow only in auto mode, else ask.
+MODE_RULES = {"publish": {"never": "deny", "manual": "deny", "ask": "ask", "auto": "allow"},
+              "sync": {"never": "ask", "manual": "ask", "ask": "ask", "auto": "allow"}}
 ASK_FLAG = {"tidy": "--apply", "worker": "--drain"}  # the flag that turns an allowed command into one that asks: applying a tidy is the person's approval step, a worker pass spends their quota
 NAMES = ("logbook", "getlogbook")
 _HEREDOC = re.compile(r"\s<<-?\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*$")

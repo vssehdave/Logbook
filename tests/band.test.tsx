@@ -38,10 +38,10 @@ describe('the citation label', () => {
 
 describe('the publish modes', () => {
   test('run from least to most hands-off, each with its own shade, and an unknown mode is the grey one', () => {
-    expect(MODES.map(m => m.key)).toEqual(['never', 'ask', 'claude', 'auto'])
-    expect(new Set(MODES.map(m => m.color)).size).toBe(4)
+    expect(MODES.map(m => m.key)).toEqual(['manual', 'ask', 'auto'])
+    expect(new Set(MODES.map(m => m.color)).size).toBe(3)
     expect(modeColor('auto')).not.toBe(modeColor('ask'))
-    expect(modeColor('whatever')).toBe(modeColor('never'))
+    expect(modeColor('whatever')).toBe(modeColor('manual'))
     expect(SELECTED).toBe(modeColor('ask'))
   })
 })

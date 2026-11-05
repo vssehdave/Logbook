@@ -14,11 +14,10 @@ const open = atom({ plugin: 'logbook', key: 'open' } as const, false)
 const owner = atom({ plugin: 'logbook', key: 'owner' } as const, '') // the session id the list was built in
 const mode = atom({ plugin: 'logbook', key: 'mode' } as const, 'ask') // the publish mode, as `logbook config publish` prints it
 
-// The publish modes, least to most hands-off, with the shade of the dot beside each: light grey, pale yellow, yellow, darker yellow.
+// The modes, least to most hands-off, with the shade of the dot beside each: light grey, pale yellow, darker yellow.
 export const MODES = [
-  { key: 'never', color: '#c8c8c8' },
+  { key: 'manual', color: '#c8c8c8' },
   { key: 'ask', color: '#f3eaa8' },
-  { key: 'claude', color: '#e9d44a' },
   { key: 'auto', color: '#c9a227' },
 ] as const
 export const SELECTED = '#f3eaa8' // light yellow: the mode chosen in the selector

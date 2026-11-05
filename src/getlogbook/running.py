@@ -179,6 +179,22 @@ class Running:
                 for r in records:
                     f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
+    def archive(self, savepoint_id, records):
+        """The observations a savepoint covered, kept readable but out of the running log."""
+        if records:
+            d = self.dir / "archive"
+            d.mkdir(parents=True, exist_ok=True)
+            self.rewrite(records, d / f"{savepoint_id}.jsonl")
+
+    def archived(self, savepoint_id):
+        try:
+            return [json.loads(x) for x in (self.dir / "archive" / f"{savepoint_id}.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        except (OSError, ValueError):
+            return []
+
+    def rewrite(self, records, path=None):
+        atomic_write(path or self.obs, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+
     def fork_from(self, parent):
         """A branch with no running log yet starts from its parent's observations. Done once, before the first observation is written."""
         if self.obs.exists() or not parent or parent == self.branch:

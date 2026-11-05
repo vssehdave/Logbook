@@ -24,7 +24,8 @@ _REF_RE = re.compile(r"/(?:branch)?log/([0-9a-f]{6,16})/([0-9a-f]{2,16})$")
 # One shelf per person. The second path part used to be a per-clone device id; it is now this constant, still hex so that
 # 0.0.2 readers match it, and git refuses `log/<user>` next to `log/<user>/<device>`, so the path shape cannot change.
 SHELF = "000000"
-PUBLISH_MODES = ("never", "ask", "claude", "auto")  # least to most hands-off
+PUBLISH_MODES = ("manual", "ask", "auto")  # least to most hands-off
+LEGACY_MODES = {"never": "manual", "claude": "ask"}  # the 0.0.4 names, read as their nearest new mode
 MAX_BLOB = 65536
 MAX_PER_REF = 5000
 DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "named",
@@ -123,11 +124,12 @@ class Repo:
         return order[min(order.index(want) if want in order else 1, order.index(cap) if cap in order else 1)]
 
     def publish_mode(self):
-        """How notes reach the shared log: never (refused), ask (you confirm a preview each time; the default), claude (the agent may
-        publish what it judges worth sharing), auto (every note, as it is written). A repo policy that turns publishing off wins."""
+        """How logs and notes are saved and shared: manual (you run `logbook log` and `logbook publish`), ask (the agent asks you, then runs them; the
+        default), auto (it saves and publishes by itself). A repo policy that turns publishing off wins and reads as "never"; 0.0.4's names still read."""
         if not self.policy().get("publish", True):
             return "never"
         mode = self.cfg().get("publish", "ask")
+        mode = LEGACY_MODES.get(mode, mode)
         return mode if mode in PUBLISH_MODES else "ask"
 
     def committers(self):
@@ -356,11 +358,10 @@ class Repo:
         return loaded, tombs
 
     def unpublished(self):
-        """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, and a worker's drafts are personal until you pick one
-        by id, so neither is offered (or counted in the push reminder)."""
+        """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered (or counted in the push reminder)."""
         shared, _ = self.load_shared()
         done = {l.entry.id for l in shared if l.user == self.user}
-        return [e for e in self.load_private() if e.id not in done and e.provenance not in ("auto-copied", "worker-written")]
+        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied"]
 
     def all_entries(self):
         """Shared (merged at read time, deduped by id) + private overlay. Superseded/purged entries are hidden."""

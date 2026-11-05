@@ -969,13 +969,13 @@ class TestCommands(CliRepo):
     def test_log_shows_notes_next_to_their_commits(self):
         capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
                            paths=["shop/revenue.py"])
-        code, text = self.run_cli("log")
+        code, text = self.run_cli("history")
         self.assertEqual(code, 0)
         self.assertIn("base", text)
         self.assertIn("refunds are summed", text)
         self.assertIn("you, private", text)
         self.assertNotIn("no filter", text, "the body only shows with -v")
-        self.assertIn("why: no filter", self.run_cli("log", "-v")[1])
+        self.assertIn("why: no filter", self.run_cli("history", "-v")[1])
 
     def test_ask_routes_ids_files_text_and_ranges(self):
         e = capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
@@ -1052,8 +1052,8 @@ class TestTreeNav(CliRepo):
     def test_drafts_are_folded_out_of_the_log_until_asked_for(self):
         commit(self.d, "wip: half done", {"shop/other.py": "y = 2\n"})
         commit(self.d, "fixup! base", {"shop/other.py": "y = 3\n"})
-        self.assertNotIn("half done", self.run_cli("log")[1])
-        self.assertIn("half done", self.run_cli("log", "-v")[1])
+        self.assertNotIn("half done", self.run_cli("history")[1])
+        self.assertIn("half done", self.run_cli("history", "-v")[1])
 
 
 class TestSquashWithoutCommit(Base):
@@ -1223,21 +1223,34 @@ class TestPublishModes(CliRepo):
     def mode(self, m):
         self.assertEqual(self.run_cli("config", "publish", m)[0], 0)
 
-    def test_the_default_is_ask_and_only_the_four_modes_are_accepted(self):
+    def test_the_default_is_ask_and_only_the_three_modes_are_accepted(self):
         self.assertEqual(self.run_cli("config", "publish")[1].strip(), "ask")
-        self.mode("claude")
-        self.assertEqual(self.run_cli("config", "publish")[1].strip(), "claude")
+        self.mode("manual")
+        self.assertEqual(self.run_cli("config", "publish")[1].strip(), "manual")
         with self.assertRaises(SystemExit):
             self.run_cli("config", "publish", "sometimes")
-        self.assertEqual(json.loads(self.run_cli("cites", "--json")[1])["mode"], "claude")
+        self.assertEqual(json.loads(self.run_cli("cites", "--json")[1])["mode"], "manual")
 
-    def test_never_refuses_to_publish_and_stops_reminding(self):
+    def test_the_0_0_4_names_are_read_as_their_nearest_mode(self):
+        c = self.r.cfg()
+        for old, new in (("never", "manual"), ("claude", "ask"), ("ask", "ask"), ("auto", "auto")):
+            c["publish"] = old
+            self.r.save_cfg(c)
+            self.assertEqual(self.r.publish_mode(), new, old)
+        self.mode("claude")
+        self.assertEqual(self.r.cfg()["publish"], "ask", "a name typed the old way is stored the new way")
+
+    def test_manual_lets_you_publish_by_hand_and_a_policy_that_turns_publishing_off_refuses(self):
         e = capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
-        self.mode("never")
+        self.mode("manual")
+        self.assertEqual(self.run_cli("publish", e.id, "--yes")[0], 0)
+        e2 = capture.make_entry(self.r, "finding", "t2", {"summary": "s2", "why": "w2"})
+        (self.d / ".logbook").mkdir()
+        (self.d / ".logbook" / "policy.json").write_text(json.dumps({"publish": False}))
         with self.assertRaises(SystemExit):
-            self.run_cli("publish", e.id, "--yes")
+            self.run_cli("publish", e2.id, "--yes")
         self.assertNotIn("not shared yet", self.run_cli("status")[1])
-        self.assertIsNotNone(self.r.get_private(e.id))
+        self.assertIsNotNone(self.r.get_private(e2.id))
 
     def test_a_repo_policy_that_turns_publishing_off_wins_over_any_mode(self):
         self.mode("auto")
@@ -1245,8 +1258,8 @@ class TestPublishModes(CliRepo):
         (self.d / ".logbook" / "policy.json").write_text(json.dumps({"publish": False}))
         self.assertEqual(self.r.publish_mode(), "never")
 
-    def test_ask_and_claude_leave_a_new_note_private(self):
-        for m in ("ask", "claude"):
+    def test_ask_and_manual_leave_a_new_note_private(self):
+        for m in ("ask", "manual"):
             self.mode(m)
             code, text = self.write(f"note written in {m} mode")
             self.assertIn("(private)", text)
@@ -1463,10 +1476,10 @@ class TestPermissions(CliRepo):
 
     def test_the_table(self):
         for sub in ("note", "ask", "context", "cites", "log", "status", "summarize", "backfill"):
-            for mode in ("never", "ask", "claude", "auto"):
+            for mode in ("never", "manual", "ask", "auto"):
                 self.assertEqual(self.decide(f"logbook {sub} x", mode), "allow", sub)
-        self.assertEqual([self.decide("logbook publish abc", m) for m in ("never", "ask", "claude", "auto")], ["deny", "ask", "allow", "allow"])
-        self.assertEqual([self.decide("logbook sync", m) for m in ("never", "ask", "claude", "auto")], ["ask", "ask", "ask", "allow"])
+        self.assertEqual([self.decide("logbook publish abc", m) for m in ("never", "manual", "ask", "auto")], ["deny", "deny", "ask", "allow"])
+        self.assertEqual([self.decide("logbook sync", m) for m in ("never", "manual", "ask", "auto")], ["ask", "ask", "ask", "allow"])
         for sub in ("purge", "gc", "trust", "config", "setup", "uninstall"):
             self.assertEqual(self.decide(f"logbook {sub}", "auto"), "ask", sub)
         self.assertIsNone(self.decide("logbook someday-command"), "a subcommand not in the table: no opinion")
@@ -1490,7 +1503,7 @@ class TestPermissions(CliRepo):
         out = json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook note x")))["hookSpecificOutput"]
         self.assertEqual((out["hookEventName"], out["permissionDecision"]), ("PreToolUse", "allow"))
         self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "ask")
-        self.run_cli("config", "publish", "never")
+        self.run_cli("config", "publish", "manual")
         self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(capture.handle_hook("Permission", "claude-code", payload("ls -la")), "", "no opinion on other commands")
 
@@ -1601,7 +1614,7 @@ class TestStatus(CliRepo):
 
     def test_the_note_shows_its_status_and_the_record_is_not_listed_as_a_note_of_its_own(self):
         self.apply(self.block("resolved"))
-        code, text = self.run_cli("log")
+        code, text = self.run_cli("history")
         self.assertIn("export stalls", text)
         self.assertIn("[resolved]", text)
         self.assertNotIn("resolved: export stalls", text, "the record is not a second line in the log")
@@ -1698,7 +1711,7 @@ OBS_XML = """<observation><type>bugfix</type><title>total ignores refunds</title
 <files_read><file>shop/revenue.py</file></files_read><files_modified></files_modified></observation>"""
 
 
-class TestObserver(CliRepo):
+class ObserverBase(CliRepo):
     """The observer: a hook queues tool uses per branch, a background pass turns them into observations in the branch's running log. The model is faked here."""
 
     def setUp(self):
@@ -1731,6 +1744,8 @@ class TestObserver(CliRepo):
     def drain(self, text=OBS_XML, branch=None, flush=False, **kw):
         return self.observer.drain(self.r, branch or self.branch, flush=flush, call=self.model(text, **kw))
 
+
+class TestObserver(ObserverBase):
     def test_a_tool_use_is_queued_on_its_branch_with_no_model_call(self):
         self.tool(2)
         events, _ = self.run_.take(10, 10000)
@@ -1926,6 +1941,138 @@ class TestObserver(CliRepo):
         c["worker"] = False
         self.r.save_cfg(c)
         self.assertEqual(nudge.mode(self.r), "block", "off by default again when the worker is off")
+
+
+SAVEPOINT_XML = """<savepoint><title>Refunds no longer counted as revenue</title><request>Find why totals run high.</request>
+<investigated>shop/revenue.py</investigated><learned>total() never read the refunded flag.</learned>
+<completed>total() now skips refunded orders.</completed><next_steps>Check the monthly report.</next_steps></savepoint>"""
+
+
+class TestSavepoint(ObserverBase):
+    """`logbook log`: the observations of a branch since the last savepoint become one private log. The model is faked here."""
+
+    def observe(self, n=5, title="total ignores refunds"):
+        self.tool(n)
+        self.drain(OBS_XML.replace("total ignores refunds", title).replace("adds every order", f"adds every order ({title})"))
+
+    def save(self, text=SAVEPOINT_XML, **kw):
+        return self.savepoint.save(self.r, kw.pop("branch", self.branch), call=lambda p: (self.calls.append(p) or text, 0.001, ""), **kw)
+
+    def setUp(self):
+        super().setUp()
+        from getlogbook import savepoint
+        self.savepoint = savepoint
+
+    def logs(self):
+        return [e for e in self.r.load_private() if e.kind == "log"]
+
+    def test_a_savepoint_stores_a_private_log_with_the_branch_and_clears_the_running_log(self):
+        self.observe()
+        res = self.save()
+        (e,) = self.logs()
+        self.assertEqual((res["saved"], res["by"], res["observations"], res["commit"]), (e.id, "model", 1, ""))
+        self.assertEqual((e.kind, e.topic, e.level, e.anchor["branch"], e.anchor["sha"]), ("log", "Refunds no longer counted as revenue", "branch", self.branch, ""))
+        self.assertEqual((e.body["context"], e.body["what"], e.body["why"], e.body["open"]), ("Find why totals run high.", "total() now skips refunded orders.",
+                         "total() never read the refunded flag.", "Check the monthly report."))
+        self.assertEqual(e.sources, [o["id"] for o in self.running.Running(self.r, self.branch).archived(e.id)])
+        self.assertEqual(self.run_.observations(), [], "the covered observations left the running log")
+        self.assertEqual(self.save()["skipped"], "nothing new since the last savepoint")
+        self.assertEqual(self.r.load_shared()[0], [], "private until published")
+
+    def test_a_commit_made_since_the_last_savepoint_is_attached_and_none_is_not(self):
+        self.observe()
+        self.assertEqual(self.save()["commit"], "", "no commit in range")
+        self.observe(title="second")
+        commit(self.d, "tax", {"shop/tax.py": "t = 1\n"})
+        res = self.save()
+        (e,) = [x for x in self.logs() if x.id == res["saved"]]
+        self.assertEqual((res["commit"], e.anchor["sha"], e.level), (e.anchor["sha"], g.state(self.d)[0], "commit"))
+        self.assertEqual(e.anchor["subject"], "tax")
+
+    def test_a_branch_savepoint_covers_only_its_own_observations(self):
+        self.observe()
+        sh("git", "checkout", "-q", "-b", "feat/x", cwd=self.d)
+        self.tool(5)
+        self.drain(OBS_XML.replace("total ignores refunds", "second thing").replace("adds every order", "adds each order"), branch="feat/x")
+        res = self.save(branch="feat/x")
+        (e,) = [x for x in self.logs() if x.id == res["saved"]]
+        self.assertEqual((res["observations"], e.anchor["branch"]), (1, "feat/x"))
+        left = self.running.Running(self.r, "feat/x").observations()
+        self.assertEqual([o["branch"] for o in left], [self.branch], "the inherited one stays as context")
+        self.assertEqual(len(self.run_.observations()), 1, "the parent's running log is untouched")
+
+    def test_without_a_model_or_with_a_bad_answer_the_summary_comes_from_the_observations(self):
+        self.observe()
+        res = self.save(use_model=False)
+        self.assertEqual((res["by"], res["title"]), ("code", "total ignores refunds"))
+        self.observe(title="again")
+        self.assertEqual(self.save("not xml at all")["by"], "code")
+
+    def test_the_savepoint_takes_the_queued_tool_uses_first(self):
+        self.tool(5)
+        res = self.savepoint.save(self.r, self.branch, call=lambda p: (self.calls.append(p) or (OBS_XML if "TOOL USES" in p else SAVEPOINT_XML), 0.001, ""))
+        self.assertEqual((res["observations"], res["by"]), (1, "model"))
+        self.assertEqual(len(self.calls), 2, "one call to observe, one to summarize")
+
+    def test_log_from_the_command_line_and_a_detached_head(self):
+        self.observe()
+        code, text = self.run_cli("log", "--no-model", "--no-observe")
+        self.assertEqual(code, 0)
+        self.assertIn("saved log", text)
+        self.assertIn("no commit yet", text)
+        self.assertEqual(self.run_cli("log", "--no-model")[0], 0)
+        self.assertIn("nothing new", self.run_cli("log", "--no-model")[1])
+        self.assertIn("detached", self.savepoint.save(self.r, "HEAD")["skipped"])
+
+    def test_a_stored_log_publishes_like_any_note(self):
+        self.observe()
+        res = self.save()
+        code, text = self.run_cli("publish", res["saved"], "--yes")
+        self.assertEqual(code, 0, text)
+        shared, _ = self.r.load_shared()
+        self.assertEqual([(l.entry.kind, l.entry.anchor["branch"]) for l in shared], [("log", self.branch)])
+        self.assertNotIn("evidence", shared[0].entry.body, "what was investigated stays private unless asked for")
+
+    def test_auto_saves_after_a_commit_once_enough_observations_have_piled_up(self):
+        import unittest.mock
+        self.run_cli("config", "publish", "auto")
+        for i in range(self.savepoint.AUTO_MIN):
+            self.tool(self.observer.MIN_BATCH)
+            self.drain(OBS_XML.replace("total ignores refunds", f"thing {i}").replace("adds every order", f"adds {i}"), flush=True)
+        head = self.running.branch_now(self.r)[1]
+        self.assertFalse(self.savepoint.due(self.r, self.branch, head), "no commit yet")
+        commit(self.d, "tax", {"shop/tax.py": "t = 1\n"})
+        head = self.running.branch_now(self.r)[1]
+        self.assertTrue(self.savepoint.due(self.r, self.branch, head))
+        payload = json.dumps({"session_id": "s1", "cwd": str(self.d)})
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            capture.handle_hook("Stop", "claude-code", payload)
+            self.assertTrue(any(c.args[0][-2:] == ["log", "--quiet"] for c in spawn.call_args_list), spawn.call_args_list)
+
+    def test_auto_saves_when_the_session_ends_and_manual_never_does(self):
+        import unittest.mock
+        self.observe()
+        payload = json.dumps({"session_id": "s1", "cwd": str(self.d)})
+        for mode, expect in (("auto", True), ("manual", False)):
+            self.run_cli("config", "publish", mode)
+            with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+                capture.handle_hook("SessionEnd", "claude-code", payload)
+                self.assertEqual(any(c.args[0][-2:] == ["log", "--quiet"] for c in spawn.call_args_list), expect, mode)
+
+    def test_ask_mode_has_the_agent_ask_once_per_commit(self):
+        for i in range(self.savepoint.AUTO_MIN):
+            self.tool(self.observer.MIN_BATCH)
+            self.drain(OBS_XML.replace("total ignores refunds", f"thing {i}").replace("adds every order", f"adds {i}"), flush=True)
+        self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "no commit yet")
+        commit(self.d, "tax", {"shop/tax.py": "t = 1\n"})
+        self.assertEqual(self.savepoint.ask_block(self.r, {"stop_hook_active": True}), "", "never twice in a row")
+        asked = json.loads(self.savepoint.ask_block(self.r, {}))
+        self.assertEqual(asked["decision"], "block")
+        self.assertIn("logbook log", asked["reason"])
+        self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "once for this commit")
+        self.run_cli("config", "publish", "manual")
+        commit(self.d, "tax2", {"shop/tax2.py": "t = 2\n"})
+        self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "manual mode never asks")
 
 
 class TestWhoWroteIt(CliRepo):
