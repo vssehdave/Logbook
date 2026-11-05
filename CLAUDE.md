@@ -15,7 +15,7 @@ Layout: `src/getlogbook/` (`cli.py` commands, `store.py` storage and sync, `sync
 
 ## Commands
 
-- Tests: `env -u CLAUDE_CODE_SESSION_ID python -m unittest discover -s tests` (about 2.5 minutes: run it in the background). Unset that variable or notes count as agent-written and tests that CI sees differently will pass wrongly.
+- Tests: `env -u CLAUDE_CODE_SESSION_ID python -m unittest discover -s tests` (about 6 minutes: run it in the background). `tests/test_day.py` simulates a working day through the real hooks with a fake `claude` on PATH (no allowance spent); set `LOGBOOK_SRC` to an installed build's site-packages to run the whole suite against that build instead of the checkout. Unset that variable or notes count as agent-written and tests that CI sees differently will pass wrongly.
 - Demo: `PYTHONPATH=src python -m getlogbook demo` (must print ALL CHECKS PASSED).
 - Band: `claude plugin validate .` and `claude plugin test .` (the validator does not catch what the engine refuses at run time).
 - End to end against an installed build: `python bench/e2e.py <path to logbook executable>` (expects ALL PASSED; on Windows the closed-input check can differ, see the script).
