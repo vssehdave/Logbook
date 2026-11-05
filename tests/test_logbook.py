@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1345,7 +1346,9 @@ class TestGrounding(CliRepo):
 
     def test_it_looks_up_the_files_names_and_commits_a_note_names(self):
         from getlogbook import ground
-        said = f"`total()` in `shop/revenue.py` sums rows, not `shop/missing.py`, nor `no_such_function`. Fixed in {self.head[:10]} and deadbee1234."
+        # a hash prefix of only digits is read as a number, not a commit (on purpose), and about 1 in 100 random hashes starts with 10 digits: take a prefix with a letter
+        sha = next(self.head[:n] for n in range(10, 41) if re.search("[a-f]", self.head[:n]) and re.search("[0-9]", self.head[:n]))
+        said = f"`total()` in `shop/revenue.py` sums rows, not `shop/missing.py`, nor `no_such_function`. Fixed in {sha} and deadbee1234."
         c = ground.check(self.r, {"summary": said}, "t", [], None)
         self.assertEqual((c["paths"], c["names"], c["commits"]), ([1, 2], [1, 2], [1, 2]))
         self.assertEqual(c["files"], ["shop/revenue.py"])
@@ -1554,9 +1557,106 @@ class TestTidy(CliRepo):
 
     def test_a_commit_id_taken_from_a_note_never_reaches_git_unchecked(self):
         from getlogbook import tidy
-        v = {"placed": "", "sha": "", "paths": ["shop/revenue.py"], "checks": {"at": "--output=evil.txt", "files": ["shop/revenue.py"]}}
+        v = {"kind": "finding", "placed": "", "sha": "", "paths": ["shop/revenue.py"], "checks": {"at": "--output=evil.txt", "files": ["shop/revenue.py"]}}
         self.assertEqual(tidy.later_commits(self.r, v), [])
         self.assertFalse((self.d / "evil.txt").exists())
+
+
+class TestStatus(CliRepo):
+    """A status is a record written by a note's own author, checked against git before it is stored; the note itself is never edited."""
+
+    def setUp(self):
+        super().setUp()
+        self.note = capture.make_entry(self.r, "finding", "export stalls", {"summary": "the export stalls on big files", "why": "no chunking", "evidence": "e"},
+                                       paths=["shop/other.py"], provenance="user-written")
+        self.fix = commit(self.d, "chunk the export", {"shop/other.py": "y = 2\n"})
+
+    def apply(self, *blocks):
+        return self.run_cli("tidy", "--apply", stdin="\n---\n".join(blocks))
+
+    def view(self):
+        return {v["id"]: v for v in tree.all_views(self.r)[0]}[self.note.id]
+
+    def block(self, state="resolved", commits=None, reason="chunked in the fix", nid=None):
+        return f"status_of: {nid or self.note.id}\nstatus: {state}\ncommits: {self.fix[:10] if commits is None else commits}\nreason: {reason}"
+
+    def test_resolved_is_never_injected_and_in_progress_is_shown_with_its_commits_and_ranked_lower(self):
+        from getlogbook import recall
+        self.assertTrue(recall.injectable(self.view()))
+        score_open = [s for s, v in recall.rank(self.r, query="export stalls") if v["id"] == self.note.id][0]
+        code, text = self.apply(self.block("in-progress"))
+        self.assertIn("is now in-progress", text)
+        v = self.view()
+        self.assertEqual((v["status"], v["status_commits"], v["status_reason"]), ("in-progress", [self.fix], "chunked in the fix"))
+        self.assertTrue(recall.injectable(v))
+        self.assertIn(f"status: in-progress, later commits changed this in part: {self.fix}", recall._fmt(1, v))
+        self.assertLess([s for s, w in recall.rank(self.r, query="export stalls") if w["id"] == self.note.id][0], score_open)
+        self.apply(self.block("resolved"))
+        v = self.view()
+        self.assertEqual(v["status"], "resolved")
+        self.assertFalse(recall.injectable(v), "a resolved note is never used as context, so never cited")
+        self.assertEqual([c for c in tidy_candidates(self.r) if c["id"] == self.note.id], [], "and it is not a tidy candidate again")
+        self.apply(self.block("open", commits="", reason="the fix was reverted"))
+        self.assertEqual(self.view()["status"], "open", "its author can reopen it")
+
+    def test_the_record_is_a_note_with_evidence_and_the_original_is_untouched(self):
+        before = (self.r.pdir / f"{self.note.id}.json").read_text(encoding="utf-8")
+        self.apply(self.block("resolved"))
+        self.assertEqual((self.r.pdir / f"{self.note.id}.json").read_text(encoding="utf-8"), before)
+        (rec,) = [e for e in self.r.load_private() if e.status]
+        self.assertEqual((rec.status["of"], rec.status["state"], rec.captured_via), (self.note.id, "resolved", "tidy"))
+        self.assertIn("chunk the export", rec.body["evidence"])
+        self.assertNotIn("status", json.loads(self.note.to_json()), "an ordinary note's file has no status key")
+
+    def test_a_proposal_is_refused_unless_it_is_yours_real_and_backed_by_a_commit_that_touched_its_files(self):
+        elsewhere = commit(self.d, "unrelated", {"shop/revenue.py": "x = 9\n"})
+        from getlogbook import tidy
+        for blk, why in ((self.block(commits=elsewhere[:10]), "did not touch"), (self.block(commits=""), "needs the commit"),
+                         (self.block(commits="deadbeef"), "did not touch"), (self.block(reason=""), "a reason is required"),
+                         (self.block(state="done"), "status must be one of"), (self.block(nid="1a1a5684310-5ba7d17c"), "no such note"),
+                         (self.block(nid="not-an-id"), "is not a note id"), (self.block(commits="--output=x"), "did not touch")):
+            done, errors = tidy.apply(self.r, tree.all_views(self.r)[0], blk)
+            self.assertEqual(done, [], blk)
+            self.assertTrue(any(why in e for e in errors), (why, errors))
+        with self.assertRaises(SystemExit) as ctx:
+            self.apply(self.block(reason=""))
+        self.assertIn("nothing was changed", str(ctx.exception))
+        self.assertEqual([e for e in self.r.load_private() if e.status], [], "nothing was stored")
+
+    def test_all_or_nothing(self):
+        with self.assertRaises(SystemExit):
+            self.apply(self.block("resolved"), self.block("resolved", commits="deadbeef"))
+        self.assertEqual(self.view()["status"], "open", "the valid one was not applied either")
+
+    def test_only_the_author_can_change_a_status_and_a_hostile_record_is_ignored(self):
+        mine = {"id": "a", "writer": "alice", "status_rec": {}, "body": {}}
+        theirs = {"id": "b", "writer": "mallory", "status_rec": {"of": "a", "state": "resolved", "commits": []}, "body": {"summary": "gone"}}
+        own = {"id": "c", "writer": "alice", "status_rec": {"of": "a", "state": "in-progress", "commits": ["abc1"]}, "body": {"summary": "partly"}}
+        v = {x["id"]: x for x in tree.apply_statuses([mine, theirs])}
+        self.assertEqual(v["a"]["status"], "open", "a record by someone else changes nothing")
+        v = {x["id"]: x for x in tree.apply_statuses([dict(mine), dict(theirs), dict(own)])}
+        self.assertEqual((v["a"]["status"], v["a"]["status_commits"]), ("in-progress", ["abc1"]))
+        from getlogbook.entry import from_dict, new_id
+        e = from_dict({"id": new_id(), "kind": "finding", "topic": "t", "body": {"summary": "s"},
+                       "status": {"of": new_id(), "state": "resolved", "commits": ["--output=x", "abc1234", 5]}})
+        self.assertEqual(e.status["commits"], ["abc1234"])
+        self.assertEqual(from_dict({"id": new_id(), "status": {"of": "x", "state": "resolved"}}).status, {})
+        self.assertEqual(from_dict({"id": new_id(), "status": {"of": new_id(), "state": "gone"}}).status, {})
+
+    def test_brief_and_permissions(self):
+        from getlogbook import permissions
+        code, text = self.run_cli("tidy", "--brief")
+        self.assertIn(self.note.id, text)
+        self.assertIn("logbook tidy --apply", text)
+        self.assertIn("chunk the export", text)
+        decide = lambda c, agent="": (json.loads(permissions.hook_output(c, "auto", agent) or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
+        self.assertEqual((decide("logbook tidy"), decide("logbook tidy --brief"), decide("logbook tidy --apply <<'EOF'\nstatus_of: x\nEOF")), ("allow", "allow", "ask"))
+        self.assertEqual(decide("logbook tidy", "logbook-scribe"), "deny")
+
+
+def tidy_candidates(repo):
+    from getlogbook import tidy
+    return tidy.candidates(repo, tree.all_views(repo)[0])
 
 
 class TestWhoWroteIt(CliRepo):

@@ -13,12 +13,13 @@ import shlex
 # subcommand -> decision. "mode" means: follow the publish mode (see `decide`). Not listed: no opinion.
 TABLE = {
     "note": "allow", "ask": "allow", "context": "allow", "cites": "allow", "log": "allow", "status": "allow", "summarize": "allow", "backfill": "allow",
-    "publish": "mode", "sync": "mode",
+    "tidy": "allow", "publish": "mode", "sync": "mode",
     "purge": "ask", "gc": "ask", "trust": "ask", "config": "ask", "setup": "ask", "uninstall": "ask",
 }
 # publish: never denies, ask lets the normal prompt run, claude and auto allow. sync: allow only in auto mode, else ask.
 MODE_RULES = {"publish": {"never": "deny", "ask": "ask", "claude": "allow", "auto": "allow"},
               "sync": {"never": "ask", "ask": "ask", "claude": "ask", "auto": "allow"}}
+ASK_FLAG = {"tidy": "--apply"}  # the one flag that turns an allowed command into one that asks: applying a tidy is the person's approval step
 NAMES = ("logbook", "getlogbook")
 _HEREDOC = re.compile(r"\s<<-?\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*$")
 _SHELL = re.compile(r"[;&|$`<>(){}\\\n]")  # shortcut: any of these anywhere in the command line, even inside quotes, means no opinion; upgrade if it bites
@@ -56,6 +57,8 @@ def decide(command, mode):
     if rule == "mode":
         rule = MODE_RULES[sub].get(mode, "ask")
         return rule, f"logbook {sub} with publish mode {mode}"
+    if ASK_FLAG.get(sub) in command.strip().split("\n")[0].split():
+        return "ask", f"logbook {sub} {ASK_FLAG[sub]} changes what is kept, so it asks"
     return rule, f"logbook {sub}: {'private and local' if rule == 'allow' else 'changes what is shared or kept, so it asks'}"
 
 
@@ -81,5 +84,7 @@ def readme_table():
     for sub, rule in TABLE.items():
         if rule == "mode":
             rule = ", ".join(f"{m}: {d}" for m, d in MODE_RULES[sub].items())
+        elif sub in ASK_FLAG:
+            rule += f"; `{ASK_FLAG[sub]}` asks"
         rows.append(f"| `{sub}` | {rule} |")
     return "\n".join(rows)

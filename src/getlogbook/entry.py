@@ -34,11 +34,12 @@ def new_id():
 class Entry:
     """Plain class (not a dataclass): importing dataclasses/inspect costs ~45 ms on every hook invocation."""
     __slots__ = ("id", "kind", "topic", "body", "anchor", "provenance", "captured_via", "supersedes", "display", "created",
-                 "redacted", "v", "level", "sources", "checks")
+                 "redacted", "v", "level", "sources", "checks", "status")
 
     def __init__(self, id, kind="finding", topic="", body=None, anchor=None, provenance="user-written", captured_via="cli",
-                 supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None, checks=None):
+                 supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None, checks=None, status=None):
         self.id, self.kind, self.topic = id, kind, topic
+        self.status = dict(status or {})  # a status record: {of: note id, state: open|in-progress|resolved, commits: [hex]}. Empty on an ordinary note
         self.body = dict(body or {})
         self.anchor = dict(anchor or {})  # sha tree parent patch_id branch merge_base base subject date pr paths names dirty
         self.provenance, self.captured_via = provenance, captured_via
@@ -48,7 +49,7 @@ class Entry:
         self.display, self.created, self.redacted, self.v = display, created, redacted, v  # created: display only
 
     def to_dict(self):
-        return {k: getattr(self, k) for k in self.__slots__}
+        return {k: getattr(self, k) for k in self.__slots__ if k != "status" or self.status}  # an ordinary note's file stays as it was
 
     def copy(self, **changes):
         d = self.to_dict()
@@ -86,6 +87,18 @@ def _checks(c):
             "files": _strs(c.get("files"))[:20], "missing": [m[:80] for m in _strs(c.get("missing"))[:8]], "evidence": bool(c.get("evidence")), "at": at}
 
 
+STATES = ("open", "in-progress", "resolved")
+MAX_STATUS_COMMITS = 10
+
+
+def _status(s):
+    """A status record from untrusted data, or {}: a real note id, one of the three states, and hex commit ids (they reach git as arguments)."""
+    if not isinstance(s, dict) or not isinstance(s.get("of"), str) or not ID_RE.match(s["of"]) or s.get("state") not in STATES:
+        return {}
+    commits = [c for c in _strs(s.get("commits")) if HEX_RE.match(c)][:MAX_STATUS_COMMITS]
+    return {"of": s["of"], "state": s["state"], "commits": commits}
+
+
 def from_dict(d):
     """Build an Entry from untrusted data: coerce types, cap sizes, reject bad ids."""
     if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not ID_RE.match(d["id"]):
@@ -110,7 +123,7 @@ def from_dict(d):
                  supersedes=[x for x in _strs(d.get("supersedes")) if ID_RE.match(x)],
                  display=_s(d.get("display"), 60), created=_s(d.get("created"), 40), redacted=bool(d.get("redacted")), v=version,
                  level=d.get("level") if d.get("level") in LEVELS else "",
-                 sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)], checks=_checks(d.get("checks")))
+                 sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)], checks=_checks(d.get("checks")), status=_status(d.get("status")))
 
 
 def from_json(text):
