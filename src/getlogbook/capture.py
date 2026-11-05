@@ -149,6 +149,9 @@ def handle_hook(event, agent, raw):
                     files = []
             sid = str(payload.get("session_id", ""))
             text = recall.digest(repo, event, payload.get("prompt", ""), files, sid)
+            if event == "SessionStart":  # merged branches whose logs are still private: the agent (not the observer) publishes them
+                from . import branches
+                text = "\n".join(x for x in (text, branches.reminder(repo, repo.publish_mode())) if x)
             out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
@@ -392,6 +395,27 @@ def uninstall_pre_push_hook(repo):
     f = _hooks_dir(repo) / "pre-push"
     _strip_hook_block(f)
     return f
+
+
+PULL_HOOKS = ("post-merge", "post-rewrite")  # what `git pull` runs after a merge or a rebase
+
+
+def install_pull_hooks(repo):
+    """After a pull, fetch the shared logs in the background (a pull-only sync: it never pushes). Chained after any hook already there."""
+    for name in PULL_HOOKS:
+        f = _hooks_dir(repo) / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        _strip_hook_block(f)
+        text = f.read_text(encoding="utf-8") if f.exists() else "#!/bin/sh\n"
+        block = f'{MARK_BEGIN}\n"{_py(repo)}" -m getlogbook post-merge >/dev/null 2>&1 || true\n{MARK_END}\n'
+        f.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8", newline="\n")
+        with contextlib.suppress(OSError):
+            f.chmod(f.stat().st_mode | 0o111)
+
+
+def uninstall_pull_hooks(repo):
+    for name in PULL_HOOKS:
+        _strip_hook_block(_hooks_dir(repo) / name)
 
 
 def claude_snippet(repo, pretool=False):

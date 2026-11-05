@@ -148,8 +148,8 @@ ok(rc != 0 and (alice / ".git/logbook/private" / f"{nn}.json").exists(), "a repo
 (alice / ".logbook" / "policy.json").unlink()
 lb(alice, "config", "publish", "auto")
 rc, o = lb(alice, "note", "--json", inp=json.dumps({"kind": "finding", "topic": "auto note", "summary": "mail a@b.io about it", "why": "w", "paths": ["shop/revenue.py"]}))
-ok("published (auto mode)" in o, "auto publishes a note as it is written", o)
-ok(not any("auto note" in p.read_text() for p in (alice / ".git/logbook/private").glob("*.json")), "auto moved it out of the private log")
+ok("(private)" in o, "auto does not share a note as it is written: it waits for the branch to merge", o)
+ok(any("auto note" in p.read_text() for p in (alice / ".git/logbook/private").glob("*.json")), "it is still in the private log")
 lb(alice, "config", "publish", "ask")
 
 # --- the file-overwrite hole ----------------------------------------------------------------------------------------------

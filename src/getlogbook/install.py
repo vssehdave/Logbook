@@ -181,7 +181,8 @@ def describe(repo, targets, remove=False, pretool=True):
     """Lines that say what would change."""
     lines = []
     for name, what in (("post-commit", "git post-commit hook (records commits)"),
-                       ("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)")):
+                       ("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)"),
+                       ("post-merge", "git post-merge hook (a pull also fetches shared logs; never pushes)")):
         hook = git_hook_installed(repo, name)
         verb = ("remove" if hook else "unchanged") if remove else ("unchanged" if hook else "create")
         lines.append(f"  {verb:<10} {what}")
@@ -196,9 +197,11 @@ def apply(repo, targets, remove=False, pretool=True):
     if remove:
         capture.uninstall_git_hook(repo)
         capture.uninstall_pre_push_hook(repo)
+        capture.uninstall_pull_hooks(repo)
     else:
         capture.install_git_hook(repo)
         capture.install_pre_push_hook(repo)
+        capture.install_pull_hooks(repo)
         if "origin" in sync.remotes(repo):  # so a plain `git pull` also brings teammates' notes
             sync.ensure_fetch_config(repo)
     for s in steps:

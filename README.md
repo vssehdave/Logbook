@@ -96,7 +96,16 @@ One setting, `logbook config publish`, decides how much happens by itself:
 |---|---|---|
 | `manual` | you run it | you run it |
 | `ask` (default) | after a commit the agent asks you once, then runs it | the agent asks, shows the redacted preview, then runs it |
-| `auto` | by itself, after a commit that follows 5 or more new observations, and when a session ends | notes as they are written (publishing logs when their branch merges is the next step) |
+| `auto` | by itself, after a commit that follows 5 or more new observations, and when a session ends | when a branch looks merged, the agent is told at session start and runs `logbook publish --branch <name> --yes` |
+
+**Publishing is by branch.** `logbook publish --branch <name>` moves every private log and note filed under that branch to the shared log (the usual redacted preview
+and checks run first; what they refuse stays private). `logbook publish --merged` does that for every branch that looks merged into the main line. Git alone can see two
+signs: a merge commit on the main line names the branch, or a commit one of the branch's own entries is anchored to is now in the main line's history. A squash merge
+leaves neither, so in `ask` and `auto` mode the agent is told at session start which branches look merged, and, if it has the GitHub tools, can confirm a squashed pull
+request there and run `logbook publish --branch` itself. Each record carries its own id and branch, so publishing at any moment is safe.
+
+**Pulling.** `logbook setup` also adds git `post-merge` and `post-rewrite` hooks, so a `git pull` fetches the shared logs in the background (a pull-only sync: it never
+pushes). `logbook tidy` does the same fetch first (`--no-sync` skips it). Nothing watches the remote between pulls.
 
 The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A repo policy that turns publishing off (`.logbook/policy.json`) still wins over every mode.
 

@@ -189,28 +189,7 @@ def cmd_note(a):
                          "or file:line); naming a file is not enough. --allow-ungrounded saves it anyway, marked unverified.")
     e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
                            checks=cks)
-    out(f"recorded {e.id} ({'published (auto mode)' if auto_publish(r, e) else 'private'})")
-
-
-def auto_publish(r, e):
-    """Publish mode auto: share a note as soon as it is written, redacted exactly as `logbook publish` would. A note the checks refuse
-    (pasted table rows, too big, a teammate already shared the same words) stays private. Pushing is still `logbook sync`."""
-    if r.publish_mode() != "auto" or e.provenance in ("auto-copied", "worker-written"):  # a worker's draft is personal until the person publishes it by id
-        return False
-    bad = ground.problems(e.checks, e.provenance != "user-written")
-    if bad:  # a note that names something that is not there, or an agent's that points at nothing, is not shared on its own
-        print("logbook: not shared automatically (" + "; ".join(bad)[:120] + "); it stays private", file=sys.stderr)
-        return False
-    try:
-        c, _ = share_copy(r, e, False, False)
-        if r.duplicate_of(c):
-            return False
-        r.publish([c])
-    except (SystemExit, ValueError) as ex:
-        print(f"logbook: not shared automatically ({ex}); it stays private", file=sys.stderr)
-        return False
-    r.drop_private(e.id)
-    return True
+    out(f"recorded {e.id} (private)")
 
 
 def share_copy(r, e, include_evidence, allow_table):
@@ -241,7 +220,16 @@ def cmd_publish(a):
     if r.publish_mode() == "never":
         raise SystemExit("logbook: publishing is off for this repo: its policy turns it off (.logbook/policy.json)")
     ready = []
-    if getattr(a, "all", False):
+    if getattr(a, "branch", None) or getattr(a, "merged", False):
+        from . import branches
+        if a.merged:
+            picked = [(b, es) for b, es, _ in branches.merged(r)]
+        else:
+            picked = [(a.branch, [e for e in r.unpublished() if e.anchor.get("branch") == a.branch])]
+        ids = [e for _, es in picked for e in es]
+        if ids:
+            out("from branch " + ", ".join(b for b, es in picked if es) + ":")
+    elif getattr(a, "all", False):
         ids = r.unpublished()
     elif a.ids:
         ids = a.ids
@@ -758,6 +746,11 @@ def cmd_tidy(a):
     """Notes that may be out of date, repeated or junk, each with the reason. Plain `tidy` and `--brief` only read; `--apply` stores the statuses
     the person approved, all or none."""
     r = need_repo()
+    if not a.no_sync and "origin" in sync.remotes(r):  # first bring in what teammates and your other machines shared; a failure here must not stop the tidy
+        try:
+            sync.sync(r, "origin", fetch_only=True)
+        except (SystemExit, OSError, ValueError):
+            pass
     vs = views(r)[0]
     if a.garbage:  # the worker's private drafts that are no longer worth keeping; --apply moves them to the archive, nothing is deleted
         junk = tidy.garbage(r, vs)
@@ -775,8 +768,7 @@ def cmd_tidy(a):
                 out("  ! " + e)
             raise SystemExit("logbook: nothing was changed; fix the proposals above and run it again")
         for nid, state, e in done:
-            shared = auto_publish(r, e)
-            out(f"  {nid} is now {state} (record {e.id}, {'published (auto mode)' if shared else 'private until you publish it'})")
+            out(f"  {nid} is now {state} (record {e.id}, private until you publish it)")
         return 0
     if a.brief:
         out(tidy.brief(r, vs, a.limit))
@@ -935,6 +927,8 @@ def build_parser():
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="*")
     s.add_argument("--all", action="store_true", help="every private note not shared yet (same preview and one confirmation)")
+    s.add_argument("--branch", help="every private log and note filed under this branch (once it has been merged)")
+    s.add_argument("--merged", action="store_true", help="the logs and notes of every branch that looks merged into the main line")
     s.add_argument("--yes", action="store_true")
     s.add_argument("--push", action="store_true")
     s.add_argument("--include-evidence", action="store_true")
@@ -987,6 +981,7 @@ def build_parser():
     s.add_argument("--status", action="store_true")
     s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk; --brief for an agent; --apply stores approved statuses")
     s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--no-sync", action="store_true", help="do not fetch shared logs first")
     s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")

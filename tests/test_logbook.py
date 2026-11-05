@@ -1026,22 +1026,12 @@ class TestPublishModes(CliRepo):
             self.assertIn("(private)", text)
         self.assertEqual(self.r.load_shared()[0], [])
 
-    def test_auto_shares_a_note_as_it_is_written_redacted_and_moves_it(self):
+    def test_auto_does_not_share_a_note_as_it_is_written(self):
         self.mode("auto")
         code, text = self.write("mail me at someone@example.com about refunds")
-        self.assertIn("published (auto mode)", text)
-        shared, _ = self.r.load_shared()
-        self.assertEqual(len(shared), 1)
-        self.assertNotIn("someone@example.com", shared[0].entry.body["summary"])
-        self.assertEqual(self.r.load_private(), [], "the private copy was moved")
-
-    def test_auto_keeps_a_note_private_when_the_checks_refuse_it(self):
-        self.mode("auto")
-        code, text = self.write("a|1|x\nb|2|y\nc|3|z")  # looks like pasted table rows
         self.assertIn("(private)", text)
         self.assertEqual(self.r.load_shared()[0], [])
         self.assertEqual(len(self.r.load_private()), 1)
-
 
 class TestGrounding(CliRepo):
     """What can be checked about a note is checked; what cannot is not passed off as checked."""
@@ -1213,14 +1203,6 @@ class TestGrounding(CliRepo):
                            checks={"paths": [1, 2], "names": [0, 0], "commits": [0, 0], "files": ["shop/revenue.py"], "missing": ["shop/gone.py"], "evidence": True, "at": ""})
         vs, _ = tree.all_views(self.r)
         self.assertIn("unverified: not found: shop/gone.py", recall._fmt(1, vs[0]))
-
-    def test_auto_mode_does_not_share_a_note_with_something_missing_on_its_own(self):
-        self.run_cli("config", "publish", "auto")
-        code, text = self.note(summary="`total()` sums rows, `shop/gone.py` too", paths=["shop/revenue.py"])
-        self.assertIn("(private)", text)
-        self.assertEqual(self.r.load_shared()[0], [])
-        code, text = self.note(summary="`total()` sums rows", paths=["shop/revenue.py"])
-        self.assertIn("published (auto mode)", text)
 
     def test_a_hostile_checks_record_is_coerced(self):
         e = from_dict({"id": new_id(), "kind": "finding", "topic": "t", "body": {"summary": "s"},
@@ -1815,6 +1797,98 @@ class TestSavepoint(ObserverBase):
         self.run_cli("config", "publish", "manual")
         commit(self.d, "tax2", {"shop/tax2.py": "t = 2\n"})
         self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "manual mode never asks")
+
+
+class TestPublishByBranch(CliRepo):
+    """Logs and notes are published by branch, once the branch has been merged; a pull fetches shared logs; tidy fetches first."""
+
+    def setUp(self):
+        super().setUp()
+        from getlogbook import branches
+        self.branches = branches
+        self.main = tree.default_branch(self.r)
+
+    def note_on(self, topic):
+        return capture.make_entry(self.r, "finding", topic, {"summary": f"{topic} is so", "why": "because"}, paths=["shop/revenue.py"])
+
+    def feature(self, name, files=None, merge="--no-ff"):
+        """A branch with one commit and one note on it, merged into the main line the given way."""
+        sh("git", "checkout", "-q", "-b", name, cwd=self.d)
+        commit(self.d, f"work on {name}", files or {f"shop/{name.replace('/', '_')}.py": "x = 1\n"})
+        e = self.note_on(f"note on {name}")
+        sh("git", "checkout", "-q", self.main, cwd=self.d)
+        if merge:
+            sh("git", "merge", "-q", merge, "-m", f"Merge branch '{name}'", name, cwd=self.d) if merge == "--no-ff" else sh("git", "merge", "-q", merge, name, cwd=self.d)
+        return e
+
+    def test_publish_branch_moves_only_that_branchs_entries(self):
+        a = self.feature("feat/a", merge="")
+        sh("git", "checkout", "-q", "-b", "feat/b", cwd=self.d)
+        b = self.note_on("note on b")
+        code, text = self.run_cli("publish", "--branch", "feat/a", "--yes")
+        self.assertEqual(code, 0, text)
+        self.assertEqual([l.entry.id for l in self.r.load_shared()[0]], [a.id])
+        self.assertIsNotNone(self.r.get_private(b.id), "another branch's note stays private")
+        self.assertIn("nothing to publish", self.run_cli("publish", "--branch", "feat/none", "--yes")[1])
+
+    def test_a_merged_branch_is_found_by_its_merge_commit_or_its_commits_and_a_fresh_branch_is_not(self):
+        sh("git", "checkout", "-q", "-b", "feat/fresh", cwd=self.d)
+        self.note_on("on a branch with no commits yet")
+        sh("git", "checkout", "-q", self.main, cwd=self.d)
+        self.assertEqual(self.branches.merged(self.r), [], "its note sits on the commit the branch left the main line at, which proves nothing")
+        self.feature("feat/merged")
+        self.feature("feat/fastforward", merge="--ff-only")
+        self.feature("feat/unmerged", merge="")
+        sh("git", "checkout", "-q", "-b", "feat/squashed", cwd=self.d)
+        commit(self.d, "squashed work", {"shop/sq.py": "x = 1\n"})
+        self.note_on("note on squashed")
+        sh("git", "checkout", "-q", self.main, cwd=self.d)
+        sh("git", "merge", "-q", "--squash", "feat/squashed", cwd=self.d)
+        sh("git", "commit", "-q", "-m", "feat: squashed (#9)", cwd=self.d)
+        found = {b: how for b, _, how in self.branches.merged(self.r)}
+        self.assertEqual(sorted(found), ["feat/fastforward", "feat/merged"], "a squash merge is not detectable from git alone")
+        self.assertIn("names it", found["feat/merged"])
+
+    def test_publish_merged_publishes_every_merged_branch_and_nothing_else(self):
+        merged = self.feature("feat/merged")
+        open_ = self.feature("feat/open", merge="")
+        code, text = self.run_cli("publish", "--merged", "--yes")
+        self.assertEqual(code, 0, text)
+        self.assertEqual([l.entry.id for l in self.r.load_shared()[0]], [merged.id])
+        self.assertIsNotNone(self.r.get_private(open_.id))
+        self.assertIn("nothing to publish", self.run_cli("publish", "--merged", "--yes")[1])
+
+    def test_the_agent_is_reminded_at_session_start_in_ask_and_auto_mode_only(self):
+        self.feature("feat/merged")
+        payload = json.dumps({"session_id": "s1", "cwd": str(self.d)})
+        for mode, expect in (("manual", False), ("ask", True), ("auto", True)):
+            self.run_cli("config", "publish", mode)
+            said = capture.handle_hook("SessionStart", "claude-code", payload)
+            self.assertEqual("feat/merged" in said, expect, mode)
+        self.assertIn("Ask the user", self.branches.reminder(self.r, "ask"))
+        self.assertIn("--yes", self.branches.reminder(self.r, "auto"))
+
+    def test_setup_installs_a_pull_hook_that_only_fetches_and_uninstall_removes_it(self):
+        import unittest.mock
+        from getlogbook import hookmain
+        self.run_cli("install", "--yes", "--agent", "claude-code")
+        hooks = Path(sh("git", "rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=self.d))
+        for name in ("post-merge", "post-rewrite"):
+            self.assertIn("getlogbook post-merge", (hooks / name).read_text(encoding="utf-8"), name)
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            self.assertEqual(hookmain.run(["post-merge"]), 0)
+        self.assertEqual(spawn.call_args.args[0][-2:], ["sync", "--fetch-only"], "a pull never pushes")
+        self.run_cli("uninstall", "--yes", "--agent", "claude-code")
+        self.assertFalse((hooks / "post-merge").exists() or (hooks / "post-rewrite").exists())
+
+    def test_tidy_fetches_shared_logs_first_unless_told_not_to(self):
+        import unittest.mock
+        with unittest.mock.patch.object(sync, "remotes", lambda r: ["origin"]), unittest.mock.patch.object(sync, "sync") as run:
+            self.run_cli("tidy")
+            self.assertEqual(run.call_args.kwargs, {"fetch_only": True}, "pull-only")
+            run.reset_mock()
+            self.run_cli("tidy", "--no-sync")
+            self.assertEqual(run.call_count, 0)
 
 
 class TestWhoWroteIt(CliRepo):

@@ -1,6 +1,6 @@
 import sys
 
-if len(sys.argv) > 1 and sys.argv[1] in ("capture", "post-commit"):
+if len(sys.argv) > 1 and sys.argv[1] in ("capture", "post-commit", "post-merge"):
     # hook fast path: no argparse, no CLI imports (saves ~100 ms per invocation)
     from .hookmain import run
 
