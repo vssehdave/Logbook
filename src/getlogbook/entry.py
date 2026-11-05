@@ -13,7 +13,7 @@ import time
 ID_RE = re.compile(r"^[0-9a-f]{11}-[0-9a-f]{8}$")
 HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")  # a commit, tree or parent id: never anything git could read as an option
 KINDS = ("change", "finding", "summary")
-PROVENANCE = ("agent-written", "user-written", "user-edited", "auto-copied")  # auto-copied: built by code from git data, carries no reason
+PROVENANCE = ("agent-written", "user-written", "user-edited", "auto-copied", "worker-written")  # auto-copied: built by code from git data, carries no reason; worker-written: a background model's draft, private and checked by code
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
 BODY_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale", "evidence")
 INJECTABLE = ("summary", "what", "why", "fix")  # evidence/wrong never enter agent context

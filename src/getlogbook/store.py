@@ -356,10 +356,11 @@ class Repo:
         return loaded, tombs
 
     def unpublished(self):
-        """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered."""
+        """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, and a worker's drafts are personal until you pick one
+        by id, so neither is offered (or counted in the push reminder)."""
         shared, _ = self.load_shared()
         done = {l.entry.id for l in shared if l.user == self.user}
-        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied"]
+        return [e for e in self.load_private() if e.id not in done and e.provenance not in ("auto-copied", "worker-written")]
 
     def all_entries(self):
         """Shared (merged at read time, deduped by id) + private overlay. Superseded/purged entries are hidden."""

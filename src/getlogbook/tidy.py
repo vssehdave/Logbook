@@ -8,6 +8,7 @@ is never edited, so nothing already shared changes under a teammate.
 from __future__ import annotations
 
 import re
+import shutil
 
 from . import capture, ground
 from . import git as g
@@ -150,3 +151,46 @@ def brief(repo, views, limit=20):
                 lines.append(f"  {k}: {sanitize(v['body'][k], 300)}")
         lines += [f"  files: {sanitize(', '.join(tracked(repo, v)[:6]), 200)}"] + [f"  - {sanitize(d, 120)}" for d in c["detail"]] + [""]
     return "\n".join(lines)
+
+
+RETENTION_DAYS = 30
+
+
+def garbage(repo, views, days=None):
+    """Your own private worker drafts that are no longer worth keeping, each with the reason: marked resolved, about files that are all gone, or older than the
+    retention. Only machine-made, private, yours: a note a person or an agent wrote, or one already shared, is never listed here."""
+    days = int(days or repo.cfg().get("worker_days", RETENTION_DAYS))
+    out = []
+    for v in views:
+        if v.get("is_status") or not v["mine"] or v["provenance"] != "worker-written" or v["scope"] != "private":
+            continue
+        files = tracked(repo, v)[:MAX_FILES]
+        if v.get("status") == "resolved":
+            reason = "resolved"
+        elif files and all(g.try_run(["cat-file", "-e", f"HEAD:{f}"], repo.root)[0] != 0 for f in files):
+            reason = "every file it is about is gone"
+        elif (v["age_days"] or 0) >= days:
+            reason = f"{v['age_days']} days old (kept {days})"
+        else:
+            continue
+        out.append({"id": v["id"], "topic": v["topic"], "reason": reason})
+    return out
+
+
+def archive(repo, ids):
+    """Move private notes out of the log into .git/logbook/archive/, where they stay readable; nothing is deleted. Returns how many moved."""
+    d = repo.cdir / "archive"
+    d.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for i in ids:
+        src = repo.pdir / f"{i}.json"
+        if src.exists():
+            shutil.copy2(src, d / src.name)
+            moved += repo.drop_private(i)
+    return moved
+
+
+def auto(repo):
+    """The automatic mode (`logbook config tidy auto`): archive the worker drafts that `garbage` lists, after a worker pass."""
+    from . import tree
+    return archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
