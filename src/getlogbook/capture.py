@@ -51,8 +51,9 @@ def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", 
 
 # ---- locks and detached processes ---------------------------------------------------------------------------------
 @contextlib.contextmanager
-def _lock(path, timeout=1.0):
-    """Tiny cross-platform lock (O_EXCL file, stale after 10 s). Yields False if it could not be taken."""
+def _lock(path, timeout=1.0, stale=10):
+    """Tiny cross-platform lock (O_EXCL file, taken over once it is `stale` seconds old). Yields False if it could not be taken in `timeout` seconds.
+    A holder that works for longer than `stale` (a model call) must pass a larger value, or a second process takes the lock over while it still runs."""
     path.parent.mkdir(parents=True, exist_ok=True)
     end, fd = time.time() + timeout, None
     while time.time() < end:
@@ -61,7 +62,7 @@ def _lock(path, timeout=1.0):
             break
         except FileExistsError:
             try:
-                if time.time() - path.stat().st_mtime > 10:
+                if time.time() - path.stat().st_mtime > stale:
                     path.unlink()
             except OSError:
                 pass

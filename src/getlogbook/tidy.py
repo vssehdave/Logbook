@@ -263,7 +263,7 @@ def work(repo, call=None, now=time.time):
         return {"skipped": "the observer is off"}
     cfg = repo.cfg()
     call = call or (lambda p: worker.call_model(p, cfg.get("tidy_model", TIDY_MODEL)))
-    with capture._lock(_dir(repo) / ".lock", timeout=0.2) as got:
+    with capture._lock(_dir(repo) / ".lock", timeout=0.2, stale=worker.LOCK_STALE) as got:
         if not got:
             return {"skipped": "another tidy pass is running"}
         led = worker.ledger(repo)

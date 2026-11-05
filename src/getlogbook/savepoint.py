@@ -16,6 +16,7 @@ from . import capture, observer, running, worker
 from .entry import ID_RE, MAX_LIST, Entry, new_id
 from .safety import redact
 
+WAIT = 150  # seconds a savepoint waits for an observer pass already running (it holds the lock across its model calls) before it gives up
 AUTO_MIN = 5  # auto mode saves after a commit once this many new observations have piled up
 PROMPT_OBS = 60  # observations shown to the model
 SYSTEM = """You write the savepoint for a coding session on the git branch `{branch}`. You cannot use tools. Below are the observations recorded since the last savepoint, oldest first. Summarize them for a teammate, or a later session, who has not seen the work.
@@ -131,9 +132,9 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
     if branch == "HEAD":
         return {"skipped": "HEAD is detached: check out a branch first"}
     if observe and worker.enabled(repo):
-        observer.drain(repo, branch, flush=True, call=call, now=now)  # tool uses still in the queue belong in this savepoint
+        observer.drain(repo, branch, flush=True, call=call, now=now, wait=WAIT)  # tool uses still in the queue belong in this savepoint
     run = running.Running(repo, branch)
-    with capture._lock(worker._wdir(repo) / ".lock", timeout=5) as got:
+    with capture._lock(worker._wdir(repo) / ".lock", timeout=WAIT, stale=worker.LOCK_STALE) as got:
         if not got:
             return {"skipped": "the observer is busy; try again in a moment"}
         obs = own(run)

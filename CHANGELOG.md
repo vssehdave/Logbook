@@ -28,6 +28,7 @@
 
 - **Fixed: a merged branch's logs disappeared from everyone's context.** Session start showed logs filed under the current branch and the main line only, so once a branch merged its logs were never shown again. Logs of a branch that is in the main line (a merge commit names it, or the log's own commit is in the main line's history) now count as the main line's. A squash merge is not seen.
 - **Fixed: the tidy worker no longer judges saved logs** (a session record is history, not a claim to keep true, and marking it `resolved` would have hidden it from session start).
+- **Fixed: an automatic savepoint could save nothing, silently.** A pass holds the worker lock across its model calls, but a savepoint waited only 5 seconds for it and then gave up, and the lock helper treated any lock older than 10 seconds as abandoned, so a long pass could be taken over and run twice at once. Passes now keep their lock for as long as a model call can take (300 s), a savepoint waits for a running pass (up to 150 s) and then does its own observing, and says so if it still cannot get the lock. Found by a real Claude session on the TestPyPI build; `tests/test_day.py` now runs passes in parallel against a slow fake model to keep it fixed.
 - **Fixed: `claude` is looked up with `which` before it is run**, so a `claude.cmd` shim (an npm install on Windows) works as well as an executable.
 - **The band's mode selector in the plugin shows `manual ask auto`** and the plugin version moves with the package, so an installed copy updates.
 

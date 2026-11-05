@@ -2003,6 +2003,45 @@ class TestSavepoint(ObserverBase):
                 capture.handle_hook("SessionEnd", "claude-code", payload)
                 self.assertEqual(any(c.args[0][-2:] == ["log", "--quiet"] for c in spawn.call_args_list), expect, mode)
 
+    def test_a_savepoint_waits_for_a_pass_that_is_running_instead_of_giving_up(self):
+        import threading
+        import unittest.mock
+        self.tool(5)
+        self.drain()
+        self.tool(5)
+        held = threading.Event()
+
+        def hold():  # an observer pass: it keeps the lock while it works
+            with capture._lock(self.worker._wdir(self.r) / ".lock", timeout=1, stale=self.worker.LOCK_STALE) as got:
+                held.set()
+                time.sleep(6)  # longer than the 5 seconds a savepoint used to wait, which is how it silently saved nothing
+        t = threading.Thread(target=hold)
+        t.start()
+        held.wait(5)
+        with unittest.mock.patch.object(self.savepoint, "WAIT", 30):
+            res = self.save()
+        t.join()
+        self.assertIn("saved", res, res)
+        with unittest.mock.patch.object(self.savepoint, "WAIT", 0.3), unittest.mock.patch.object(self.observer, "drain", lambda *a, **k: {}):
+            lock = self.worker._wdir(self.r) / ".lock"
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                self.assertIn("busy", self.save()["skipped"], "after waiting, a savepoint says so rather than doing nothing silently")
+            finally:
+                os.close(fd)
+                lock.unlink()
+
+    def test_a_pass_that_runs_long_keeps_its_lock(self):
+        lock = self.worker._wdir(self.r) / ".lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        old = time.time() - 30  # a model call that has taken half a minute
+        os.utime(lock, (old, old))
+        with capture._lock(lock, timeout=0.3, stale=self.worker.LOCK_STALE) as got:
+            self.assertFalse(got, "a second process must not take it over while the first may still be working")
+        with capture._lock(lock, timeout=0.3) as got:
+            self.assertTrue(got, "the default still clears a lock that old (hooks that hold it for milliseconds)")
+
     def test_ask_mode_has_the_agent_ask_once_per_commit(self):
         for i in range(self.savepoint.AUTO_MIN):
             self.tool(self.observer.MIN_BATCH)

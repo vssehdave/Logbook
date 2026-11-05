@@ -44,6 +44,8 @@ with open(d / "prompts.jsonl", "a", encoding="utf-8") as f:
     f.write(json.dumps(prompt) + "\n")
 usage = json.loads((d / "usage.json").read_text())
 resets = usage.get("resets", 4102444800)
+import time
+time.sleep(usage.get("delay", 0))  # a slow model: the real one takes seconds, and a pass holds its lock all that time
 if "quiet note-taker" in prompt:
     uses = re.findall(r'<tool_use n="(\d+)" tool="(\w+)"[^>]*>\ninput: ([^\n]*)', prompt)
     work = [u for u in uses if u[1] in ("Edit", "Bash", "Write") and "pytest" not in u[2]]
@@ -402,6 +404,45 @@ class TestADay(unittest.TestCase):
         n_logs = len([e for e in ra.all_entries() if e.entry.kind == "log"])
         self.assertEqual(self.run_cli(A, "uninstall", "--yes")[0], 0)
         self.assertEqual(len([e for e in ra.all_entries() if e.entry.kind == "log"]), n_logs, "uninstalling keeps every log")
+
+    # ---- passes that overlap ---------------------------------------------------------------------------------------------
+    def test_passes_that_overlap_lose_and_double_nothing(self):
+        """The detached processes a hook starts do overlap in real use: a pass from one Stop is still calling the model when the next hook, or the session end's
+        savepoint, starts another. Run several at once, through the real subprocess call, and require that every tool use is observed exactly once."""
+        import threading
+        from getlogbook import observer
+        d, repo = self.A, self.ra
+        self.usage(0.10, delay=2.5)  # each call takes 2.5 s, so a pass of three calls outlasts the 5 s a savepoint used to wait
+        T.sh("git", "switch", "-q", "-c", "feat/overlap", cwd=d)
+        run = running.Running(repo, "feat/overlap")
+        head = running.branch_now(repo)[1]
+        for i in range(30):  # a backlog, queued without the hooks that would have drained it as it grew
+            run.push(running.event_from_payload({"tool_name": "Edit", "tool_input": {"file_path": f"src/mod_{i % 5}.py", "new_string": f"v{i}"}, "tool_response": "ok",
+                                                 "session_id": "ov", "hook_event_name": "PostToolUse"}, "feat/overlap", head))
+        queued = len(self.lines(run.queue))
+        done, errors = [], []
+
+        def go(fn):
+            try:
+                done.append(fn())
+            except Exception as ex:  # a thread must report, not vanish
+                errors.append(repr(ex))
+        jobs = [lambda: observer.drain(repo, "feat/overlap"), lambda: observer.drain(repo, "feat/overlap", flush=True),
+                lambda: savepoint.save(repo, "feat/overlap"), lambda: observer.drain(repo, "feat/overlap", flush=True)]
+        threads = [threading.Thread(target=go, args=(j,)) for j in jobs]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(done), len(jobs), "every overlapping pass finished")
+        saved = [r for r in done if isinstance(r, dict) and "saved" in r]
+        self.assertEqual(len(saved), 1, f"the savepoint was not dropped by a pass that was running: {done}")
+        self.assertEqual(run.pending_bytes(), 0, "and nothing is left in the queue")
+        self.assertEqual(len(self.lines(run.queue)), queued, "no tool use was lost from the queue")
+        ids = [o["id"] for o in self.lines(run.obs) + [o for f in (run.dir / "archive").glob("*.jsonl") for o in self.lines(f)]]
+        self.assertEqual(len(ids), len(set(ids)), "no observation was written twice")
+        self.invariants("overlap")
 
     # ---- the cost of being in the way ---------------------------------------------------------------------------------
     def test_the_hooks_stay_fast_and_the_real_entry_point_works(self):
