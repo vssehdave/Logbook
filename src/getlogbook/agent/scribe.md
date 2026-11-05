@@ -25,7 +25,7 @@ paths: src/app/orders.py
 EOF
 ```
 
-3. Fix what the check flags after a `!` (a name that is not in the code, no evidence, fewer than 3 or more than 9 lines), then save with the same text and `logbook note --fields`. The evidence line must say what was actually run or read, taken from the facts you were given; if there is none, say so and do not save.
+3. Fix what the check flags after a `!` (a name that is not in the code, no evidence, fewer than 3 or more than 9 lines), then save with the same text and `logbook note --fields`. The evidence line must say what was actually run or read, taken from the facts you were given (for a decision, what the user said or chose, quoted briefly); if there is none, say so and do not save.
 4. You may run only `logbook` commands with Bash. Never put secrets, personal data or pasted data rows in a note. Do not publish.
 
 Answer in two lines: the note id (or why nothing was saved), and the grounding line the check printed.

@@ -1599,6 +1599,16 @@ class TestStatus(CliRepo):
         self.apply(self.block("open", commits="", reason="the fix was reverted"))
         self.assertEqual(self.view()["status"], "open", "its author can reopen it")
 
+    def test_the_note_shows_its_status_and_the_record_is_not_listed_as_a_note_of_its_own(self):
+        self.apply(self.block("resolved"))
+        code, text = self.run_cli("log")
+        self.assertIn("export stalls", text)
+        self.assertIn("[resolved]", text)
+        self.assertNotIn("resolved: export stalls", text, "the record is not a second line in the log")
+        code, text = self.run_cli("ask", f"note:{self.note.id}")
+        self.assertIn(f"status: resolved (record ", text)
+        self.assertIn("chunked in the fix", text)
+
     def test_the_record_is_a_note_with_evidence_and_the_original_is_untouched(self):
         before = (self.r.pdir / f"{self.note.id}.json").read_text(encoding="utf-8")
         self.apply(self.block("resolved"))

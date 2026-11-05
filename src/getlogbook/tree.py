@@ -410,6 +410,8 @@ def build(repo):
     on_side = anch.side_shas()
     by_commit, loose = {}, {}
     for v in views:
+        if v.get("is_status"):
+            continue  # a status record is shown on the note it is about, not as a note of its own
         if v["placed"] in anch.by_sha or v["placed"] in on_side:
             by_commit.setdefault(v["placed"], []).append(v)
         else:

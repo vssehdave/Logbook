@@ -40,6 +40,8 @@ def detail(v):
     for k in BODY_FIELDS:
         if v["body"].get(k):
             rows.append(f"    {k}: {txt(v, v['body'][k])}")
+    if v.get("status", "open") != "open":  # set by its author's status record; the reason and the commits come from that record
+        rows.append(f"    status: {v['status']} (record {v['status_id']}; commits {', '.join(c[:8] for c in v['status_commits']) or '-'}): {txt(v, v['status_reason'], 300)}")
     if not v["mine"]:
         rows.append("    (text from another writer is shown sanitised: links, code and instruction-like lines are removed)")
     return "\n".join(rows)
@@ -393,7 +395,7 @@ def cmd_path(a):
 
 def _entry_line(v, verbose):
     who = v["author"] + (", private" if v["scope"] == "private" else "")
-    head = f"{txt(v, v['topic'], 120)}  ({who}, {v['created'][:10]})"
+    head = f"{txt(v, v['topic'], 120)}  ({who}, {v['created'][:10]})" + (f"  [{v['status']}]" if v.get("status", "open") != "open" else "")
     rows = [head]
     for k in (("summary", "why", "wrong", "fix", "decided", "open") if verbose else ()):
         if v["body"].get(k):
