@@ -1669,6 +1669,24 @@ def tidy_candidates(repo):
     return tidy.candidates(repo, tree.all_views(repo)[0])
 
 
+class TestGitLocks(CliRepo):
+    """Logbook's background git calls must never take a lock a person's own `git commit` needs: a commit that fails with "Unable to create
+    index.lock" because a hook was refreshing the index is the worst way for this tool to be noticed."""
+
+    def test_asking_for_the_repo_state_leaves_the_index_alone(self):
+        (self.d / "shop" / "revenue.py").write_text("x = 1\n")  # same bytes, newer mtime: a plain `git status` would refresh the index and rewrite it
+        time.sleep(1.1)
+        os.utime(self.d / "shop" / "revenue.py", None)
+        index = self.d / ".git" / "index"
+        before = index.read_bytes()
+        g.state(self.d)
+        g.try_run(["status", "--porcelain"], self.d)
+        self.assertEqual(index.read_bytes(), before, "status ran without refreshing (and so without locking) the index")
+
+    def test_every_git_call_asks_not_to_lock(self):
+        self.assertEqual(g._env()["GIT_OPTIONAL_LOCKS"], "0")
+
+
 class TestWhoWroteIt(CliRepo):
     """The "agent-written" label belongs to a note Claude wrote, and to no one else's."""
 

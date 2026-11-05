@@ -12,7 +12,9 @@ class GitError(RuntimeError):
 
 
 def _env(extra=None):
-    e = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    # GIT_OPTIONAL_LOCKS=0: `git status` otherwise refreshes the index, which takes index.lock, and a hook doing that while the person runs
+    # `git commit` makes their commit fail with "Unable to create index.lock". Logbook only reads with status and writes refs through plumbing.
+    e = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
     if extra:
         e.update(extra)
     return e
