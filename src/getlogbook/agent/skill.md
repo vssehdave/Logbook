@@ -7,7 +7,7 @@ metadata:
 
 # Logbook
 
-Logbook stores two things next to git history: findings (what someone learned, with or without a commit) and change notes (why a commit was needed). Teammates' agents read the same notes, so a good note saves them the investigation you just did.
+Logbook keeps what was learned on each branch next to git history. It watches the session by itself (an observer records observations in the background) and `logbook log` saves them as a log; you write a **note** yourself only for something the user asks you to remember, or a root cause, ruled-out approach or decision you want sure to be kept. Teammates' agents read the same notes, so a good note saves them the investigation you just did.
 
 ## Read first
 
@@ -51,8 +51,7 @@ Also allowed: `context` (what was asked and tried), `wrong` (what was assumed), 
 
 **A note is 3 to 9 non-empty lines of the real work, and `evidence` is required.** `summary` and `evidence` always; `why` for a finding; `decided` and `open` when the work had them. One line is refused, and so is more than nine. `evidence` is what you ran or read, not a file name: a path in `paths` does not count. For a decision the user made, the evidence is what they said or chose, quoted briefly (`evidence: user: keep the loader as it is, filter in total()`); you read it, so it counts. `--allow-ungrounded` saves a note with no evidence, marked unverified; use it only when there was truly nothing to run, read or quote.
 
-- `kind` is `finding` for something learned, `change` for the reason behind a commit.
-- For a change you are about to commit, run `logbook context` first. It says whether the change needs a note (whitespace-only and rename-only changes do not) and lists your earlier findings that touch the same files. Then add the lines `before_commit: yes` and `sources: <finding id>, <finding id>` to a `change` note and commit as usual; the note attaches to that commit and cites the findings it grew out of, so one commit's note can be built from several sessions' findings.
+- `kind` is `finding` for something learned, `change` for the reason behind a change you already committed (add `commit: <sha>` if it is not HEAD).
 - To write about an earlier commit, add the line `commit: <sha>`.
 - Write the way you would brief a colleague who joins tomorrow: the cause, the proof, the decision, what is left. Not one line, and not a page.
 
@@ -73,10 +72,6 @@ Put long research, a trail of dead ends or a summary of a whole piece of work on
 ## Check before you save
 
 Run the same note through `logbook note --fields --check` first. It looks up every file, name in backticks and commit id the note mentions, in the repo as it is now, and prints `grounding: files 2/2, names 3/4, commits 1/1, evidence yes`, with each thing it could not find after a `!`. A name that is not in the code means the note is wrong, vague or about something that has changed: fix the note, do not save it as it is. A finding or change with no `evidence` line, or with fewer than 3 or more than 9 lines, is refused, and `--check` says so after a `!`. It also lists notes on the same files that say much the same, after a `~`: if your note replaces one of yours, add a line `supersedes: <id>`; if both stand, say why in the note. The check only shows that what you name exists; whether what you say is true is still on you, so cite what you ran or read in `evidence`.
-
-## Commits that have no note
-
-`logbook backfill` lists recent commits with no note saying why, with each message and diff. For ones that needed real thought, write a note with the line `commit: <sha>`, based only on the message and diff: say "not verified" for anything you inferred and do not invent motives. Skip chores. When a conversation exists, what was said in it is a better source than the diff.
 
 ## Summaries
 

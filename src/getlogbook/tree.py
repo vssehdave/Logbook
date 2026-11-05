@@ -425,21 +425,15 @@ def build(repo):
         ents = sorted(by_commit.get(c["sha"], []), key=lambda v: v["id"])
         return {**c, "short": c["sha"][:8], "entries": ents, "trivial": c["sha"] in triv}
 
-    commits, cards = [], []
+    commits = []
     for c in shown:
         row = card(c)
-        cards.append(row)
         if c["sha"] in sides:
             kids = sides[c["sha"]]
             row["merge"] = {"branch": merged_branch(c["subject"]), "commits": [card(s) for s in kids[:MERGE_SHOWN]],
                             "more": max(0, len(kids) - MERGE_SHOWN)}
-            cards += row["merge"]["commits"]
         commits.append(row)
-    reasoned = lambda cd: any(v["body"].get("why") or v["body"].get("wrong") for v in cd["entries"])
-    cover = {"commits": len(cards), "trivial": sum(1 for cd in cards if cd["trivial"] and not cd["entries"]),
-             "with_reason": sum(1 for cd in cards if reasoned(cd))}
-    cover["without_reason"] = len(cards) - cover["trivial"] - cover["with_reason"]
     loose_list = [{"branch": b, "entries": sorted(es, key=lambda v: v["id"])} for b, es in sorted(loose.items())]
     return {"repo": repo.root.name, "head": g.head_sha(repo.root) or "", "branch": g.branch(repo.root), "shallow": anch.shallow,
-            "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views), "coverage": cover,
+            "me": repo.user, "commits": commits, "unplaced": loose_list, "entry_count": len(views),
             "summaries": summaries(views)}

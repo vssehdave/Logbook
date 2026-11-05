@@ -107,13 +107,12 @@ def _parse_fields(text):
     for k in _LIST_KEYS:
         if k in obj:
             obj[k] = [x for x in re.split(r"[,\s]+", obj[k]) if x]
-    if "before_commit" in obj:
-        obj["before_commit"] = obj["before_commit"].lower() in ("yes", "true", "1")
+    obj.pop("before_commit", None)  # a note is no longer held back for the next commit: the key is accepted and ignored
     return obj
 
 
 def _note_input(a):
-    """The note as (kind, topic, body, paths, commit, before_commit, level, sources, supersedes), from flags, from `key: value` lines on stdin
+    """The note as (kind, topic, body, paths, commit, level, sources, supersedes), from flags, from `key: value` lines on stdin
     (--fields) or from JSON on stdin (--json)."""
     fields = getattr(a, "fields", False)
     if not (a.json or fields):
@@ -125,7 +124,7 @@ def _note_input(a):
             body["summary"], files = words[0][:MAX_SUMMARY], words[1:]
         else:
             files = words
-        return (a.kind, a.topic, body, (a.paths.split(",") if a.paths else (files or None)), a.commit, a.before_commit, "",
+        return (a.kind, a.topic, body, (a.paths.split(",") if a.paths else (files or None)), a.commit, "",
                 a.sources.split(",") if a.sources else [], a.supersedes.split(",") if a.supersedes else [])
     if fields:
         obj = _parse_fields(sys.stdin.read())
@@ -141,17 +140,17 @@ def _note_input(a):
     paths = [str(p) for p in paths] if isinstance(paths, list) else (str(paths).split(",") if paths else None)
     ids = lambda k: [str(x) for x in obj.get(k) or []] if isinstance(obj.get(k), list) else []
     return (obj.get("kind") if obj.get("kind") in ("finding", "change", "summary") else "finding", str(obj.get("topic") or ""), body, paths,
-            str(obj.get("commit") or "") or None, bool(obj.get("before_commit")), str(obj.get("level") or ""), ids("sources"), ids("supersedes"))
+            str(obj.get("commit") or "") or None, str(obj.get("level") or ""), ids("sources"), ids("supersedes"))
 
 
 def cmd_note(a):
     r = need_repo()
-    kind, topic, body, paths, commit, before_commit, level, sources, supersedes = _note_input(a)
+    kind, topic, body, paths, commit, level, sources, supersedes = _note_input(a)
     sources = [x.strip() for x in sources if x.strip()]
     supersedes = [x.strip() for x in supersedes if x.strip()]
     bad = [x for x in sources + supersedes if not ID_RE.match(x)]
     if bad:
-        raise SystemExit(f"logbook: {bad[0]!r} is not a note id (see `logbook context` or `logbook ask`)")
+        raise SystemExit(f"logbook: {bad[0]!r} is not a note id (see `logbook ask`)")
     mine = {l.entry.id for l in r.all_entries() if l.user == r.user}
     foreign = [x for x in supersedes if x not in mine]
     if foreign:
@@ -162,14 +161,11 @@ def cmd_note(a):
         out("note: no why/wrong given; this entry will be searchable but never injected into agent context")
     sha = None
     if commit:
-        if before_commit:
-            raise SystemExit("logbook: --commit and --before-commit cannot be used together")
         rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", commit + "^{commit}"], r.root)
         if rc != 0 or not full.strip():
             raise SystemExit(f"logbook: no commit {commit!r} in this repo")
         sha = full.strip()
     topic = topic or body["summary"][:80]
-    pending = before_commit and kind == "change"
     # Grounding: look up what the note names. Whether it is true cannot be checked; whether it points at something real can.
     cks = ground.check(r, body, topic, paths if paths is not None else (g.changed_paths(r.root, sha) if sha else []), sha)
     near = [o for o in (ground.overlaps(views(r)[0], topic, body["summary"], cks["files"]) if kind != "summary" else [])
@@ -192,9 +188,8 @@ def cmd_note(a):
         raise SystemExit("logbook: not saving a note with no evidence. Add an evidence: line with what you ran or read (a command and its result, "
                          "or file:line); naming a file is not enough. --allow-ungrounded saves it anyway, marked unverified.")
     e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
-                           pending=pending, checks=cks)
-    shared = not pending and auto_publish(r, e)
-    out(f"recorded {e.id} ({'pending: attaches to your next commit' if pending else 'published (auto mode)' if shared else 'private'})")
+                           checks=cks)
+    out(f"recorded {e.id} ({'published (auto mode)' if auto_publish(r, e) else 'private'})")
 
 
 def auto_publish(r, e):
@@ -446,9 +441,6 @@ def cmd_history(a):
         out(f"notes on branch {u['branch']} (not on this history yet)")
         for v in u["entries"]:
             out(f"    - {_entry_line(v, a.verbose)}")
-    cov = t["coverage"]
-    need = cov["commits"] - cov["trivial"]
-    out(f"{cov['with_reason']} of {need} recent commits say why.")
     return 0
 
 
@@ -551,9 +543,6 @@ def cmd_doctor(a):
     out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
     out(f"  git hooks   : post-commit {'installed' if ins.git_hook_installed(r) else 'missing'}, "
         f"pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}")
-    cov = tree.build(r)["coverage"]
-    need = cov["commits"] - cov["trivial"]
-    out(f"  coverage    : {cov['with_reason']} of {need} recent commits have a note that says why ({cov['trivial']} trivial: chores, merges, whitespace)")
     for sm in tree.summaries(views(r)[0]):
         node = "repo" if sm["level"] == "repo" else "branch " + sm["branch"]
         out(f"  summary     : {node}: {'up to date' if sm['fresh'] else str(sm['new_notes']) + ' newer note(s), stale (logbook summarize)'}")
@@ -582,9 +571,8 @@ def cmd_capture(a):
 
 
 def cmd_post_commit(a):
-    try:  # attach pending entries now (fast); the sweep for hook-less commits runs detached so the commit never waits
+    try:  # the sweep for hook-less commits runs detached so the commit never waits
         r = Repo(".")
-        capture.post_commit(r)
         capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], r.root)
     except Exception:
         pass
@@ -639,8 +627,7 @@ def cmd_install(a):
     ins.apply(r, targets, pretool=not a.no_pretool)
     out("done. `logbook doctor` shows what is installed; `logbook uninstall` reverses it.")
     if "claude-code" in targets:
-        out("Claude Code will be asked once to record a note before it finishes a turn that read or searched 3 or more times and wrote")
-        out("none. `logbook config nudge context` makes that a reminder on the next prompt, `logbook config nudge off` turns it off.")
+        out("Claude Code sessions are now observed per branch (private; `logbook worker --status`). `logbook log` saves a log of the session so far.")
     return 0
 
 
@@ -658,7 +645,7 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None, "publish": PUBLISH_MODES,
+CONFIG_KEYS = {"publish": PUBLISH_MODES,
                "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
 
 
@@ -707,39 +694,6 @@ def cmd_config(a):
     c[a.key] = False if a.value == "off" else int(a.value) if a.value.isdigit() else a.value
     r.save_cfg(c)
     out(f"{a.key} = {a.value}")
-    return 0
-
-
-def cmd_context(a):
-    """What an agent needs to write the note for a commit: whether it needs one, and which of your findings it grew out of."""
-    r = need_repo()
-    if a.commit:
-        rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", a.commit + "^{commit}"], r.root)
-        if rc != 0:
-            raise SystemExit(f"logbook: no commit {a.commit!r} in this repo")
-        paths = g.changed_paths(r.root, full.strip())
-        what = f"commit {full.strip()[:8]}"
-        rc, num, _ = g.try_run(["show", "-w", "-M", "--numstat", "--format=", full.strip()], r.root)
-    else:
-        staged = [x for x in g.try_run(["diff", "--cached", "--name-only"], r.root)[1].split() if x]
-        paths = staged or [x for x in g.try_run(["diff", "--name-only", "HEAD"], r.root)[1].split() if x]
-        what = "the staged changes" if staged else "the working tree"
-        rc, num, _ = g.try_run(["diff", "--cached", "-w", "-M", "--numstat"], r.root)
-    rows = [ln.split(chr(9))[:2] for ln in num.splitlines() if ln.strip()] if rc == 0 else []
-    trivial = bool(paths) and all(x == ["0", "0"] for x in rows)
-    out(f"Context for {what}: {len(paths)} file(s) changed" + ("; whitespace or renames only, so a note is optional." if trivial else "."))
-    vs, _ = views(r)
-    cited = {x for v in vs for x in v["sources"]}
-    mine = [v for v in vs if v["mine"] and v["kind"] == "finding" and v["provenance"] != "auto-copied" and v["id"] not in cited]
-    want, want_names = set(paths), set(tree.names_of(paths))
-    near = [v for v in mine if want & set(v["paths"]) or want_names & set(v["names"])]
-    if near:
-        out("Your findings that touch these files and are not yet part of a change note:")
-        for v in sorted(near, key=lambda x: x["id"], reverse=True)[:8]:
-            out(f"  {v['id']}  {txt(v, v['topic'], 90)}  -  {txt(v, v['body'].get('summary', ''), 140)}")
-        out('Cite the ones this change grew out of: a sources: <id>, <id> line in the note (logbook note --fields).')
-    else:
-        out(f"No unlinked finding of yours touches these files ({len(mine)} other unlinked finding(s); `logbook query` finds them).")
     return 0
 
 
@@ -839,45 +793,6 @@ def cmd_tidy(a):
     return 0
 
 
-def cmd_backfill(a):
-    """Brief an agent on commits that have no note saying why, so it can write one from the diff. Makes no model call itself."""
-    r = need_repo()
-    vs, an = views(r)
-    explained = {v["placed"] for v in vs if v["body"].get("why") or v["body"].get("wrong")}
-    if a.shas:
-        picked = []
-        for x in a.shas:
-            rc, full, _ = g.try_run(["rev-parse", "--verify", "--quiet", x + "^{commit}"], r.root)
-            if rc != 0:
-                raise SystemExit(f"logbook: no commit {x!r} in this repo")
-            picked.append(full.strip())
-    else:
-        recent = an.sp[:a.scan]
-        triv = tree.trivial_shas(r, recent)
-        picked = [c["sha"] for c in recent if c["sha"] not in explained and c["sha"] not in triv][:a.limit]
-    if not picked:
-        out("nothing to backfill: every recent commit has a note saying why, or is trivial.")
-        return 0
-    out(f"{len(picked)} commit(s) have no note saying why. For each, write one only if the change needed real thought;")
-    out('use `logbook note --fields` with the line commit: <sha>. Base it on the message and diff below, mark anything you inferred as')
-    out("not verified, and do not invent motives. Skip chores.")
-    for sha in picked:
-        info = g.commit_info(r.root, sha) or {}
-        body = g.try_run(["show", "-s", "--format=%b", sha], r.root)[1].strip()
-        stat = g.try_run(["show", "--stat", "--format=", sha], r.root)[1].strip()
-        diff = g.try_run(["show", "-w", "-M", "--format=", "--unified=2", sha], r.root)[1]
-        out("")
-        out("=" * 72)
-        out(f"commit {sha}  {info.get('subject', '')}")
-        if body:
-            out(body[:1200])
-        out(stat[:1200])
-        out(diff[:a.max_diff])
-        if len(diff) > a.max_diff:
-            out(f"... diff cut at {a.max_diff} characters")
-    return 0
-
-
 def cmd_purge(a):
     r = need_repo()
     ref = r.purge(a.id)
@@ -930,12 +845,9 @@ def cmd_stats(a):
     p = r.cdir / "injections.log"
     rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
     out(f"injections: {len(rows)}, entries shown: {sum(len(x['ids']) for x in rows)}, chars injected: {sum(x['chars'] for x in rows)}")
-    nl = r.cdir / "nudges.log"
-    nudges = len([x for x in nl.read_text(encoding="utf-8").splitlines() if x.strip()]) if nl.exists() else 0
     mine = [l.entry for l in r.all_entries() if l.user == r.user]
-    out(f"nudges sent: {nudges}; your notes: {sum(1 for e in mine if e.provenance != 'auto-copied')} written, "
+    out(f"your notes: {sum(1 for e in mine if e.provenance != 'auto-copied')} written, "
         f"{sum(1 for e in mine if e.provenance == 'auto-copied')} auto-copied")
-    out("model calls: 0 (backend none)")
 
 
 def cmd_cites(a):
@@ -963,12 +875,12 @@ def cmd_demo(a):
 
 
 HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
-          "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
+          "reconcile", "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
           "cites", "tidy", "worker", "history"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall snippet demo
 agents and hooks call these; you rarely need to:
-  context summarize backfill inject cites capture post-commit reconcile
+  summarize inject cites capture post-commit reconcile
 older names that still work:
   init join query explain path doctor queue stats install install-hook
 the old `log` view of notes next to commits is now `history`"""
@@ -1012,7 +924,6 @@ def build_parser():
     for k in BODY_FIELDS:
         s.add_argument(f"--{k}")
     s.add_argument("--paths", help="comma-separated; defaults to the commit's files / working tree")
-    s.add_argument("--before-commit", action="store_true", help="change entry: attach to the next commit")
     s.add_argument("--commit", help="write the note about this earlier commit instead of HEAD")
     s.add_argument("--sources", help="comma-separated ids of the findings this note was written from")
     s.add_argument("--from-stdin", action="store_true", help="read the summary from stdin (for agents without hooks)")
@@ -1066,8 +977,6 @@ def build_parser():
     s.add_argument("--yes", action="store_true")
     s.add_argument("--write", action="store_true")
     s.add_argument("--dry-run", action="store_true")
-    s = add("context", cmd_context, "what to cite and whether a note is needed before you commit")
-    s.add_argument("--commit", help="for an existing commit instead of the staged changes")
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
     s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
     s.add_argument("--branch", help="a named branch")
@@ -1081,14 +990,9 @@ def build_parser():
     s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
-    s = add("backfill", cmd_backfill,"brief an agent on commits with no note saying why, so it can write them")
-    s.add_argument("shas", nargs="*")
-    s.add_argument("--limit", type=int, default=3)
-    s.add_argument("--scan", type=int, default=50, help="how many recent commits to look through")
-    s.add_argument("--max-diff", type=int, default=6000)
     s = add("queue", cmd_queue, "list private notes that are not shared yet")
     s.add_argument("--hook", action="store_true", help="the quiet one-line reminder the pre-push hook prints")
-    s = add("config", cmd_config, "show or set: nudge (off|context|block), nudge_after, block_after")
+    s = add("config", cmd_config, "show or set: publish (manual|ask|auto), worker (on|off), tidy (manual|auto), worker_calls")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")
     s = add("purge", cmd_purge, "remove a published entry from your ref")

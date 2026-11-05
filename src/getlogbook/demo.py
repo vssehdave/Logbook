@@ -107,7 +107,9 @@ def run(dir=None):
     check("ops@example.com" not in s2.to_json() and "sk_live" not in s2.to_json(), f"email and secret masked in preview ({sorted(set(found2))})")
     ra.publish([shared])
 
-    head("3. A real fix: a change entry written before the commit, attached by the post-commit hook")
+    head("3. A real fix: a change entry written after the commit, filed under it")
+    commit(alice, "fix: exclude refunds from revenue",
+           {"src/shop/revenue.py": "def total(payments):\n    return sum(p.amount for p in payments if p.status != 'refunded')\n"})
     capture.make_entry(ra, "change", "revenue must exclude refunds",
                        {"summary": "exclude refunded payments from revenue",
                         "wrong": "refunds were counted as revenue, overstating it by about 4%",
@@ -116,10 +118,7 @@ def run(dir=None):
                         "context": "Finance noticed totals ran above the processor's own report. Alice diffed the two for one week and the gap "
                                    "matched the refunded rows exactly, so she traced where revenue.total reads them.",
                         "decided": "Filter in revenue.total, not in the payments loader, because other reports still need refunded rows.",
-                        "scale": "about 4% overstated across the quarter"}, pending=True)
-    commit(alice, "fix: exclude refunds from revenue",
-           {"src/shop/revenue.py": "def total(payments):\n    return sum(p.amount for p in payments if p.status != 'refunded')\n"})
-    capture.post_commit(ra)
+                        "scale": "about 4% overstated across the quarter"})
     capture.reconcile(ra)
     chg = [v for v in views(ra)[0] if v["kind"] == "change" and v["provenance"] != "auto-copied"]
     check(len(chg) == 1 and chg[0]["state"] == "exact" and chg[0]["names"] == ["revenue"], "change entry attached to the new commit, file name detected")

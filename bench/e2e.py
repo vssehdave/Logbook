@@ -217,11 +217,13 @@ rc, o = lb(bob, "setup", "--yes", "--agent", "claude-code")
 cfg = json.loads((bob / ".claude/settings.local.json").read_text())
 ok("permissions" not in cfg and any(e.get("matcher") == "Bash" and "--event Permission" in json.dumps(e) for e in cfg["hooks"]["PreToolUse"]),
    "setup adds the permission hook on Bash and writes no allow rules", cfg)
-ok("managed-by: logbook" in (bob / ".claude/agents/logbook-scribe.md").read_text(encoding="utf-8"), "setup installs the logbook-scribe agent")
+ok(not (bob / ".claude/agents").exists(), "setup installs no agent any more")
+post = [h for e in cfg["hooks"].get("PostToolUse", []) for h in e["hooks"]]
+ok(post and all(h.get("async") for h in post), "setup registers an async PostToolUse hook for the observer", cfg["hooks"].get("PostToolUse"))
 
 
-def decision(command, agent_type=""):
-    rc, o = lb(bob, "capture", "--event", "Permission", inp=json.dumps({"cwd": str(bob), "agent_type": agent_type, "tool_input": {"command": command}}))
+def decision(command):
+    rc, o = lb(bob, "capture", "--event", "Permission", inp=json.dumps({"cwd": str(bob), "tool_input": {"command": command}}))
     return json.loads(o)["hookSpecificOutput"]["permissionDecision"] if o.strip().startswith("{") else None
 
 
@@ -229,26 +231,27 @@ ok(decision("logbook note --fields") == "allow" and decision("logbook ask x") ==
 ok(decision("logbook config publish auto") == "ask" and decision("logbook purge") == "ask", "the hook makes config and purge ask")
 ok(decision("logbook note x && rm y") is None and decision("ls") is None, "the hook has no opinion on a compound command or another command")
 ok(decision("logbook publish abc") == "ask", "publish asks in the default mode (ask)")
-ok(decision("ls", "logbook-scribe") == "deny", "the scribe may not run anything but logbook")
 ok(decision("logbook tidy --brief") == "allow" and decision("logbook tidy --apply <<'EOF'\nstatus_of: x\nEOF") == "ask", "tidy reads freely and --apply always asks")
 rc, o = lb(bob, "tidy")
 ok(rc == 0 and "candidate" in o, "tidy lists candidates", o)
 rc, o = lb(bob, "worker", "--status")
-ok(rc == 0 and "worker off, tidy manual" in o, "the worker is off by default and says so", o)
-lb(bob, "config", "worker", "on")
+ok(rc == 0 and "worker on, tidy manual" in o, "the observer is on by default and says so", o)
+lb(bob, "config", "worker", "off")
 lb(bob, "config", "tidy", "auto")
 rc, o = lb(bob, "worker", "--status")
-ok("worker on, tidy auto" in o, "worker on and tidy auto are settable", o)
+ok("worker off, tidy auto" in o, "worker off and tidy auto are settable", o)
+lb(bob, "config", "worker", "on")
+rc, o = lb(bob, "log", "--no-observe", "--no-model")
+ok(rc == 0 and "nothing new" in o, "log with nothing observed saves nothing and is not an error", o)
 rc, o = lb(bob, "tidy", "--garbage")
 ok(rc == 0 and "worker draft(s)" in o, "tidy --garbage lists worker drafts", o)
 ok(decision("logbook worker --status") == "allow" and decision("logbook worker --drain") == "ask", "worker --drain asks, --status does not")
-lb(bob, "config", "worker", "off")
 lb(bob, "config", "tidy", "manual")
 rc, o = lb(bob, "tidy", "--apply", inp="status_of: 1a1a5684310-5ba7d17c\nstatus: resolved\ncommits: abc1234\nreason: r\n")
 ok(rc != 0 and "nothing was changed" in o, "tidy --apply with a note that does not exist stores nothing", o)
 rc, o = lb(bob, "uninstall", "--yes", "--agent", "claude-code")
 left = json.loads((bob / ".claude/settings.local.json").read_text()) if (bob / ".claude/settings.local.json").exists() else {}
-ok("PreToolUse" not in left.get("hooks", {}) and not (bob / ".claude/agents").exists(), "uninstall removes the hook and the scribe agent", o)
+ok("PreToolUse" not in left.get("hooks", {}) and not (bob / ".claude/agents").exists(), "uninstall removes the hooks", o)
 
 print(f"\n{len(fails)} failed" if fails else "\nALL PASSED")
 print("workdir:", root)

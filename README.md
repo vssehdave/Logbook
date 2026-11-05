@@ -65,17 +65,11 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
 
 - **Before answering** a "why" question, or searching the code for a cause, it looks up `logbook ask`. Hooks also put
   the matching notes in front of it (see below).
-- **While working** it records what it learns, even with no commit: `logbook note --fields <<'EOF' ... EOF` (summary, context, why,
-  wrong, fix, decided, open, scale, paths). A note an agent writes is 3 to 9 lines and has an `evidence:` line (what it ran or read;
-  naming a file is not enough); a one-line note is refused. The skill shows the shape and a good example.
-- **Before it finishes** a turn that read or searched three or more times and wrote no note, Claude Code is asked once to record
-  one. `logbook config nudge context` makes that a reminder on the next prompt instead, `logbook config nudge off` turns it off.
-  How often this works in real sessions is still being measured (`bench/real_session.py`); the earlier 4 of 4 came from a synthetic test.
-- **The scribe.** `logbook setup` also installs `.claude/agents/logbook-scribe.md`, a subagent on a cheaper model (haiku) that writes a note from facts
-  the main agent hands it, checks them against the code in its own context, and answers in two lines. When it is installed, the reminder above tells the
-  agent to hand over the facts instead of writing the note itself. The permission hook lets it run only `note`, `ask`, `context`, `cites`, `log` and `status`.
-  Measured once, by hand: given a set of facts it wrote a grounded 6-line note for about $0.11. Whether handing over is cheaper or better than the agent
-  writing its own note is not measured yet.
+- **While working** the observer records what it learns, per branch, in the background (next section). It writes a note itself only when you ask it to remember
+  something, or for a root cause or decision that must be kept: `logbook note --fields <<'EOF' ... EOF` (summary, context, why, wrong, fix, decided, open, scale,
+  paths). A note an agent writes is 3 to 9 lines and has an `evidence:` line (what it ran or read; naming a file is not enough); a one-line note is refused.
+  The skill shows the shape and a good example. Nothing asks it to write a note for every task or every commit.
+- **When the work is done** it saves a log (`logbook log`) in `auto` mode by itself, in `ask` mode after asking you (see Modes and savepoints).
 
 ## The observer (on by default, private)
 
@@ -116,12 +110,10 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 |---|---|
 | `note` | allow |
 | `ask` | allow |
-| `context` | allow |
 | `cites` | allow |
 | `log` | allow |
 | `status` | allow |
 | `summarize` | allow |
-| `backfill` | allow |
 | `tidy` | allow; `--apply` asks |
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
@@ -146,8 +138,6 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
     logbook publish <id>                      # preview + redaction, you confirm; evidence is opt-in
     logbook publish                           # lists your private notes that are not shared yet and asks which
     logbook publish --all                     # preview every one of them with redaction, confirm once
-    logbook context                           # before a commit: does it need a note, and which of your findings it grew out of
-    logbook backfill                          # recent commits with no note saying why, with diffs, for an agent to write
     logbook summarize                         # the notes under the repo or branch, for an agent to write a summary
     logbook sync                              # fetch teammates' entries, push yours
     logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match

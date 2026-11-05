@@ -257,15 +257,6 @@ class TestCapture(Base):
         self.assertEqual(es["reconcile"].kind, "change")
         self.assertEqual(capture.reconcile(r)["floor"], 0, "idempotent")
 
-    def test_real_post_commit_hook_attaches_pending_entry(self):
-        d, r = self.repo()
-        capture.install_git_hook(r)
-        capture.make_entry(r, "change", "t", {"summary": "s", "why": "w"}, pending=True)
-        commit(d, "real", {"models/marts/fct_x.sql": "select 5\n"})
-        time.sleep(0.5)
-        got = [l.entry for l in r.all_entries() if l.entry.kind == "change"]
-        self.assertTrue(got and got[0].anchor["sha"] == g.head_sha(d), "the git hook ran `python -m getlogbook post-commit`")
-
     def test_installers_chain_and_are_idempotent(self):
         d, r = self.repo()
         hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], d).strip())
@@ -414,10 +405,7 @@ class TestInstaller(Base):
         self.assertTrue(md.count("\n") == md.count("\r\n"), "CRLF file stays CRLF")
         skill = (self.d / ".claude" / "skills" / "logbook" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("managed-by: logbook", skill)
-        scribe = (self.d / ".claude" / "agents" / "logbook-scribe.md").read_text(encoding="utf-8")
-        self.assertRegex(scribe, r"(?m)^name: logbook-scribe$")
-        self.assertRegex(scribe, r"(?m)^model: haiku$")
-        self.assertIn("managed-by: logbook", scribe)
+        self.assertFalse((self.d / ".claude" / "agents").exists(), "no scribe agent any more")
         hooks = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
         self.assertIn("mine", json.dumps(hooks["Stop"]), "existing hooks are kept")
         self.assertIn("getlogbook capture", json.dumps(hooks["UserPromptSubmit"]))
@@ -460,10 +448,16 @@ class TestInstaller(Base):
         ag = self.d / ".claude" / "agents"
         ag.mkdir(parents=True)
         (ag / "logbook-scribe.md").write_text("someone else's agent")
-        with self.assertRaises(SystemExit):
-            self.run_cli("install", "--yes", "--agent", "claude-code")
+        self.assertEqual(self.run_cli("install", "--yes", "--agent", "claude-code")[0], 0)
         self.run_cli("uninstall", "--yes")
         self.assertEqual((ag / "logbook-scribe.md").read_text(), "someone else's agent")
+
+    def test_the_scribe_agent_an_older_install_wrote_is_removed(self):
+        ag = self.d / ".claude" / "agents"
+        ag.mkdir(parents=True)
+        (ag / "logbook-scribe.md").write_text("---\nname: logbook-scribe\nmetadata:\n  managed-by: logbook\n---\nbody\n")
+        self.assertEqual(self.run_cli("install", "--yes", "--agent", "claude-code")[0], 0)
+        self.assertFalse((ag / "logbook-scribe.md").exists())
 
     def test_symlinked_rules_file_is_written_through(self):
         real = self.root / "shared-claude.md"
@@ -487,141 +481,6 @@ class TestInstaller(Base):
         self.assertRegex(after, r"git hooks\s*: post-commit installed, pre-push installed")
 
 
-class TestNudge(Base):
-    def setUp(self):
-        super().setUp()
-        self.d = make_repo(self.root, "r", "a@x.io")
-        commit(self.d, "b", {"a.txt": "x"})
-        self.r = Repo(self.d)
-        self.r.init()
-        self.cd(self.d)
-        self.tpath = self.root / "t.jsonl"
-        self.tpath.write_text("")
-        c = self.r.cfg()
-        c["nudge"] = "context"  # block is the default; most of these tests are about the reminder
-        self.r.save_cfg(c)
-
-    def turn(self, *tools):
-        """Append one assistant turn made of (tool name, input) pairs, in Claude Code's real transcript shape."""
-        with open(self.tpath, "a", encoding="utf-8") as f:
-            for name, inp in tools:
-                f.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [
-                    {"type": "tool_use", "id": "toolu_x", "name": name, "input": inp}]}}) + "\n")
-
-    def hook(self, event, **extra):
-        payload = {"session_id": "s1", "transcript_path": str(self.tpath), "cwd": str(self.d), **extra}
-        return capture.handle_hook(event, "claude-code", json.dumps(payload))
-
-    def test_nudge_after_an_investigation_turn_without_a_note_once(self):
-        self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(7)])
-        self.hook("Stop", last_assistant_message="done")
-        first = self.hook("UserPromptSubmit", prompt="ok next")
-        self.assertIn("recorded no note", json.loads(first)["hookSpecificOutput"]["additionalContext"])
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="and then?"), "", "said once per turn")
-
-    def test_a_turn_split_over_several_checkpoints_adds_up_and_the_next_prompt_starts_again(self):
-        """PreCompact fires mid-turn: 4 reads before it and 3 after are 7, not 3 (the later checkpoint used to overwrite the earlier one)."""
-        self.turn(*[("Read", {"file_path": f"a{i}.py"}) for i in range(4)])
-        self.hook("PreCompact")
-        self.turn(*[("Read", {"file_path": f"b{i}.py"}) for i in range(3)])
-        self.hook("Stop", last_assistant_message="done")
-        st = capture._load(self.r.cdir / "sessions" / "s1")
-        self.assertEqual((st["turn"]["reads"], st["turn"]["noted"]), (7, False))
-        self.assertIn("recorded no note", json.loads(self.hook("UserPromptSubmit", prompt="next"))["hookSpecificOutput"]["additionalContext"])
-        self.assertEqual(capture._load(self.r.cdir / "sessions" / "s1")["turn"], {}, "a new prompt starts a new turn")
-
-    def test_a_note_written_early_in_a_turn_still_counts_after_a_later_checkpoint(self):
-        self.turn(*[("Read", {"file_path": f"a{i}.py"}) for i in range(7)], ("Bash", {"command": "logbook note --fields"}))
-        self.hook("PreCompact")
-        self.turn(("Read", {"file_path": "late.py"}))
-        self.hook("Stop", last_assistant_message="done")
-        self.assertTrue(capture._load(self.r.cdir / "sessions" / "s1")["turn"]["noted"])
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
-
-    def test_with_the_scribe_installed_the_reminder_says_to_hand_over_the_facts_and_the_handoff_counts_as_a_note(self):
-        from getlogbook import nudge
-        self.assertNotIn("scribe", nudge.NUDGE_TEXT)
-        self.assertIn("logbook-scribe", nudge.NUDGE_SCRIBE)
-        self.assertIn("logbook-scribe", nudge.BLOCK_SCRIBE)
-        self.assertNotIn("record it now", nudge.NUDGE_SCRIBE + nudge.BLOCK_SCRIBE, "the replacement must have matched")
-        reads = [("Read", {"file_path": f"f{i}.py"}) for i in range(7)]
-        self.turn(*reads)
-        self.hook("Stop", last_assistant_message="done")
-        self.assertIn("recorded no note", json.loads(self.hook("UserPromptSubmit", prompt="a"))["hookSpecificOutput"]["additionalContext"])  # no scribe: the plain text
-        (self.d / ".claude" / "agents").mkdir(parents=True)
-        (self.d / ".claude" / "agents" / "logbook-scribe.md").write_text("---\nname: logbook-scribe\nmetadata:\n  managed-by: logbook\n---\n")
-        self.turn(*reads)
-        self.hook("Stop", last_assistant_message="done")
-        self.assertIn("logbook-scribe subagent", json.loads(self.hook("UserPromptSubmit", prompt="b"))["hookSpecificOutput"]["additionalContext"])
-        self.turn(*reads, ("Agent", {"subagent_type": "logbook-scribe", "description": "note", "prompt": "facts"}))
-        self.hook("Stop", last_assistant_message="done")
-        self.assertTrue(capture._load(self.r.cdir / "sessions" / "s1")["turn"]["noted"], "a hand-off to the scribe is a note")
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="c"), "")
-
-    def test_only_the_note_subcommand_counts_as_writing_a_note(self):
-        """A real session found this: `logbook ask "... same note id"` was counted as a note, so no reminder ever came."""
-        from getlogbook import nudge
-        looked = [("Read", {"file_path": f"f{i}.py"}) for i in range(4)]
-
-        def stats(command):
-            self.tpath.write_text("")
-            self.turn(*looked, ("Bash", {"command": command}))
-            return nudge.turn_stats(self.tpath.read_bytes())
-
-        self.assertFalse(stats('logbook ask "publish twice same note id"')["noted"], "a query that says note is not a note")
-        self.assertFalse(stats("logbook context ; logbook cites --note")["noted"])
-        for real in ("logbook note --json <<'EOF'\n{}\nEOF", "echo '{}' | logbook note --json", "python -m getlogbook note \"x\" a.py", "logbook note --check"):
-            self.assertTrue(stats(real)["noted"], real)
-        self.assertEqual(stats('logbook ask "same note id"')["reads"], 4)
-
-    def test_no_nudge_when_a_note_was_written_or_the_turn_was_short(self):
-        self.turn(*[("Grep", {"pattern": "x"}) for _ in range(7)], ("Bash", {"command": "echo '{}' | logbook note --json"}))
-        self.hook("Stop")
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
-        self.turn(("Read", {"file_path": "a.py"}), ("Bash", {"command": "git log --oneline"}))
-        self.hook("Stop")
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
-
-    def test_block_mode_blocks_once_and_cannot_loop(self):
-        cli.main(["config", "nudge", "block"])
-        self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(4)])
-        first = json.loads(self.hook("Stop", last_assistant_message="answer"))
-        self.assertEqual(first["decision"], "block")
-        self.assertIn("logbook note", first["reason"])
-        self.assertEqual(self.hook("Stop", stop_hook_active=True), "", "the stop that follows our own block is never blocked")
-        self.assertEqual(self.hook("Stop"), "", "a turn is blocked once")
-        self.turn(*[("Read", {"file_path": f"g{i}.py"}) for i in range(4)], ("Bash", {"command": "logbook note --json"}))
-        self.assertEqual(self.hook("Stop"), "", "no block when the agent already wrote a note")
-        self.turn(("Read", {"file_path": "a.py"}))
-        self.assertEqual(self.hook("Stop"), "", "no block after a short turn")
-
-    def test_config_command_validates(self):
-        self.assertEqual(cli.main(["config", "nudge", "off"]), 0)
-        self.assertIs(self.r.cfg()["nudge"], False)
-        self.assertEqual(cli.main(["config", "nudge_after", "9"]), 0)
-        self.assertEqual(self.r.cfg()["nudge_after"], 9)
-        with self.assertRaises(SystemExit):
-            cli.main(["config", "nudge", "loud"])
-        with self.assertRaises(SystemExit):
-            cli.main(["config", "colour", "blue"])
-
-    def test_config_switch_and_session_cap(self):
-        c = self.r.cfg()
-        c["nudge"] = False
-        self.r.save_cfg(c)
-        self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(7)])
-        self.hook("Stop")
-        self.assertEqual(self.hook("UserPromptSubmit", prompt="next"), "")
-        c["nudge"] = True
-        self.r.save_cfg(c)
-        sent = 0
-        for _ in range(5):
-            self.turn(*[("Read", {"file_path": f"f{i}.py"}) for i in range(7)])
-            self.hook("Stop")
-            sent += bool(self.hook("UserPromptSubmit", prompt="next"))
-        self.assertEqual(sent, 3, "at most three nudges per session")
-
-
 class CliRepo(Base):
     def setUp(self):
         super().setUp()
@@ -643,78 +502,6 @@ class CliRepo(Base):
             sys.stdin = old
         return code, buf.getvalue()
 
-
-
-class TestContext(CliRepo):
-    def test_context_lists_unlinked_findings_near_the_staged_files_and_sources_link_them(self):
-        f1 = capture.make_entry(self.r, "finding", "refunds are summed", {"summary": "total() adds refunded rows", "why": "no filter"},
-                                paths=["shop/revenue.py"])
-        capture.make_entry(self.r, "finding", "unrelated", {"summary": "about other.py", "why": "w"}, paths=["shop/other.py"])
-        (self.d / "shop" / "revenue.py").write_text("x = 2\n")
-        sh("git", "add", "-A", cwd=self.d)
-        _, text = self.run_cli("context")
-        self.assertIn(f1.id, text)
-        self.assertNotIn("unrelated", text)
-        note = json.dumps({"kind": "change", "summary": "filter refunded rows", "why": "total() summed them", "before_commit": True,
-                           "sources": [f1.id], "paths": ["shop/revenue.py"]})
-        self.assertEqual(self.run_cli("note", "--json", stdin=note)[0] or 0, 0)
-        sh("git", "commit", "-q", "-m", "fix: skip refunds", cwd=self.d)
-        capture.post_commit(self.r)
-        views, _ = tree.all_views(self.r)
-        change = next(v for v in views if v["kind"] == "change")
-        self.assertEqual(change["sources"], [f1.id])
-        (self.d / "shop" / "revenue.py").write_text("x = 3\n")
-        sh("git", "add", "-A", cwd=self.d)
-        self.assertNotIn(f1.id, self.run_cli("context")[1], "a finding already cited by a change note is not offered again")
-
-    def test_bad_source_id_is_rejected_and_whitespace_only_changes_are_called_optional(self):
-        with self.assertRaises(SystemExit):
-            self.run_cli("note", "--json", stdin=json.dumps({"summary": "s", "sources": ["../x"]}))
-        (self.d / "shop" / "revenue.py").write_text("x   =   1\n")
-        sh("git", "add", "-A", cwd=self.d)
-        self.assertIn("optional", self.run_cli("context")[1])
-
-
-    def test_backfill_briefs_only_unexplained_non_trivial_commits(self):
-        a = commit(self.d, "feat: add totals", {"shop/totals.py": "def total(rows):\n    return sum(rows)\n"})
-        commit(self.d, "chore: tidy", {"shop/other.py": "y = 1\n# tidy\n"})
-        b = commit(self.d, "fix: skip refunds", {"shop/totals.py": "def total(rows):\n    return sum(r for r in rows if r > 0)\n"})
-        capture.make_entry(self.r, "change", "t", {"summary": "s", "why": "because", "wrong": "refunds counted"}, sha=b)
-        code, text = self.run_cli("backfill")
-        self.assertEqual(code or 0, 0)
-        self.assertIn("feat: add totals", text)
-        self.assertIn("def total(rows)", text, "the diff is included")
-        self.assertNotIn("chore: tidy", text)
-        self.assertNotIn("fix: skip refunds", text)
-        self.assertIn("commit: <sha>", text)
-        explicit = self.run_cli("backfill", b[:10])[1]
-        self.assertIn("fix: skip refunds", explicit)
-        self.assertIn("nothing to backfill", self.run_cli("backfill", "--scan", "1")[1])
-        self.assertTrue(a)
-
-
-    def test_summary_goes_stale_when_a_note_is_added_and_is_injected_only_while_fresh(self):
-        n1 = capture.make_entry(self.r, "finding", "refunds summed", {"summary": "s1", "why": "no filter", "wrong": "4% high"})
-        n2 = capture.make_entry(self.r, "finding", "rounding ruled out", {"summary": "s2", "why": "money.py is fine"})
-        text = self.run_cli("summarize")[1]
-        self.assertIn(n1.id, text)
-        self.assertIn(n2.id, text)
-        body = {"kind": "summary", "level": "repo", "topic": "Summary of the repo", "sources": [n1.id, n2.id],
-                "summary": "Revenue ran 4% high because refunded rows were summed; rounding was ruled out."}
-        self.run_cli("note", "--json", stdin=json.dumps(body))
-        views, _ = tree.all_views(self.r)
-        s = tree.summaries(views)[0]
-        self.assertEqual((s["level"], s["fresh"], s["count"]), ("repo", True, 2))
-        self.assertIn("up to date", self.run_cli("summarize")[1])
-        start = recall.digest(self.r, "SessionStart", session="s1")
-        self.assertIn("refunded rows were summed", start)
-        self.assertIn("verify first", start)
-        n3 = capture.make_entry(self.r, "finding", "partial refunds", {"summary": "s3", "why": "not handled"})
-        stale = tree.summaries(tree.all_views(self.r)[0])[0]
-        self.assertEqual((stale["fresh"], stale["new_notes"]), (False, 1))
-        self.assertNotIn("refunded rows were summed", recall.digest(self.r, "SessionStart", session="s2"), "stale summaries say nothing")
-        self.assertIn(n3.id, self.run_cli("summarize")[1])
-        self.assertEqual(tree.build(self.r)["summaries"][0]["fresh"], False)
 
 
 class TestSharingQueue(CliRepo):
@@ -743,30 +530,6 @@ class TestSharingQueue(CliRepo):
         self.run_cli("uninstall", "--yes", "--agent", "agents-md")
         self.assertFalse((self.d / ".git" / "hooks" / "pre-push").exists(), "uninstall removes the hook file it created")
         self.assertFalse((self.d / ".git" / "hooks" / "post-commit").exists())
-
-
-class TestCoverage(Base):
-    def test_trivial_commits_need_no_note_and_the_rest_are_counted(self):
-        d = make_repo(self.root, "r", "a@x.io")
-        commit(d, "feat: add orders", {"orders.py": "def f():\n    return 1\n", "util.py": "x = 1\n"})
-        commit(d, "chore: tidy", {"orders.py": "def f():\n    return 1\n# note\n"})
-        commit(d, "reformat", {"orders.py": "def f():\n    return    1\n# note\n"})  # whitespace only
-        sh("git", "mv", "util.py", "helpers.py", cwd=d)
-        sh("git", "commit", "-q", "-m", "move util", cwd=d)  # rename only
-        real = commit(d, "fix: totals ignore refunds", {"orders.py": "def f():\n    return 2\n# note\n"})
-        r = Repo(d)
-        r.init()
-        self.cd(d)
-        t = tree.build(r)
-        self.assertEqual({c["subject"]: c["trivial"] for c in t["commits"]},
-                         {"feat: add orders": False, "chore: tidy": True, "reformat": True, "move util": True,
-                          "fix: totals ignore refunds": False})
-        self.assertEqual((t["coverage"]["commits"], t["coverage"]["trivial"], t["coverage"]["with_reason"]), (5, 3, 0))
-        self.assertEqual(t["coverage"]["without_reason"], 2)
-        capture.make_entry(r, "change", "t", {"summary": "s", "why": "refunds were summed", "wrong": "4% high"}, sha=real)
-        capture.make_entry(r, "finding", "no reason given", {"summary": "s"}, sha=real)
-        cov = tree.build(r)["coverage"]
-        self.assertEqual((cov["with_reason"], cov["without_reason"]), (1, 1))
 
 
 class TestMergeResolution(Base):
@@ -889,11 +652,9 @@ class TestBranchPoint(Base):
         a = capture.make_entry(self.r, "finding", "t", {"summary": "s"}, sha=side).anchor
         self.assertEqual((a["sha"], a["branch"]), (side, ""))
 
-    def test_cli_rejects_bad_commit_and_the_before_commit_combination(self):
+    def test_cli_rejects_a_bad_commit(self):
         with self.assertRaises(SystemExit):
             cli.main(["note", "--summary", "s", "--commit", "deadbeefdead"])
-        with self.assertRaises(SystemExit):
-            cli.main(["note", "--kind", "change", "--summary", "s", "--commit", "HEAD", "--before-commit"])
         self.assertEqual(cli.main(["note", "--summary", "s", "--commit", "HEAD"]) or 0, 0)
 
 
@@ -1285,6 +1046,10 @@ class TestPublishModes(CliRepo):
 class TestGrounding(CliRepo):
     """What can be checked about a note is checked; what cannot is not passed off as checked."""
 
+    def test_a_source_id_that_is_not_a_note_id_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli("note", "--json", stdin=json.dumps({"summary": "s", "sources": ["../x"]}))
+
     def setUp(self):
         super().setUp()
         self.head = commit(self.d, "add total", {"shop/revenue.py": "def total(rows):\n    return sum(rows)\n"})
@@ -1304,7 +1069,7 @@ class TestGrounding(CliRepo):
         self.assertNotIn("{", text)
         obj = cli._parse_fields(text)
         self.assertEqual(obj["summary"], "`total()` sums rows,\n  and nothing filters refunds")
-        self.assertEqual((obj["paths"], obj["supersedes"], obj["before_commit"]), (["shop/revenue.py", "shop/other.py"], [], False))
+        self.assertEqual((obj["paths"], obj["supersedes"], "before_commit" in obj), (["shop/revenue.py", "shop/other.py"], [], False), "a stale before_commit line is accepted and ignored")
         code, out = self.run_cli("note", "--fields", stdin=text)
         self.assertIn("recorded", out)
         (e,) = self.r.load_private()
@@ -1475,7 +1240,7 @@ class TestPermissions(CliRepo):
         return d[0] if d else None
 
     def test_the_table(self):
-        for sub in ("note", "ask", "context", "cites", "log", "status", "summarize", "backfill"):
+        for sub in ("note", "ask", "cites", "log", "status", "summarize"):
             for mode in ("never", "manual", "ask", "auto"):
                 self.assertEqual(self.decide(f"logbook {sub} x", mode), "allow", sub)
         self.assertEqual([self.decide("logbook publish abc", m) for m in ("never", "manual", "ask", "auto")], ["deny", "deny", "ask", "allow"])
@@ -1507,15 +1272,6 @@ class TestPermissions(CliRepo):
         self.assertEqual(json.loads(capture.handle_hook("Permission", "claude-code", payload("logbook publish a")))["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(capture.handle_hook("Permission", "claude-code", payload("ls -la")), "", "no opinion on other commands")
 
-
-    def test_the_scribe_may_run_only_a_few_logbook_commands(self):
-        from getlogbook import permissions
-        said = lambda cmd, mode="auto": json.loads(permissions.hook_output(cmd, mode, "logbook-scribe") or "{}").get("hookSpecificOutput", {}).get("permissionDecision")
-        self.assertEqual(said("logbook note --fields --check"), "allow")
-        for cmd in ("logbook publish abc", "logbook sync", "logbook config publish auto", "ls -la", "git push", "rm -rf x", "logbook note x && rm y"):
-            self.assertEqual(said(cmd), "deny", cmd)
-        self.assertEqual(permissions.hook_output("ls -la", "auto", ""), "", "the main agent keeps its own rules")
-        self.assertEqual(permissions.hook_output("ls -la", "auto", "someone-elses-agent"), "")
 
     def test_the_readme_table_is_the_code_table(self):
         from getlogbook import permissions
@@ -1672,9 +1428,8 @@ class TestStatus(CliRepo):
         self.assertIn(self.note.id, text)
         self.assertIn("logbook tidy --apply", text)
         self.assertIn("chunk the export", text)
-        decide = lambda c, agent="": (json.loads(permissions.hook_output(c, "auto", agent) or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
+        decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
         self.assertEqual((decide("logbook tidy"), decide("logbook tidy --brief"), decide("logbook tidy --apply <<'EOF'\nstatus_of: x\nEOF")), ("allow", "allow", "ask"))
-        self.assertEqual(decide("logbook tidy", "logbook-scribe"), "deny")
 
 
 def tidy_candidates(repo):
@@ -1928,19 +1683,6 @@ class TestObserver(ObserverBase):
         self.assertIsNone(self.r.get_private(old.id))
         self.assertTrue((self.r.cdir / "archive" / f"{old.id}.json").exists(), "moved, still readable")
         self.assertIsNotNone(self.r.get_private(person.id), "a person's note is never touched")
-
-    def test_with_the_worker_on_the_agent_is_not_asked_to_write_notes_unless_set_explicitly(self):
-        from getlogbook import nudge
-        self.assertEqual(nudge.mode(self.r), "off")
-        c = self.r.cfg()
-        c["nudge"] = "block"
-        self.r.save_cfg(c)
-        self.assertEqual(nudge.mode(self.r), "block", "an explicit setting wins")
-        c["nudge"] = None
-        c.pop("nudge")
-        c["worker"] = False
-        self.r.save_cfg(c)
-        self.assertEqual(nudge.mode(self.r), "block", "off by default again when the worker is off")
 
 
 SAVEPOINT_XML = """<savepoint><title>Refunds no longer counted as revenue</title><request>Find why totals run high.</request>

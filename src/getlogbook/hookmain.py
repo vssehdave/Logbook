@@ -13,9 +13,8 @@ def run(argv):
             text = capture.handle_hook(ev, agent, sys.stdin.read() if not sys.stdin.isatty() else "")
             if text:
                 sys.stdout.write(text)
-        else:  # post-commit: attach pending entries now (fast); the sweep for hook-less commits runs detached
+        else:  # post-commit: the sweep for hook-less commits runs detached, so the commit never waits
             r = Repo(".")
-            capture.post_commit(r)
             capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], r.root)
     except Exception:
         pass

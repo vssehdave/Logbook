@@ -153,12 +153,8 @@ def plan(repo, targets, remove=False, pretool=True):
             steps.append(Step("the logbook skill", kp, kold, knew, knl, skill=True))
             ap = root / ".claude" / "agents" / "logbook-scribe.md"
             aold, anl = read_text(ap)
-            anew = "" if remove else asset("scribe.md")
-            if aold and SKILL_MARK not in aold:  # someone else's agent of the same name: never overwrite or delete it
-                if not remove:
-                    raise SystemExit(f"logbook: {ap} exists and is not managed by logbook; move it aside first")
-                anew = aold
-            steps.append(Step("the logbook-scribe agent (writes notes from a turn's facts)", ap, aold, anew, anl, agent=True))
+            if aold and SKILL_MARK in aold:  # 0.0.5 pre-releases installed a scribe agent; it is gone, so setup and uninstall remove ours (never someone else's)
+                steps.append(Step("remove the old logbook-scribe agent", ap, aold, "", anl, agent=True))
         elif t == "agents-md":
             steps.append(_block_step(root, "AGENTS.md", remove, "always-on rules in AGENTS.md"))
         elif t == "copilot":

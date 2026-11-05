@@ -12,7 +12,7 @@ import shlex
 
 # subcommand -> decision. "mode" means: follow the publish mode (see `decide`). Not listed: no opinion.
 TABLE = {
-    "note": "allow", "ask": "allow", "context": "allow", "cites": "allow", "log": "allow", "status": "allow", "summarize": "allow", "backfill": "allow",
+    "note": "allow", "ask": "allow", "cites": "allow", "log": "allow", "status": "allow", "summarize": "allow",
     "tidy": "allow", "worker": "allow", "publish": "mode", "sync": "mode",
     "purge": "ask", "gc": "ask", "trust": "ask", "config": "ask", "setup": "ask", "uninstall": "ask",
 }
@@ -62,17 +62,9 @@ def decide(command, mode):
     return rule, f"logbook {sub}: {'private and local' if rule == 'allow' else 'changes what is shared or kept, so it asks'}"
 
 
-SCRIBE = "logbook-scribe"
-SCRIBE_MAY = ("note", "ask", "context", "cites", "log", "status")  # the scribe reads and writes private notes; it never publishes or changes settings
-
-
-def hook_output(command, mode, agent_type=""):
-    """The PreToolUse hook's stdout for a Bash command, or '' for no opinion. The scribe subagent (agent_type in the hook's payload) may run
-    only the commands in SCRIBE_MAY: its tool list cannot say that, so this hook does."""
-    if agent_type == SCRIBE and subcommand(command) not in SCRIBE_MAY:
-        d = ("deny", "the logbook-scribe may only run logbook " + ", ".join(SCRIBE_MAY))
-    else:
-        d = decide(command, mode)
+def hook_output(command, mode):
+    """The PreToolUse hook's stdout for a Bash command, or '' for no opinion."""
+    d = decide(command, mode)
     if not d:
         return ""
     return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": d[0], "permissionDecisionReason": d[1]}})

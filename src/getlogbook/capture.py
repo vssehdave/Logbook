@@ -39,39 +39,15 @@ def writer():
     return "agent-written" if os.environ.get("CLAUDE_CODE_SESSION_ID") else "user-written"
 
 
-def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", pending=False, supersedes=(), sha=None, level="", sources=(), checks=None, status=None):
+def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", supersedes=(), sha=None, level="", sources=(), checks=None, status=None):
     from . import tree
     body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
     e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance or writer(), captured_via=via,
               supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources), v=2, checks=checks, status=status,
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
-    if pending:  # change entries are written before the commit exists; post-commit attaches the sha
-        e.anchor = {"paths": list(paths or [])}
-        atomic_write(repo.cdir / "pending" / f"{e.id}.json", e.to_json())
-    else:
-        e.anchor = tree.anchor_for(repo, sha=sha, paths=paths, with_base=True)  # sha: note about an earlier commit
-        repo.add_private(e)
+    e.anchor = tree.anchor_for(repo, sha=sha, paths=paths, with_base=True)  # sha: note about an earlier commit
+    repo.add_private(e)
     return e
-
-
-def post_commit(repo):
-    """Attach pending change entries to the commit that was just made. Infers nothing here (reconcile does)."""
-    from . import tree
-    n = 0
-    pdir = repo.cdir / "pending"
-    for p in sorted(pdir.glob("*.json")) if pdir.exists() else []:
-        try:
-            e = from_json(p.read_text(encoding="utf-8"))
-            e.anchor = tree.anchor_for(repo, with_base=True)  # paths come from the commit itself
-            repo.add_private(e)
-            if repo.publish_mode() == "auto":  # the note is complete now: share it as auto mode promises
-                from . import cli
-                cli.auto_publish(repo, e)
-            p.unlink()
-            n += 1
-        except (OSError, ValueError) as ex:
-            repo.error(f"post-commit {p.name}: {ex}")
-    return n
 
 
 # ---- spool + detached worker ---------------------------------------------------------------------------------
@@ -157,7 +133,7 @@ def handle_hook(event, agent, raw):
         if event == "Permission":  # PreToolUse on Bash: allow, ask or deny a logbook command from the publish mode; no opinion on anything else
             from . import permissions
             ti = payload.get("tool_input")
-            return permissions.hook_output(str(ti.get("command", "")) if isinstance(ti, dict) else "", repo.publish_mode(), str(payload.get("agent_type") or ""))
+            return permissions.hook_output(str(ti.get("command", "")) if isinstance(ti, dict) else "", repo.publish_mode())
         if event in ("PostToolUse", "PostToolUseFailure"):  # queue the tool use for the observer: no model, no git process
             from . import observer
             observer.on_tool_use(repo, payload)
@@ -173,18 +149,14 @@ def handle_hook(event, agent, raw):
                     files = []
             sid = str(payload.get("session_id", ""))
             text = recall.digest(repo, event, payload.get("prompt", ""), files, sid)
-            if event == "UserPromptSubmit":
-                from . import nudge
-                text = nudge.join(text, nudge.nudge_text(repo, sid))
-                nudge.new_turn(repo, sid)  # after the reminder has looked at the turn that just ended
             out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
             if event in ("Stop", "SessionEnd"):
                 _observe(repo, cfg, flush=event == "SessionEnd", end=event == "SessionEnd")
             if event == "Stop":
-                from . import nudge, savepoint
-                out = savepoint.ask_block(repo, payload) or nudge.stop_block(repo, payload)
+                from . import savepoint
+                out = savepoint.ask_block(repo, payload)
         if event in ("SessionStart", "PreCompact", "SessionEnd"):
             spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], repo.root)
         if event == "SessionStart":
@@ -247,10 +219,7 @@ def checkpoint(repo, sid, transcript, paths=(), meta=None):
         if not got:
             return None
         st = _load(d)
-        data = _copy_slice(d, st, transcript)
-        if data:
-            from . import nudge
-            st["turn"] = nudge.add_stats(st.get("turn"), nudge.turn_stats(data))  # add to the turn: a checkpoint can come mid-turn
+        _copy_slice(d, st, transcript)
         st["paths"] = sorted(set(st["paths"]) | set(paths))[:200]
         st["last"] = time.time()
         st.update(meta or {})
@@ -289,7 +258,7 @@ def _finalize(repo, sid, d, st, agent, head, branch):
 
 def reconcile(repo, quiet=True):
     """Process spooled hook events, recover crashed sessions, and record commits that have no entry."""
-    done = {"drafts": 0, "floor": 0, "pending": 0}
+    done = {"drafts": 0, "floor": 0}
     sessions = {}
     spool = repo.cdir / "spool"
     for p in sorted(spool.glob("*.json")) if spool.exists() else []:
@@ -328,7 +297,6 @@ def reconcile(repo, quiet=True):
                 if _finalize(repo, d.name, d, st, st.get("agent", ""), st.get("head", ""), st.get("branch", "")):
                     done["drafts"] += 1
                 atomic_write(d / "state.json", json.dumps(st))
-    done["pending"] = post_commit(repo) if (repo.cdir / "pending").exists() else 0
     done["floor"] = _commit_floor(repo)
     return done
 

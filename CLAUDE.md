@@ -10,7 +10,7 @@ commits, so the next agent starts from them. Notes are private (`.git/logbook/pr
 (`.claude-plugin/`, `hooks/band/register.tsx`: the bibliography band above the prompt). Not tied to dbt or warehouses (that is Almanac, folder `lodestone`).
 
 Layout: `src/getlogbook/` (`cli.py` commands, `store.py` storage and sync, `sync.py`, `tree.py` anchoring and the tree, `nav.py` addresses, `recall.py` injection, `cites.py` citations,
-`ground.py` grounding checks, `capture.py` hooks, `nudge.py`, `install.py`, `agent/skill.md` and `rules.md`), `tests/test_logbook.py` and `tests/band.test.tsx`, `bench/` (`e2e.py`,
+`ground.py` grounding checks, `capture.py` hooks, `observer.py` / `running.py` / `savepoint.py` / `worker.py` (the observer and `logbook log`), `install.py`, `agent/skill.md` and `rules.md`), `tests/test_logbook.py` and `tests/band.test.tsx`, `bench/` (`e2e.py`,
 `run_ab.py`), `docs/`.
 
 ## Commands
@@ -34,7 +34,7 @@ Layout: `src/getlogbook/` (`cli.py` commands, `store.py` storage and sync, `sync
 
 ## The band (UI preferences the owner set, keep them)
 
-Row above the prompt: underlined `bibliography`, then a dot shaded by publish mode (light grey never, pale yellow ask, yellow claude, darker yellow auto) and the mode name, then the count in grey;
-the dot button toggles details. With details on: the dot and count are replaced by the mode selector `never ask [ claude ] auto` (chosen one light yellow in brackets, the rest grey, each a button), a rule
+Row above the prompt: underlined `bibliography`, then a dot shaded by mode (light grey manual, pale yellow ask, darker yellow auto) and the mode name, then the count in grey;
+the dot button toggles details. With details on: the dot and count are replaced by the mode selector `manual [ ask ] auto` (chosen one light yellow in brackets, the rest grey, each a button), a rule
 under the header, and the list of sources: `¹ title · commit header (grey, clickable, opens https) · author, date`. Clicking a citation shows a peek of the latest answer that cited it; the finder
 `↑ ↓ [n] x/y` walks the others; clicking the peek scrolls there. Nothing can be typed into the finder (a text field forces an enter hint). Citations are bare superscripts.
