@@ -77,9 +77,8 @@ def run(dir=None):
     sh("git", "config", "user.name", "Alice", cwd=alice)
     ra = Repo(alice)
     ra.init()
-    capture.install_git_hook(ra)
     sync.ensure_fetch_config(ra)
-    say(f"Alice is {ra.user}; git post-commit floor installed (chained, never overwrites a hook)")
+    say(f"Alice is {ra.user}")
 
     head("2. An ad-hoc finding with no commit (a late import, not a code bug)")
     f1 = capture.make_entry(ra, "finding", "revenue dip was a late payments import",
@@ -119,8 +118,7 @@ def run(dir=None):
                                    "matched the refunded rows exactly, so she traced where revenue.total reads them.",
                         "decided": "Filter in revenue.total, not in the payments loader, because other reports still need refunded rows.",
                         "scale": "about 4% overstated across the quarter"})
-    capture.reconcile(ra)
-    chg = [v for v in views(ra)[0] if v["kind"] == "change" and v["provenance"] != "auto-copied"]
+    chg = [v for v in views(ra)[0] if v["kind"] == "change"]
     check(len(chg) == 1 and chg[0]["state"] == "exact" and chg[0]["names"] == ["revenue"], "change entry attached to the new commit, file name detected")
     cs, _ = share_copy(ra, ra.get_private(chg[0]["id"]), False, False)
     ra.publish([cs])

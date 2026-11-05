@@ -96,7 +96,7 @@ class Repo:
         c.setdefault("transport", "refs")
         c.setdefault("interpreter", __import__("sys").executable)
         self.save_cfg(c)
-        for d in ("private", "sessions", "spool", "seen"):
+        for d in ("private", "seen"):
             (self.cdir / d).mkdir(parents=True, exist_ok=True)
         return c
 

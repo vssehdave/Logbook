@@ -497,12 +497,12 @@ def cmd_status(a):
     r = need_repo()
     vs, an = views(r)
     shared, _ = r.load_shared()
-    spool = list((r.cdir / "spool").glob("*.json")) if (r.cdir / "spool").exists() else []
-    sess = [p for p in (r.cdir / "sessions").iterdir()] if (r.cdir / "sessions").exists() else []
     out(f"you: {r.user}  attribution: {r.attribution()}  transport: {r.cfg().get('transport', 'refs')}")
     out(f"entries: {len(vs)} visible ({sum(1 for v in vs if v['scope'] == 'private')} private, "
         f"{sum(1 for v in vs if v['scope'] == 'shared')} shared) from {len({l.user for l in shared})} writers")
-    out(f"capture: {len(spool)} spooled events waiting, {len([s for s in sess if s.is_dir()])} sessions seen")
+    from . import running
+    run = running.Running(r, running.branch_now(r)[0])
+    out(f"observer: {run.pending_bytes()} bytes of tool uses queued, {len(running.own(run))} observation(s) since the last log on {run.branch}")
     if an.shallow:
         out("note: shallow clone; some anchors are unverified")
     if not shared and (r.cdir / "private").exists():
@@ -529,8 +529,8 @@ def cmd_doctor(a):
         bad |= level == "fail"
     from . import install as ins
     out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
-    out(f"  git hooks   : post-commit {'installed' if ins.git_hook_installed(r) else 'missing'}, "
-        f"pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}")
+    out(f"  git hooks   : pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}, "
+        f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}")
     for sm in tree.summaries(views(r)[0]):
         node = "repo" if sm["level"] == "repo" else "branch " + sm["branch"]
         out(f"  summary     : {node}: {'up to date' if sm['fresh'] else str(sm['new_notes']) + ' newer note(s), stale (logbook summarize)'}")
@@ -539,13 +539,6 @@ def cmd_doctor(a):
     out("  Only Claude Code has hooks (it captures sessions and shows notes automatically). The other agents get the rules")
     out("  file only, so they rely on the agent following it; the git hook is the same for everyone.")
     return 1 if bad else 0
-
-
-def cmd_reconcile(a):
-    r = need_repo()
-    res = capture.reconcile(r)
-    if not a.quiet:
-        out(json.dumps(res))
 
 
 def cmd_capture(a):
@@ -559,18 +552,7 @@ def cmd_capture(a):
 
 
 def cmd_post_commit(a):
-    try:  # the sweep for hook-less commits runs detached so the commit never waits
-        r = Repo(".")
-        capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], r.root)
-    except Exception:
-        pass
-    return 0
-
-
-def cmd_install_hook(a):
-    r = need_repo()
-    f = capture.uninstall_git_hook(r) if a.remove else capture.install_git_hook(r)
-    out(f"{'removed from' if a.remove else 'installed in'} {f}")
+    return 0  # an older install's git hook still calls this; nothing is recorded per commit any more
 
 
 def _targets(a, default):
@@ -903,15 +885,15 @@ def cmd_demo(a):
     return demo.run(a.dir)
 
 
-HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
-          "reconcile", "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
+HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "capture", "post-commit",
+          "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
           "cites", "tidy", "worker", "history"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall snippet demo
 agents and hooks call these; you rarely need to:
-  summarize inject cites capture post-commit reconcile
+  summarize inject cites capture
 older names that still work:
-  init join query explain path doctor queue stats install install-hook
+  init join query explain path doctor queue stats install
 the old `log` view of notes next to commits is now `history`"""
 
 
@@ -989,14 +971,10 @@ def build_parser():
     s.add_argument("--stats", action="store_true", help="also show injection and cost counters")
     s = add("doctor", cmd_doctor, "check setup and capture coverage")
     s.add_argument("--remote", default="origin")
-    s = add("reconcile", cmd_reconcile, "process spooled events, recover sessions, record uncovered commits")
-    s.add_argument("--quiet", action="store_true")
     s = add("capture", cmd_capture, "hook entry point (reads JSON on stdin; never fails)")
     s.add_argument("--event", required=True)
     s.add_argument("--agent", default="")
     add("post-commit", cmd_post_commit, "git hook entry point")
-    s = add("install-hook", cmd_install_hook, "chain a post-commit hook (never overwrites yours)")
-    s.add_argument("--remove", action="store_true")
     s = add("install", cmd_install, "set everything up: git hook, agent hooks, skill and rules (asks first)")
     s.add_argument("--agent", nargs="+", metavar="AGENT", help="claude-code agents-md copilot gemini cursor, or auto (default)")
     s.add_argument("--yes", action="store_true", help="apply without asking")

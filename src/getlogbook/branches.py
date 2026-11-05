@@ -25,6 +25,25 @@ def pending(repo):
     return by
 
 
+def landed(repo, views):
+    """Names of the branches whose work is in the main line, judged from the given log views: a merge commit on the main line names the branch, or a log's own
+    commit is in the main line's history (not just the commit the branch left it at). Works for logs from teammates too; a squash merge is not seen."""
+    base = tree.default_branch(repo)
+    if not base:
+        return set()
+    tip = f"refs/heads/{base}"
+    names = set()
+    rc, out, _ = g.try_run(["log", "--first-parent", f"-n{SCAN}", "--format=%s", tip], repo.root)
+    for subject in out.splitlines() if rc == 0 else []:
+        if tree.merged_branch(subject):
+            names.add(tree.merged_branch(subject))
+    for v in views:
+        sha, left = v.get("sha") or "", v.get("merge_base") or ""
+        if v["branch"] and v["branch"] not in names and sha and sha != left and g.try_run(["merge-base", "--is-ancestor", sha, tip], repo.root)[0] == 0:
+            names.add(v["branch"])
+    return names - {base}
+
+
 def merged(repo):
     """[(branch, entries, how)] for branches with unpublished entries that look merged into the main line, oldest branch name first."""
     base = tree.default_branch(repo)

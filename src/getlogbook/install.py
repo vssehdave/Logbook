@@ -180,8 +180,9 @@ def git_hook_installed(repo, name="post-commit"):
 def describe(repo, targets, remove=False, pretool=True):
     """Lines that say what would change."""
     lines = []
-    for name, what in (("post-commit", "git post-commit hook (records commits)"),
-                       ("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)"),
+    if git_hook_installed(repo, "post-commit"):  # 0.0.5 and earlier recorded every commit; setup removes that hook
+        lines.append(f"  {'remove':<10} git post-commit hook (an older version's; nothing is recorded per commit any more)")
+    for name, what in (("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)"),
                        ("post-merge", "git post-merge hook (a pull also fetches shared logs; never pushes)")):
         hook = git_hook_installed(repo, name)
         verb = ("remove" if hook else "unchanged") if remove else ("unchanged" if hook else "create")
@@ -194,12 +195,11 @@ def describe(repo, targets, remove=False, pretool=True):
 
 def apply(repo, targets, remove=False, pretool=True):
     steps = plan(repo, targets, remove, pretool)
+    capture.uninstall_git_hook(repo)  # the per-commit hook of 0.0.5 and earlier goes either way
     if remove:
-        capture.uninstall_git_hook(repo)
         capture.uninstall_pre_push_hook(repo)
         capture.uninstall_pull_hooks(repo)
     else:
-        capture.install_git_hook(repo)
         capture.install_pre_push_hook(repo)
         capture.install_pull_hooks(repo)
         if "origin" in sync.remotes(repo):  # so a plain `git pull` also brings teammates' notes

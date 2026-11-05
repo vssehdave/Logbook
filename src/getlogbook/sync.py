@@ -172,17 +172,14 @@ def doctor(repo, remote="origin"):
         warn(f"no remote named {remote!r}: entries stay local until you add one")
     hp = g.try_run(["config", "--get", "core.hooksPath"], repo.root)[1].strip()
     hooks_dir = g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], repo.root).strip()
-    hf = Path(hooks_dir) / "post-commit"
+    hf = Path(hooks_dir) / "post-merge"
     if hf.exists() and "logbook" in hf.read_text(encoding="utf-8", errors="ignore"):
-        ok(f"post-commit hook installed ({hooks_dir})")
+        ok(f"post-merge hook installed ({hooks_dir}): a pull fetches shared logs")
     else:
-        warn("post-commit floor not installed: `logbook install-hook` (commits will not be recorded automatically)")
+        warn("post-merge hook not installed: run `logbook setup` (a pull will not fetch shared logs by itself)")
     if hp:
         warn(f"core.hooksPath is set ({hp}); hooks are read from there")
     err = repo.cdir / "errors.log"
     if err.exists() and err.stat().st_size:
         warn(f"hook errors logged: {err}")
-    pend = len(list((repo.cdir / "spool").glob("*.json"))) if (repo.cdir / "spool").exists() else 0
-    if pend:
-        warn(f"{pend} spooled hook events not yet processed (run `logbook reconcile`)")
     return r

@@ -133,8 +133,10 @@ def branch_memory(repo, views, cap=1400):
     branch = running.branch_now(repo)[0]
     if branch == "HEAD":
         return ""
-    wanted = {branch, tree.default_branch(repo)} - {""}
-    logs = sorted((v for v in views if v["kind"] == "log" and v["trusted"] and v["branch"] in wanted and v.get("status") != "resolved"), key=lambda v: v["id"], reverse=True)
+    from . import branches
+    every = [v for v in views if v["kind"] == "log" and v["trusted"] and v.get("status") != "resolved"]
+    wanted = {branch, tree.default_branch(repo)} | branches.landed(repo, [v for v in every if v["branch"] not in {branch}])  # a merged branch's logs are the main line's history now
+    logs = sorted((v for v in every if v["branch"] in wanted), key=lambda v: v["id"], reverse=True)
     lines = []
     for v in logs[:3]:
         b = v["body"]

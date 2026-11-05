@@ -166,12 +166,13 @@ RETENTION_DAYS = 30
 
 
 def garbage(repo, views, days=None):
-    """Your own private worker drafts that are no longer worth keeping, each with the reason: marked resolved, about files that are all gone, or older than the
-    retention. Only machine-made, private, yours: a note a person or an agent wrote, or one already shared, is never listed here."""
+    """Your own private machine-made drafts (the observer's earlier per-turn notes, and the auto-copied session and commit drafts of 0.0.5 and earlier) that are no
+    longer worth keeping, each with the reason: marked resolved, about files that are all gone, or older than the retention. Only private and yours: a note a
+    person or an agent wrote, a saved log, or anything already shared is never listed here."""
     days = int(days or repo.cfg().get("worker_days", RETENTION_DAYS))
     out = []
     for v in views:
-        if v.get("is_status") or not v["mine"] or v["provenance"] != "worker-written" or v["scope"] != "private" or v["kind"] == "log":
+        if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "log":
             continue  # a saved log is the person's record of a session: it is merged (`merge_logs`), never dropped as junk
         files = tracked(repo, v)[:MAX_FILES]
         if v.get("status") == "resolved":
@@ -272,7 +273,9 @@ def work(repo, call=None, now=time.time):
             return {"skipped": "today's call cap is reached"}
         views = tree.all_views(repo)[0]
         st = _state(repo)
-        cands = [c for c in candidates(repo, views) if c["mine"] and c["commits"] and st["judged"].get(c["id"]) != _fingerprint(c)][:MAX_JUDGED]
+        kinds = {v["id"]: v["kind"] for v in views}
+        cands = [c for c in candidates(repo, views) if c["mine"] and c["commits"] and kinds.get(c["id"]) != "log"  # a saved log is history, not a claim to keep true
+                 and st["judged"].get(c["id"]) != _fingerprint(c)][:MAX_JUDGED]
         if not cands:
             return {"skipped": "nothing new to judge"}
         sent, _ = redact(build_prompt(repo, views, cands), cfg.get("deny", []))
