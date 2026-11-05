@@ -5,6 +5,7 @@ import argparse
 import json
 import re
 import sys
+import time
 
 from . import capture, cites, ground, nav, recall, sync, tidy, tree
 from . import git as g
@@ -199,7 +200,7 @@ def cmd_note(a):
 def auto_publish(r, e):
     """Publish mode auto: share a note as soon as it is written, redacted exactly as `logbook publish` would. A note the checks refuse
     (pasted table rows, too big, a teammate already shared the same words) stays private. Pushing is still `logbook sync`."""
-    if r.publish_mode() != "auto" or e.provenance == "auto-copied":
+    if r.publish_mode() != "auto" or e.provenance in ("auto-copied", "worker-written"):  # a worker's draft is personal until the person publishes it by id
         return False
     bad = ground.problems(e.checks, e.provenance != "user-written")
     if bad:  # a note that names something that is not there, or an agent's that points at nothing, is not shared on its own
@@ -641,7 +642,8 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None, "publish": PUBLISH_MODES}
+CONFIG_KEYS = {"nudge": ("off", "context", "block"), "nudge_after": None, "block_after": None, "publish": PUBLISH_MODES,
+               "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
 
 
 def cmd_queue(a):
@@ -760,11 +762,40 @@ def cmd_summarize(a):
     return 0
 
 
+def cmd_worker(a):
+    """The background worker: `--status` shows what it has spent and whether it is on; `--run SESSION` does one pass now (what the hook starts after a turn)."""
+    from . import worker
+    r = need_repo()
+    if a.run:
+        res = worker.run(r, a.run)
+        out(json.dumps(res))
+        return 0
+    s = worker.status(r)
+    out(f"worker {s['worker']}, tidy {s['tidy']}: {s['calls_today']} call(s) and {s['cost_today']:.3f} USD today, {s['notes_written']} note(s) written")
+    lp = s["last_pass"]
+    if lp:
+        out("  last pass: " + (lp.get("skipped") or lp.get("error") or f"{len(lp.get('notes', []))} note(s) kept") + f" ({time.strftime('%H:%M', time.localtime(lp['t']))})")
+    if s["cooling_down"]:
+        out("  waiting: the usage allowance ran out; it tries again within an hour")
+    if s["last_error"]:
+        out("  last error: " + safety_sanitize(s["last_error"], 200))
+    return 0
+
+
 def cmd_tidy(a):
     """Notes that may be out of date, repeated or junk, each with the reason. Plain `tidy` and `--brief` only read; `--apply` stores the statuses
     the person approved, all or none."""
     r = need_repo()
     vs = views(r)[0]
+    if a.garbage:  # the worker's private drafts that are no longer worth keeping; --apply moves them to the archive, nothing is deleted
+        junk = tidy.garbage(r, vs)
+        if a.apply:
+            out(f"archived {tidy.archive(r, [c['id'] for c in junk])} worker draft(s) to .git/logbook/archive/")
+            return 0
+        out(f"{len(junk)} worker draft(s) no longer worth keeping (nothing was changed; `tidy --garbage --apply` archives them)")
+        for c in junk:
+            out(f"  {c['id']}  {safety_sanitize(c['topic'], 80)}  ({c['reason']})")
+        return 0
     if a.apply:
         done, errors = tidy.apply(r, vs, sys.stdin.read())
         if errors:
@@ -915,7 +946,7 @@ def cmd_demo(a):
 
 HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "install-hook", "capture", "post-commit",
           "reconcile", "inject", "context", "summarize", "backfill", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
-          "cites", "tidy"}
+          "cites", "tidy", "worker"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall snippet demo
 agents and hooks call these; you rarely need to:
@@ -1017,8 +1048,12 @@ def build_parser():
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
     s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
     s.add_argument("--branch", help="a named branch")
+    s = add("worker", cmd_worker, "the background worker: --status, or --run SESSION to do one pass now")
+    s.add_argument("--run", metavar="SESSION", default="")
+    s.add_argument("--status", action="store_true")
     s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk; --brief for an agent; --apply stores approved statuses")
     s.add_argument("--limit", type=int, default=20)
+    s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
     s = add("backfill", cmd_backfill,"brief an agent on commits with no note saying why, so it can write them")

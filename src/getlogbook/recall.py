@@ -65,6 +65,7 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
         s -= 1 if v["state"] in ("orphaned", "unknown") else 0
         s -= 1 if ground.problems(v["checks"], v["provenance"] != "user-written") else 0  # it names something that is not there, or points at nothing
         s -= 1 if (v["behind"] or 0) > 200 else 0
+        s -= 1 if v["provenance"] == "worker-written" else 0  # less trusted than a note the agent or a person wrote
         s -= {"in-progress": 2, "resolved": 4}.get(v.get("status"), 0)  # later commits changed what it says in part, or fixed it
         scored.append((s, v))
     scored.sort(key=lambda x: x[1]["id"], reverse=True)  # newest first on ties
@@ -75,6 +76,8 @@ def rank(repo, query="", files=(), names=(), views=None, anch=None):
 def injectable(v):
     if v.get("status") == "resolved" or v.get("is_status"):
         return False  # a fixed or gone finding is not context, and a status record is not a finding
+    if v["provenance"] == "worker-written" and (not (v["checks"] or {}).get("evidence") or ground.problems(v["checks"], True)):
+        return False  # a background model's draft is shown only when it carries evidence and names nothing that is missing
     return v["trusted"] and bool(v["body"].get("why") or v["body"].get("wrong") or v["provenance"] == "user-written")  # a person's own note needs no why
 
 

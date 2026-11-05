@@ -129,6 +129,8 @@ def spool_event(repo, event, agent, payload):
 def handle_hook(event, agent, raw):
     """Entry point for `logbook capture`. Returns text for stdout (may be ''). Never raises."""
     repo = None
+    if os.environ.get("LOGBOOK_WORKER"):  # the worker's own claude run: nothing Logbook does may react to it
+        return ""
     try:
         payload = json.loads(raw) if raw and raw.strip() else {}
         if not isinstance(payload, dict):
@@ -160,6 +162,8 @@ def handle_hook(event, agent, raw):
             out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
+            if cfg.get("worker") == "on" and event in ("Stop", "SessionEnd") and payload.get("session_id"):  # one pass per finished turn, in the background
+                spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "worker", "--run", str(payload["session_id"])], repo.root)
             if event == "Stop":
                 from . import nudge
                 out = nudge.stop_block(repo, payload)

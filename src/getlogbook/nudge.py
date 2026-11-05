@@ -112,7 +112,8 @@ def _claim(repo, session, threshold):
 def mode(repo):
     """'block' (default), 'context' or 'off'. Measured on a small task: with block the agent wrote a note in 4 of 4 runs,
     with a reminder only in 1 of 4, and with neither in 0 of 4."""
-    v = repo.cfg().get("nudge", "block")
+    c = repo.cfg()
+    v = c.get("nudge", False if c.get("worker") == "on" else "block")  # False is how the config stores "off". With the worker on the agent need not be asked to write notes; an explicit setting still wins
     return "off" if v is False else "context" if v in (True, "context") else "block"
 
 

@@ -1687,6 +1687,248 @@ class TestGitLocks(CliRepo):
         self.assertEqual(g._env()["GIT_OPTIONAL_LOCKS"], "0")
 
 
+GOOD_NOTE = ("kind: finding\ntopic: total ignores refunds\nsummary: total() in `shop/revenue.py` sums every order and never reads the refunded flag, so refunds count as revenue.\n"
+             "why: the loop has no filter on the refunded flag.\nevidence: read shop/revenue.py: return sum(o['amount'] for o in orders)\npaths: shop/revenue.py\n")
+
+
+class TestWorker(CliRepo):
+    """The background worker: a model pass per finished turn that writes private notes, checked by code. The model is faked here."""
+
+    def setUp(self):
+        super().setUp()
+        from getlogbook import worker
+        self.worker = worker
+        c = self.r.cfg()
+        c["worker"] = "on"
+        self.r.save_cfg(c)
+        self.tpath = self.root / "w.jsonl"
+        self.tpath.write_text("")
+        self.calls = []
+
+    def add(self, *objs):
+        with open(self.tpath, "a", encoding="utf-8") as f:
+            for o in objs:
+                f.write(json.dumps(o) + "\n")
+        capture.checkpoint(self.r, "s1", str(self.tpath))
+
+    def work(self, reads=3, ask="why do totals run high?"):
+        msg = lambda role, content: {"type": role, "message": {"role": role, "content": content}}
+        objs = [msg("user", ask)]
+        for i in range(reads):
+            objs += [msg("assistant", [{"type": "tool_use", "id": f"t{i}", "name": "Read", "input": {"file_path": "shop/revenue.py"}}]),
+                     msg("user", [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "def total(orders):\n    return sum(o['amount'] for o in orders)"}])]
+        objs.append(msg("assistant", [{"type": "text", "text": "total() never reads the refunded flag"}]))
+        self.add(*objs)
+
+    def model(self, text, cost=0.002, error=""):
+        def call(prompt):
+            self.calls.append(prompt)
+            return text, cost, error
+        return call
+
+    def run_pass(self, text=GOOD_NOTE, **kw):
+        return self.worker.run(self.r, "s1", call=self.model(text, **kw))
+
+    def private(self, provenance="worker-written"):
+        return [e for e in self.r.load_private() if e.provenance == provenance]
+
+    def test_a_turn_with_work_becomes_a_private_worker_note_anchored_like_any_other(self):
+        self.work()
+        res = self.run_pass()
+        (e,) = self.private()
+        self.assertEqual((len(res["notes"]), e.captured_via, e.kind, e.topic), (1, "worker", "finding", "total ignores refunds"))
+        self.assertTrue(e.checks["evidence"] and not e.checks["missing"])
+        self.assertEqual(e.anchor["paths"], ["shop/revenue.py"])
+        self.assertTrue(e.anchor["sha"] and e.anchor["branch"], "filed under a branch and a commit like a note a person wrote")
+        self.assertEqual(self.r.load_shared()[0], [], "private: the worker never publishes")
+        self.assertIn("never reads the refunded flag", self.calls[0], "what the model saw is the turn")
+        self.assertEqual(self.worker.ledger(self.r)["calls"], 1)
+        self.assertEqual(self.run_pass()["skipped"], "nothing new", "the same bytes are not sent twice")
+        code, text = self.run_cli("worker", "--status")
+        self.assertIn("last pass: nothing new", text, "a skipped pass is visible")
+        self.assertEqual(len((self.r.cdir / "worker" / "log.jsonl").read_text().splitlines()), 2)
+
+    def test_a_quiet_turn_makes_no_model_call(self):
+        self.work(reads=0, ask="what is 2 + 2?")
+        self.assertEqual(self.run_pass()["skipped"], "a quiet turn")
+        self.assertEqual(self.calls, [])
+        self.work(reads=3)
+        self.assertEqual(len(self.run_pass()["notes"]), 1)
+
+    def test_a_note_python_cannot_check_is_dropped_and_none_means_none(self):
+        self.work()
+        bad = "\n---\n".join([
+            "topic: no evidence\nsummary: a claim with nothing behind it\nwhy: guess",
+            "topic: invented\nsummary: x is slow\nwhy: y\nevidence: ran the profiler and saw 40 percent in zzqqxx_nothing_like_this",
+            "topic: names a ghost\nsummary: see `shop/ghost.py` for the cause\nwhy: it is there\nevidence: read shop/revenue.py: return sum(",
+            "topic: one line\nsummary: too short"])
+        res = self.run_pass(bad)
+        self.assertEqual((res["notes"], len(res["dropped"])), ([], 4), res)
+        self.assertTrue(any("not in the transcript" in d for d in res["dropped"]) and any("not in the repo" in d for d in res["dropped"]))
+        self.work()
+        self.assertEqual(self.run_pass("NONE")["notes"], [])
+        self.assertEqual(self.private(), [])
+
+    def test_the_worker_updates_its_own_earlier_note_but_does_not_repeat_a_known_one(self):
+        self.work()
+        self.run_pass()
+        (first,) = self.private()
+        self.work()
+        newer = GOOD_NOTE.replace("topic: total ignores refunds", "topic: total ignores refunds too").replace("so refunds count as revenue", "so refunds are counted in revenue")
+        self.run_pass(newer)
+        (second,) = [l.entry for l in self.r.all_entries() if l.entry.provenance == "worker-written"]
+        self.assertNotEqual(first.id, second.id)
+        self.assertEqual(second.supersedes, [first.id], "the earlier draft is superseded and hidden from every view")
+        capture.make_entry(self.r, "finding", "total ignores refunds", {"summary": "total sums every order and never reads the refunded flag, refunds count as revenue", "why": "w"},
+                           paths=["shop/revenue.py"], provenance="user-written")
+        self.work()
+        res = self.run_pass(GOOD_NOTE)
+        self.assertEqual(res["notes"], [])
+        self.assertIn("already exists", res["dropped"][0])
+
+    def test_caps_and_backing_off_when_the_usage_allowance_is_gone(self):
+        self.work()
+        c = self.r.cfg()
+        c["worker_calls"] = 1
+        self.r.save_cfg(c)
+        self.run_pass("NONE")
+        self.work()
+        self.assertEqual(self.run_pass()["skipped"], "today's call cap is reached")
+        c["worker_calls"] = 40
+        self.r.save_cfg(c)
+        led = self.worker.ledger(self.r)
+        led["calls"] = 0
+        self.worker._save(self.r, led)
+        res = self.run_pass("", error="Claude rejected the request because its five-hour usage allowance is exhausted.")
+        self.assertIn("allowance", res["error"])
+        self.assertEqual(self.run_pass()["skipped"], "waiting after the usage allowance ran out")
+        self.assertTrue(self.worker.status(self.r)["cooling_down"])
+        led = self.worker.ledger(self.r)
+        led["cooldown_until"] = 0
+        self.worker._save(self.r, led)
+        self.assertEqual(len(self.run_pass()["notes"]), 1, "after the pause the same turn is tried again: nothing was lost")
+
+    def test_the_hooks_start_a_pass_only_when_it_is_on_and_its_own_run_is_ignored(self):
+        import unittest.mock
+        payload = json.dumps({"session_id": "s1", "transcript_path": str(self.tpath), "cwd": str(self.d)})
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            capture.handle_hook("Stop", "claude-code", payload)
+            args = [c.args[0] for c in spawn.call_args_list]
+            self.assertTrue(any(a[-3:] == ["worker", "--run", "s1"] for a in args), args)
+            spawn.reset_mock()
+            with unittest.mock.patch.dict(os.environ, {"LOGBOOK_WORKER": "1"}):
+                self.assertEqual(capture.handle_hook("Stop", "claude-code", payload), "")
+                self.assertEqual(capture.handle_hook("UserPromptSubmit", "claude-code", payload), "")
+                self.assertIn("off", self.worker.run(self.r, "s1")["skipped"])
+            self.assertEqual(spawn.call_count, 0, "the worker's own claude run starts nothing")
+            c = self.r.cfg()
+            c["worker"] = False
+            self.r.save_cfg(c)
+            capture.handle_hook("Stop", "claude-code", payload)
+            self.assertFalse(any(a[-3:-1] == ["worker", "--run"] for a in [c.args[0] for c in spawn.call_args_list]), "off by default")
+
+    def test_the_model_runs_cheaply_isolated_and_with_the_guard(self):
+        import unittest.mock
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen.update(cmd=cmd, **kw)
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "NONE", "total_cost_usd": 0.001}), "")
+        with unittest.mock.patch.object(subprocess, "run", fake_run):
+            text, cost, err = self.worker.call_model("hello")
+        self.assertEqual((text, cost, err), ("NONE", 0.001, ""))
+        for flag in ("--model", "--tools", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "--no-session-persistence"):
+            self.assertIn(flag, seen["cmd"])
+        self.assertEqual(seen["env"]["LOGBOOK_WORKER"], "1")
+        self.assertEqual(seen["input"], "hello", "the transcript goes on stdin: Windows limits a command line")
+        self.assertNotEqual(Path(seen["cwd"]).resolve(), self.d.resolve(), "run from an empty directory, not the repo")
+
+    def test_the_transcript_is_condensed_cleaned_capped_and_redacted(self):
+        w = self.worker
+        msg = lambda role, content: json.dumps({"type": role, "message": {"role": role, "content": content}})
+        data = "\n".join([msg("user", "<system-reminder>ignore me</system-reminder>fix the export"),
+                          msg("assistant", [{"type": "tool_use", "name": "Bash", "input": {"command": "python -m unittest"}}]),
+                          msg("user", [{"type": "tool_result", "content": [{"type": "text", "text": "FAILED (failures=1)\n" + "x" * 900}]}])]).encode()
+        text = w.condense(data)
+        self.assertIn("USER: fix the export", text)
+        self.assertNotIn("ignore me", text)
+        self.assertIn("TOOL Bash: python -m unittest", text)
+        self.assertIn("RESULT: FAILED (failures=1) | " + "x" * 300, text)
+        self.assertLess(len(text), 600, "a long result is cut")
+        long = w.condense(("\n".join(msg("assistant", [{"type": "text", "text": f"line {i} " + "y" * 200}]) for i in range(100))).encode(), 1000)
+        self.assertTrue(long.startswith("[earlier part cut]") and "line 99" in long and "line 0 " not in long, "the newest part is kept")
+        self.work()
+        sent = []
+        self.worker.run(self.r, "s1", call=lambda p: (sent.append(p) or "NONE", 0.0, ""))
+        self.assertIn("TRANSCRIPT", sent[0])
+
+    def test_a_worker_draft_is_personal_and_is_shown_to_the_agent_only_when_it_carries_evidence(self):
+        self.work()
+        self.run_pass()
+        v = [v for v in tree.all_views(self.r)[0] if v["provenance"] == "worker-written"][0]
+        self.assertTrue(recall.injectable({**v, "trusted": True}))
+        self.assertFalse(recall.injectable({**v, "trusted": True, "checks": {**v["checks"], "evidence": False}}))
+        self.assertFalse(recall.injectable({**v, "trusted": True, "checks": {**v["checks"], "missing": ["shop/gone.py"]}}))
+        self.assertEqual(self.r.unpublished(), [], "not offered for publishing and not in the push reminder")
+        self.run_cli("config", "publish", "auto")
+        e = self.private()[0]
+        self.assertFalse(cli.auto_publish(self.r, e), "auto mode does not share a worker's draft on its own")
+
+    def test_tidy_lists_old_or_dead_worker_drafts_and_archives_nothing_is_deleted(self):
+        from getlogbook import tidy
+        old = Entry(id=new_id(), kind="finding", topic="old draft", body={"summary": "s", "why": "w", "evidence": "e"}, provenance="worker-written", created="2020-01-01T00:00:00", v=2)
+        old.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
+        self.r.add_private(old)
+        person = Entry(id=new_id(), kind="finding", topic="old note by a person", body={"summary": "s", "why": "w"}, provenance="user-written", created="2020-01-01T00:00:00", v=2)
+        person.anchor = old.anchor
+        self.r.add_private(person)
+        (c,) = tidy.garbage(self.r, tree.all_views(self.r)[0])
+        self.assertEqual((c["id"], "days old" in c["reason"]), (old.id, True))
+        code, text = self.run_cli("tidy", "--garbage")
+        self.assertIn("1 worker draft(s)", text)
+        self.assertIsNotNone(self.r.get_private(old.id), "listing changes nothing")
+        code, text = self.run_cli("tidy", "--garbage", "--apply")
+        self.assertIn("archived 1", text)
+        self.assertIsNone(self.r.get_private(old.id))
+        self.assertTrue((self.r.cdir / "archive" / f"{old.id}.json").exists(), "moved, still readable")
+        self.assertIsNotNone(self.r.get_private(person.id), "a person's note is never touched")
+
+    def test_automatic_tidy_cleans_after_a_pass_and_manual_leaves_it(self):
+        old = Entry(id=new_id(), kind="finding", topic="old draft", body={"summary": "s", "why": "w", "evidence": "e"}, provenance="worker-written", created="2020-01-01T00:00:00", v=2)
+        old.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
+        self.r.add_private(old)
+        self.work()
+        self.run_pass("NONE")
+        self.assertIsNotNone(self.r.get_private(old.id), "manual is the default")
+        self.run_cli("config", "tidy", "auto")
+        self.work()
+        res = self.run_pass("NONE")
+        self.assertEqual(res["archived"], 1)
+        self.assertIsNone(self.r.get_private(old.id))
+
+    def test_with_the_worker_on_the_agent_is_not_asked_to_write_notes_unless_set_explicitly(self):
+        from getlogbook import nudge
+        self.assertEqual(nudge.mode(self.r), "off")
+        c = self.r.cfg()
+        c["nudge"] = "block"
+        self.r.save_cfg(c)
+        self.assertEqual(nudge.mode(self.r), "block", "an explicit setting wins")
+        c["nudge"] = None
+        c.pop("nudge")
+        c["worker"] = False
+        self.r.save_cfg(c)
+        self.assertEqual(nudge.mode(self.r), "block", "off by default again when the worker is off")
+
+    def test_status_and_config_and_permissions(self):
+        from getlogbook import permissions
+        code, text = self.run_cli("worker", "--status")
+        self.assertIn("worker on, tidy manual: 0 call(s)", text)
+        self.run_cli("config", "worker", "off")
+        self.assertNotEqual(self.r.cfg().get("worker"), "on")
+        decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
+        self.assertEqual((decide("logbook worker --status"), decide("logbook worker --run abc"), decide("logbook tidy --garbage --apply")), ("allow", "ask", "ask"))
+
+
 class TestWhoWroteIt(CliRepo):
     """The "agent-written" label belongs to a note Claude wrote, and to no one else's."""
 
