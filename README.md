@@ -77,24 +77,16 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
   Measured once, by hand: given a set of facts it wrote a grounded 6-line note for about $0.11. Whether handing over is cheaper or better than the agent
   writing its own note is not measured yet.
 
-## The background worker (opt-in, private)
+## The observer (on by default, private)
 
-`logbook config worker on` turns on a worker that takes the notes for you. After each finished turn a detached process reads the new part of the transcript and
-asks a cheap model (through your own `claude -p`, so no key is stored) for the few things worth keeping: a cause, a ruled-out approach, a decision and why.
-Each one becomes a **private** note labelled `worker-written`, filed under the branch and commit like any other. It never publishes; you publish one by id.
+Every tool use in a Claude Code session is queued by a hook, with no model call, in a **running log for the branch you are on** (`.git/logbook/running/`). A detached
+process then reads the queue in batches and asks a cheap model (through your own `claude -p`, so no key is stored) what was learned, found, decided, built or fixed:
+each answer is an observation with a type, a title, facts, a narrative, concepts and the files it read and changed. Routine work and anything already recorded is
+skipped. A new branch starts from the main line's running log. Nothing here is shared, and `logbook config worker off` stops the collecting.
 
-Python checks every note before it is kept: it needs evidence that appears in the transcript, must not name a file or function that is not in the repo, must be 3 to 9
-lines, and must not repeat a note that already exists (a repeat of its own earlier note replaces it). A worker note is shown to an agent only if it carries evidence.
-
-Cost is bounded: a turn with little activity makes no call, at most 60,000 characters of transcript are sent, there is a daily call cap (`logbook config worker_calls`,
-default 40), and when the usage allowance runs out it waits an hour so it does not compete with your own session. Its model call runs from an empty directory with
-settings, MCP servers and slash commands off, which keeps the fixed cost of a call to a fraction of a cent. `logbook worker --status` shows what it has spent and what
-its last pass did.
-
-`logbook config tidy auto` lets the worker also clean up after itself: its own private drafts that are marked resolved, are about files that are all gone, or are older
-than 30 days (`worker_days`) are moved to `.git/logbook/archive/` (readable, nothing deleted). With `manual`, the default, `logbook tidy --garbage` lists them and
-`tidy --garbage --apply` archives them. A note a person or an agent wrote is never touched. With the worker on, the agent is no longer reminded to write notes
-(set `nudge` explicitly to bring that back); it can still save one when you ask it to remember something.
+Cost is bounded: a daily call cap (`logbook config worker_calls`, default 120), a few calls per pass, and when the usage allowance runs out it waits an hour so it does
+not compete with your own session. Its model call runs from an empty directory with settings, MCP servers and slash commands off, which keeps the fixed cost of a
+call to a fraction of a cent. `logbook worker --status` shows what it has spent and what its last pass did; `logbook worker --drain` observes what is queued now.
 
 ## What Claude may run without asking (Claude Code)
 
@@ -113,7 +105,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `summarize` | allow |
 | `backfill` | allow |
 | `tidy` | allow; `--apply` asks |
-| `worker` | allow; `--run` asks |
+| `worker` | allow; `--drain` asks |
 | `publish` | never: deny, ask: ask, claude: allow, auto: allow |
 | `sync` | never: ask, ask: ask, claude: ask, auto: allow |
 | `purge` | ask |

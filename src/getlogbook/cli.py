@@ -763,18 +763,18 @@ def cmd_summarize(a):
 
 
 def cmd_worker(a):
-    """The background worker: `--status` shows what it has spent and whether it is on; `--run SESSION` does one pass now (what the hook starts after a turn)."""
-    from . import worker
+    """The observer: `--status` shows what it has spent and whether it is on; `--drain [--branch B] [--flush]` observes what is queued now (what the hooks start in the background)."""
+    from . import observer, running, worker
     r = need_repo()
-    if a.run:
-        res = worker.run(r, a.run)
-        out(json.dumps(res))
+    if a.drain:
+        branch = a.branch or running.branch_now(r)[0]
+        out(json.dumps(observer.drain(r, branch, flush=a.flush)))
         return 0
     s = worker.status(r)
     out(f"worker {s['worker']}, tidy {s['tidy']}: {s['calls_today']} call(s) and {s['cost_today']:.3f} USD today, {s['notes_written']} note(s) written")
     lp = s["last_pass"]
     if lp:
-        out("  last pass: " + (lp.get("skipped") or lp.get("error") or f"{len(lp.get('notes', []))} note(s) kept") + f" ({time.strftime('%H:%M', time.localtime(lp['t']))})")
+        out("  last pass: " + (lp.get("skipped") or lp.get("error") or f"{len(lp.get('observations', []))} observation(s) kept") + f" ({time.strftime('%H:%M', time.localtime(lp['t']))})")
     if s["cooling_down"]:
         out("  waiting: the usage allowance ran out; it tries again within an hour")
     if s["last_error"]:
@@ -1048,8 +1048,10 @@ def build_parser():
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
     s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
     s.add_argument("--branch", help="a named branch")
-    s = add("worker", cmd_worker, "the background worker: --status, or --run SESSION to do one pass now")
-    s.add_argument("--run", metavar="SESSION", default="")
+    s = add("worker", cmd_worker, "the observer: --status, or --drain to observe what is queued now")
+    s.add_argument("--drain", action="store_true")
+    s.add_argument("--branch", help="the branch whose queue to observe (default: the current one)")
+    s.add_argument("--flush", action="store_true", help="also take a batch too small to be worth a call")
     s.add_argument("--status", action="store_true")
     s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk; --brief for an agent; --apply stores approved statuses")
     s.add_argument("--limit", type=int, default=20)

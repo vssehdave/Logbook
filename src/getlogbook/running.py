@@ -42,6 +42,12 @@ def branch_now(repo):
     except OSError:
         return "HEAD", ""
     if not head.startswith("ref: "):
+        for d in ("rebase-merge", "rebase-apply"):  # mid-rebase HEAD is detached: the branch being rebased is named in the state folder
+            try:
+                name = (gitdir / d / "head-name").read_text(encoding="utf-8").strip()
+                return (name[len("refs/heads/"):] if name.startswith("refs/heads/") else name), head
+            except OSError:
+                pass
         return "HEAD", head
     ref = head[5:].strip()
     name = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
