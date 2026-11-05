@@ -122,6 +122,24 @@ pushes). `logbook tidy` does the same fetch first (`--no-sync` skips it). Nothin
 
 The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A repo policy that turns publishing off (`.logbook/policy.json`) still wins over every mode.
 
+## Tidy
+
+Notes go out of date: a later commit changes the files a note is about. `logbook tidy` fetches the shared logs first, then lists your notes and logs that may be outdated
+or repeated, with the reason (git and the text alone, no model). The **tidy worker** goes further, on its own cheap model (`logbook config tidy_model`, default haiku, a
+different setting from the observer's): `logbook tidy --work` shows it your notes whose files changed in later commits and the commits' subjects, and it answers
+`in-progress` or `resolved` with a reason. Python then checks every answer against git (the note must be yours; the commits it cites must exist and have touched the
+note's files after it was written) and drops the rest. What happens to the valid ones follows `logbook config tidy`:
+
+| `tidy` | the worker's valid proposals | folding old logs |
+|---|---|---|
+| `manual` (default) | kept for you: `logbook tidy --proposals` shows them, `logbook tidy --accept` stores them (asks first in Claude Code) | `logbook tidy --merge-logs` |
+| `auto` | stored by the worker, one at a time (a status is a small private record; a new one reopens a note) | folded by the worker |
+
+In `auto` the worker runs in the background after a log is saved and after a `git pull`. **Folding**: when a branch has four or more private logs of yours, the older ones are
+summarized into one new log (by the same cheap model, or by code), and the originals move to `.git/logbook/archive/` where they stay readable. Nothing is deleted, a note
+is never edited, and a saved log is never treated as junk. The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
+commit touches its files, and `--garbage` still archives your old machine-made drafts.
+
 ## What Claude may run without asking (Claude Code)
 
 `logbook setup` adds one `PreToolUse` hook on Bash; it writes no allow rules. The hook answers for a command that is exactly one `logbook` command
@@ -136,7 +154,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `log` | allow |
 | `status` | allow |
 | `summarize` | allow |
-| `tidy` | allow; `--apply` asks |
+| `tidy` | allow; `--apply`, `--accept`, `--work`, `--merge-logs` asks |
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
 | `sync` | never: ask, manual: ask, ask: ask, auto: allow |

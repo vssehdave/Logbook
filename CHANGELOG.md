@@ -22,6 +22,8 @@
 
 - **Logbook pauses itself before your subscription allowance runs out, and tells you.** Each background `claude -p` call now runs with `--output-format stream-json --verbose`, and Logbook reads the five-hour and seven-day usage Claude reports in that stream (no API, no key). At 95% of either (`config quota_pause`) the observer and the log summaries stop until the window resets; the next prompt or session start shows you one line (a hook `systemMessage`) with the reason and the resume time and asks the agent to say it too, once per pause. `logbook worker --status` prints the usage and the pause.
 
+- **The tidy worker.** `logbook tidy --work` asks a cheap model (`config tidy_model`, default haiku) whether your notes whose files changed in later commits are `in-progress` or `resolved`; every answer is checked against git before it counts. `config tidy manual` keeps the valid proposals for you (`tidy --proposals`, `tidy --accept`); `config tidy auto` stores them itself, in the background after a log is saved and after a pull, and also folds four or more private logs of a branch into one (`tidy --merge-logs`; originals archived). It shares the observer's daily cap and usage pause. Fixed: `tidy --garbage` would have archived old saved logs as junk drafts, and `tidy auto` did nothing since the observer replaced the old worker.
+
 ## 0.0.4
 
 - **Notes go in as `key: value` lines (`logbook note --fields`), not JSON.** In a real session Claude's note was refused because Claude Code flags `{"` in a shell command as obfuscation and needs a person to approve it, whatever allow rules exist, so an unattended agent could never save a note (and an attended one was prompted every time). The skill, rules and prompts now use `--fields`; `--json` still works.
