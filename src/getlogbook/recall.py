@@ -211,5 +211,11 @@ def digest(repo, event, prompt="", files=(), session="", cap=DEFAULT_CAP):
     return text
 
 
-def hook_json(event, text):
-    return json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}) if text else ""
+def hook_json(event, text, user_message=""):
+    """The hook's stdout: context for the agent and, optionally, a line Claude Code shows to the person (`systemMessage`)."""
+    if not (text or user_message):
+        return ""
+    out = {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}} if text else {}
+    if user_message:
+        out["systemMessage"] = user_message
+    return json.dumps(out)

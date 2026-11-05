@@ -20,6 +20,8 @@
 - **A pull fetches the shared logs.** `logbook setup` adds `post-merge` and `post-rewrite` git hooks that start a pull-only sync in the background (it never pushes), and `logbook tidy` fetches first (`--no-sync` skips it). Not built: the tidy worker on its own cheap model.
 - **Branch memory at session start.** The session-start hook adds the latest trusted logs saved on the current branch and the main line, and what the observer has seen on this branch since its last savepoint, marked as data to verify. The plugin registers the GitHub MCP server (needs `GITHUB_PERSONAL_ACCESS_TOKEN` in the environment; no token is stored).
 
+- **Logbook pauses itself before your subscription allowance runs out, and tells you.** Each background `claude -p` call now runs with `--output-format stream-json --verbose`, and Logbook reads the five-hour and seven-day usage Claude reports in that stream (no API, no key). At 95% of either (`config quota_pause`) the observer and the log summaries stop until the window resets; the next prompt or session start shows you one line (a hook `systemMessage`) with the reason and the resume time and asks the agent to say it too, once per pause. `logbook worker --status` prints the usage and the pause.
+
 ## 0.0.4
 
 - **Notes go in as `key: value` lines (`logbook note --fields`), not JSON.** In a real session Claude's note was refused because Claude Code flags `{"` in a shell command as obfuscation and needs a person to approve it, whatever allow rules exist, so an unattended agent could never save a note (and an attended one was prompted every time). The skill, rules and prompts now use `--fields`; `--json` still works.

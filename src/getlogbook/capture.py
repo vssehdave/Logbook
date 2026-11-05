@@ -140,6 +140,7 @@ def handle_hook(event, agent, raw):
             return ""
         if event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
             from . import recall  # only the prompt-time hooks need retrieval; Stop/SessionEnd stay lean
+            from . import worker as worker_mod
             files = []
             ti = payload.get("tool_input")
             if event == "PreToolUse" and isinstance(ti, dict) and ti.get("file_path"):
@@ -152,7 +153,8 @@ def handle_hook(event, agent, raw):
             if event == "SessionStart":  # merged branches whose logs are still private: the agent (not the observer) publishes them
                 from . import branches
                 text = "\n".join(x for x in (text, branches.reminder(repo, repo.publish_mode())) if x)
-            out = recall.hook_json(event, text)
+            note = worker_mod.pause_notice(repo) if event in ("SessionStart", "UserPromptSubmit") and worker_mod.enabled(repo) else None
+            out = recall.hook_json(event, "\n".join(x for x in (text, note[1] if note else "") if x), note[0] if note else "")
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
             if event in ("Stop", "SessionEnd"):

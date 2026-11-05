@@ -78,6 +78,12 @@ process then reads the queue in batches and asks a cheap model (through your own
 each answer is an observation with a type, a title, facts, a narrative, concepts and the files it read and changed. Routine work and anything already recorded is
 skipped. A new branch starts from the main line's running log. Nothing here is shared, and `logbook config worker off` stops the collecting.
 
+**Your subscription allowance comes first.** Every call reads the usage windows Claude prints in its own output stream (five-hour and seven-day; no API, no key, no extra
+request). When either reaches 95% (`logbook config quota_pause 90` changes it) the observer and the log summaries pause until that window resets: tool uses stay
+queued and are observed afterwards, and `logbook log` falls back to a summary built by code. You are told once per pause, at the next prompt or session start, with the
+reason and the time it resumes, and the agent is asked to say it too. `logbook worker --status` shows the figures from the last call. The figures are only as fresh as
+the last call, which is why a pause starts one call after the window fills, not before.
+
 Cost is bounded: a daily call cap (`logbook config worker_calls`, default 120), a few calls per pass, and when the usage allowance runs out it waits an hour so it does
 not compete with your own session. Its model call runs from an empty directory with settings, MCP servers and slash commands off, which keeps the fixed cost of a
 call to a fraction of a cent. `logbook worker --status` shows what it has spent and what its last pass did; `logbook worker --drain` observes what is queued now.

@@ -119,10 +119,7 @@ def summarize(repo, branch, obs, call=worker.call_model, now=time.time):
         return fallback(obs), "code"
     sent, _ = redact(build_prompt(branch, obs), cfg.get("deny", []))
     text, cost, error = call(sent)
-    led.update(calls=led["calls"] + 1, cost=round(led["cost"] + cost, 6), last_run=int(now()), last_error=error[:300])
-    if error and worker._QUOTA.search(error):
-        led["cooldown_until"] = now() + worker.COOLDOWN
-    worker.save(repo, led)
+    worker.settle(repo, led, cost, error, now)
     fields = parse(text) if not error else {}
     return (fields, "model") if fields else (fallback(obs), "code")
 

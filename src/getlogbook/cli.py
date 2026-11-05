@@ -633,7 +633,7 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"publish": PUBLISH_MODES,
+CONFIG_KEYS = {"quota_pause": None, "publish": PUBLISH_MODES,
                "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
 
 
@@ -735,8 +735,11 @@ def cmd_worker(a):
     lp = s["last_pass"]
     if lp:
         out("  last pass: " + (lp.get("skipped") or lp.get("error") or f"{len(lp.get('observations', []))} observation(s) kept") + f" ({time.strftime('%H:%M', time.localtime(lp['t']))})")
+    for name, w in sorted(s["usage"].items()):
+        if name in ("five_hour", "seven_day"):
+            out(f"  {name.replace('_', '-')} usage: {round(w['u'] * 100)}% (resets {time.strftime('%a %H:%M', time.localtime(w['resets']))}; as of the last call)")
     if s["cooling_down"]:
-        out("  waiting: the usage allowance ran out; it tries again within an hour")
+        out(f"  paused until {time.strftime('%H:%M', time.localtime(s['paused_until']))}: {s['pause_reason'] or 'the usage allowance ran out'}")
     if s["last_error"]:
         out("  last error: " + safety_sanitize(s["last_error"], 200))
     return 0
@@ -987,7 +990,7 @@ def build_parser():
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
     s = add("queue", cmd_queue, "list private notes that are not shared yet")
     s.add_argument("--hook", action="store_true", help="the quiet one-line reminder the pre-push hook prints")
-    s = add("config", cmd_config, "show or set: publish (manual|ask|auto), worker (on|off), tidy (manual|auto), worker_calls")
+    s = add("config", cmd_config, "show or set: publish (manual|ask|auto), worker (on|off), tidy (manual|auto), worker_calls, quota_pause (percent)")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")
     s = add("purge", cmd_purge, "remove a published entry from your ref")

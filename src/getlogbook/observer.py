@@ -128,7 +128,7 @@ def _drain(repo, branch, flush, call, now):
             return {"skipped": "another pass is running"}
         led = worker.ledger(repo)
         if now() < led["cooldown_until"]:
-            return {"skipped": "waiting after the usage allowance ran out"}
+            return {"skipped": "paused: " + (led.get("pause_reason") or "waiting after the usage allowance ran out")}
         run = running.Running(repo, branch)
         from . import tree
         run.fork_from(tree.default_branch(repo))
@@ -146,11 +146,8 @@ def _drain(repo, branch, flush, call, now):
             text, cost, error = call(sent)
             calls += 1
             spent += cost
-            led.update(calls=led["calls"] + 1, cost=round(led["cost"] + cost, 6), last_run=int(now()), last_error=error[:300])
+            worker.settle(repo, led, cost, error, now)
             if error:
-                if worker._QUOTA.search(error):
-                    led["cooldown_until"] = now() + worker.COOLDOWN
-                worker.save(repo, led)
                 return {"error": error[:200], "calls": calls}  # the cursor stays, so the next pass reads these tool uses again
             seen = {o.get("hash") for o in run.observations()}
             fresh = []
@@ -166,6 +163,8 @@ def _drain(repo, branch, flush, call, now):
             run.add(fresh)
             run.advance(new_off)
             kept += [o["id"] for o in fresh]
+            if now() < led["cooldown_until"]:
+                break  # that call showed a usage window at its limit: the rest waits for the reset
         led["notes"] += len(kept)
         worker.save(repo, led)
     if not calls:

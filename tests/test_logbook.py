@@ -1448,6 +1448,14 @@ OBS_XML = """<observation><type>bugfix</type><title>total ignores refunds</title
 <files_read><file>shop/revenue.py</file></files_read><files_modified></files_modified></observation>"""
 
 
+STREAM = "\n".join(json.dumps(x) for x in (
+    {"type": "system", "subtype": "init"},
+    {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning", "resetsAt": 1794290400, "rateLimitType": "seven_day", "utilization": 0.58,
+     "unifiedWindows": {"five_hour": {"utilization": 0.12, "resetsAt": 1793913000, "status": "allowed"}, "seven_day": {"utilization": 0.58, "resetsAt": 1794290400}}}},
+    {"type": "assistant", "message": {"content": []}},
+    {"type": "result", "is_error": False, "result": "ok", "total_cost_usd": 0.001}))
+
+
 class ObserverBase(CliRepo):
     """The observer: a hook queues tool uses per branch, a background pass turns them into observations in the branch's running log. The model is faked here."""
 
@@ -1557,7 +1565,7 @@ class TestObserver(ObserverBase):
         res = self.drain("", error="Claude rejected the request because its five-hour usage allowance is exhausted.")
         self.assertIn("allowance", res["error"])
         self.assertEqual(self.run_.pending_bytes(), before)
-        self.assertEqual(self.drain()["skipped"], "waiting after the usage allowance ran out")
+        self.assertIn("paused: Claude refused a call", self.drain()["skipped"])
         self.assertTrue(self.worker.status(self.r)["cooling_down"])
         led = self.worker.ledger(self.r)
         led["cooldown_until"] = 0
@@ -1623,15 +1631,83 @@ class TestObserver(ObserverBase):
 
         def fake_run(cmd, **kw):
             seen.update(cmd=cmd, **kw)
-            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok", "total_cost_usd": 0.001}), "")
+            return subprocess.CompletedProcess(cmd, 0, STREAM, "")
         with unittest.mock.patch.object(subprocess, "run", fake_run):
             text, cost, err = self.worker.call_model("hello")
         self.assertEqual((text, cost, err), ("ok", 0.001, ""))
-        for flag in ("--model", "--tools", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "--no-session-persistence"):
+        self.assertEqual(self.worker.last_rate, {"five_hour": {"u": 0.12, "resets": 1793913000}, "seven_day": {"u": 0.58, "resets": 1794290400}})
+        for flag in ("stream-json", "--verbose", "--model", "--tools", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "--no-session-persistence"):
             self.assertIn(flag, seen["cmd"])
         self.assertEqual(seen["env"]["LOGBOOK_WORKER"], "1")
         self.assertEqual(seen["input"], "hello", "the prompt goes on stdin: Windows limits a command line")
         self.assertNotEqual(Path(seen["cwd"]).resolve(), self.d.resolve(), "run from an empty directory, not the repo")
+
+    def rated(self, five=0.96, seven=0.2, resets=None):
+        """A fake model call that reports usage windows the way claude's own output stream does."""
+        resets = resets or int(time.time()) + 3 * 3600
+
+        def call(prompt):
+            self.calls.append(prompt)
+            self.worker.last_rate = {"five_hour": {"u": five, "resets": resets}, "seven_day": {"u": seven, "resets": resets + 86400}}
+            return OBS_XML, 0.001, ""
+        return call
+
+    def test_the_stream_is_read_for_the_usage_windows_and_a_malformed_one_is_ignored(self):
+        result, windows = self.worker.parse_stream(STREAM + "\nnot json\n" + json.dumps({"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": "x", "resetsAt": 5}}}}))
+        self.assertEqual((result["result"], sorted(windows)), ("ok", ["five_hour", "seven_day"]))
+        self.assertEqual(self.worker.parse_stream("garbage")[0], None)
+
+    def test_a_usage_window_at_the_threshold_pauses_until_it_resets_and_says_why(self):
+        self.tool(5)
+        resets = int(time.time()) + 3 * 3600
+        res = self.observer.drain(self.r, self.branch, call=self.rated(0.96, resets=resets))
+        self.assertEqual(len(res["observations"]), 1, "that call still did its work")
+        led = self.worker.ledger(self.r)
+        self.assertEqual(led["cooldown_until"], resets)
+        self.assertIn("five-hour usage is 96%", led["pause_reason"])
+        self.tool(5)
+        self.assertIn("paused: five-hour usage is 96%", self.observer.drain(self.r, self.branch, call=self.rated(0.1))["skipped"])
+        s = self.worker.status(self.r)
+        self.assertEqual((s["cooling_down"], s["paused_until"], round(s["usage"]["five_hour"]["u"], 2)), (True, resets, 0.96))
+        code, text = self.run_cli("worker", "--status")
+        self.assertIn("five-hour usage: 96%", text)
+        self.assertIn("paused until", text)
+
+    def test_below_the_threshold_nothing_pauses_and_the_threshold_is_configurable(self):
+        self.tool(5)
+        self.observer.drain(self.r, self.branch, call=self.rated(0.94))
+        self.assertFalse(self.worker.status(self.r)["cooling_down"])
+        self.run_cli("config", "quota_pause", "90")
+        self.tool(5)
+        self.observer.drain(self.r, self.branch, call=self.rated(0.94, seven=0.1))
+        self.assertTrue(self.worker.status(self.r)["cooling_down"])
+
+    def test_a_window_that_has_already_reset_does_not_pause(self):
+        self.tool(5)
+        self.observer.drain(self.r, self.branch, call=self.rated(0.99, resets=int(time.time()) - 60))
+        self.assertFalse(self.worker.status(self.r)["cooling_down"])
+
+    def test_the_person_is_told_once_per_pause_and_the_agent_is_asked_to_say_it(self):
+        self.tool(5)
+        self.observer.drain(self.r, self.branch, call=self.rated(0.97))
+        payload = json.dumps({"session_id": "s1", "cwd": str(self.d), "prompt": "hello"})
+        first = json.loads(capture.handle_hook("UserPromptSubmit", "claude-code", payload))
+        self.assertIn("paused until", first["systemMessage"])
+        self.assertIn("five-hour usage is 97%", first["systemMessage"])
+        self.assertIn("Tell the user", first["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("systemMessage", capture.handle_hook("UserPromptSubmit", "claude-code", payload) or "{}", "once per pause")
+        led = self.worker.ledger(self.r)
+        led["cooldown_until"] = int(time.time()) + 99 * 3600  # a later pause is a new one
+        self.worker.save(self.r, led)
+        self.assertIn("systemMessage", capture.handle_hook("SessionStart", "claude-code", payload))
+
+    def test_a_savepoint_during_a_pause_is_written_by_code_and_does_not_call_the_model(self):
+        from getlogbook import savepoint
+        self.tool(5)
+        self.observer.drain(self.r, self.branch, call=self.rated(0.97))
+        self.calls.clear()
+        res = savepoint.save(self.r, self.branch, call=lambda p: (self.calls.append(p) or SAVEPOINT_XML, 0.001, ""), observe=False)
+        self.assertEqual((res["by"], self.calls), ("code", []))
 
     def test_secrets_in_a_tool_output_do_not_reach_the_model(self):
         self.tool(5, tool_response="API_KEY=sk-ant-api03-" + "A" * 40)
