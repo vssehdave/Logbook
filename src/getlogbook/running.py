@@ -64,6 +64,11 @@ def branch_now(repo):
     return name, ""
 
 
+def own(run):
+    """The observations made on this run's branch since its last savepoint (those inherited from the parent branch are context, not part of its work)."""
+    return [o for o in run.observations() if o.get("branch") == run.branch]
+
+
 def flatten(resp):
     """A tool's response (a string, or a dict that differs per tool) as plain text."""
     if isinstance(resp, str):

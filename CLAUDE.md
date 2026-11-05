@@ -30,6 +30,7 @@ Layout: `src/getlogbook/` (`cli.py` commands, `store.py` storage and sync, `sync
 - **Say plainly** what is untested or hardcoded before it affects results. Verify against the real thing (a real Claude session, a real build) before saying it works: the unit tests missed the two worst bugs so far.
 - **Do not write code through a bash heredoc** (backslash sequences are mangled, a nested `EOF` ends it): use the Edit and Write tools or a script file.
 - GitHub sometimes answers a push with an Internal Server Error: retry.
+- Prefer the GitHub MCP server over `gh` for pull requests, issues and merge state when it is registered (`claude mcp add --transport http github https://api.githubcopilot.com/mcp/ --header "Authorization: Bearer $GITHUB_PERSONAL_ACCESS_TOKEN"`; the token lives in your environment, never in the repo).
 - Credentials: never write any anywhere.
 
 ## The band (UI preferences the owner set, keep them)

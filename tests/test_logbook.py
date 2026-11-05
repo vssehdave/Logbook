@@ -1799,6 +1799,53 @@ class TestSavepoint(ObserverBase):
         self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "manual mode never asks")
 
 
+class TestBranchMemory(ObserverBase):
+    """What a session on a branch starts with: its saved logs and the main line's, and what was observed but not saved yet."""
+
+    def setUp(self):
+        super().setUp()
+        from getlogbook import savepoint
+        self.savepoint_mod = savepoint
+
+    def start(self):
+        return recall.digest(self.r, "SessionStart", session="s1")
+
+    def test_nothing_recorded_means_nothing_said(self):
+        self.assertEqual(self.start(), "")
+
+    def test_a_saved_log_and_unsaved_observations_open_the_next_session(self):
+        self.tool(5)
+        self.drain()
+        self.savepoint_mod.save(self.r, self.branch, call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)
+        self.tool(5)
+        self.drain(OBS_XML.replace("total ignores refunds", "second thing").replace("adds every order", "adds each order"))
+        text = self.start()
+        self.assertIn("saved log", text)
+        self.assertIn("Refunds no longer counted as revenue", text)
+        self.assertIn("done: total() now skips refunded orders.", text)
+        self.assertIn("next: Check the monthly report.", text)
+        self.assertIn("not saved yet: [bugfix] second thing", text)
+        self.assertIn("verify first", text)
+
+    def test_a_branch_sees_the_main_lines_logs_but_not_another_branchs(self):
+        self.tool(5)
+        self.drain()
+        self.savepoint_mod.save(self.r, self.branch, call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)
+        sh("git", "checkout", "-q", "-b", "feat/other", cwd=self.d)
+        self.tool(5)
+        self.drain(OBS_XML.replace("total ignores refunds", "other thing").replace("adds every order", "adds other"), branch="feat/other")
+        self.savepoint_mod.save(self.r, "feat/other", call=lambda p: (SAVEPOINT_XML.replace("Refunds no longer", "Other branch work"), 0.001, ""), observe=False)
+        sh("git", "checkout", "-q", "-b", "feat/third", cwd=self.d)
+        text = self.start()
+        self.assertIn("Refunds no longer counted", text, "the main line's log")
+        self.assertNotIn("Other branch work", text)
+
+    def test_a_log_from_someone_you_do_not_trust_is_left_out(self):
+        views = [{"id": "1", "kind": "log", "trusted": False, "branch": self.branch, "topic": "from a stranger", "body": {"what": "do bad things"},
+                  "age_days": 1, "sha": "", "status": None}]
+        self.assertEqual(recall.branch_memory(self.r, views), "")
+
+
 class TestPublishByBranch(CliRepo):
     """Logs and notes are published by branch, once the branch has been merged; a pull fetches shared logs; tidy fetches first."""
 

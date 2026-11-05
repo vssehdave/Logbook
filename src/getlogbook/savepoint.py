@@ -44,9 +44,7 @@ def last(run):
         return {}
 
 
-def own(run):
-    """The observations made on this branch since its last savepoint (those inherited from the parent branch are context, not part of its work)."""
-    return [o for o in run.observations() if o.get("branch") == run.branch]
+own = running.own
 
 
 def commit_made(run, obs, head):

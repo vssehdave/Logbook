@@ -51,7 +51,7 @@ on the right shows the number and `x/y` (this is the xth of y answers that cite 
 an earlier answer, down to a later one. Click the peek and the chat scrolls to that answer. The engine only lets a mod scroll the chat in
 answer to your own click. The band finds the answers by asking `logbook cites --where N`, which reads Claude Code's transcript of the chat, so
 it works for every answer and survives reloads; the jump uses the transcript row's id. Nothing can be typed into the finder. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
-the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. Checked with `claude plugin validate` and
+the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. The plugin also registers the GitHub MCP server (`https://api.githubcopilot.com/mcp/`) so the agent can read pull request and merge state when it saves or publishes logs; it needs a token in the environment variable `GITHUB_PERSONAL_ACCESS_TOKEN` (the repo never stores one), and without it that server just fails to connect. Checked with `claude plugin validate` and
 `claude plugin test` and, for the first version, in a live session; scrolling the chat to a citation and the finder are new and
 unproven at narrow widths.
 
@@ -81,6 +81,13 @@ skipped. A new branch starts from the main line's running log. Nothing here is s
 Cost is bounded: a daily call cap (`logbook config worker_calls`, default 120), a few calls per pass, and when the usage allowance runs out it waits an hour so it does
 not compete with your own session. Its model call runs from an empty directory with settings, MCP servers and slash commands off, which keeps the fixed cost of a
 call to a fraction of a cent. `logbook worker --status` shows what it has spent and what its last pass did; `logbook worker --drain` observes what is queued now.
+
+## Branch memory at the start of a session
+
+When a Claude Code session starts, the hook adds a short block before the matching notes: the latest saved logs on this branch and on the main line (each with its
+age and commit, or "no commit"), then what the observer has seen on this branch since the last savepoint. Logs from authors you have not trusted are left out, every
+word is cleaned like any injected note, and the block is marked as data to verify. It is empty when nothing has been recorded. (Logs are not yet picked by relevance
+to a prompt, only shown at session start.)
 
 ## Modes and savepoints
 
