@@ -633,7 +633,7 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"quota_pause": None, "publish": PUBLISH_MODES,
+CONFIG_KEYS = {"tidy_model": "text", "quota_pause": None, "publish": PUBLISH_MODES,
                "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
 
 
@@ -673,6 +673,11 @@ def cmd_config(a):
         out(r.publish_mode() if a.key == "publish" else str(c.get(a.key, "(default)")))
         return 0
     allowed = CONFIG_KEYS[a.key]
+    if allowed == "text":  # a free-form value, such as a model name
+        c[a.key] = a.value
+        r.save_cfg(c)
+        out(f"{a.key} = {a.value}")
+        return 0
     if a.key == "publish":
         a.value = LEGACY_MODES.get(a.value, a.value)  # never -> manual, claude -> ask
     if allowed and a.value not in allowed:
@@ -754,7 +759,32 @@ def cmd_tidy(a):
             sync.sync(r, "origin", fetch_only=True)
         except (SystemExit, OSError, ValueError):
             pass
+    if a.work:  # the tidy worker's pass: judge, fold logs, archive junk (what the hooks start in `tidy auto`)
+        res = tidy.auto(r) if r.cfg().get("tidy", "manual") == "auto" else tidy.work(r)
+        if not a.quiet:
+            out(json.dumps(res))
+        return 0
     vs = views(r)[0]
+    if a.merge_logs:
+        done = tidy.merge_logs(r)
+        for b, n, i in done:
+            out(f"folded {n} private logs on {b} into {i}; the originals are in .git/logbook/archive/")
+        if not done:
+            out(f"nothing to fold: no branch has {tidy.MERGE_MIN} or more private logs of yours")
+        return 0
+    if a.proposals or a.accept:
+        if a.accept:
+            stored, errors = tidy.accept(r)
+            for nid in stored:
+                out(f"  {nid} status stored (private until you publish it)")
+            for e in errors:
+                out("  ! " + e)
+            return 0
+        waiting = tidy.proposals(r)
+        out(f"{len(waiting)} proposal(s) from the tidy worker, already checked against git (`logbook tidy --accept` stores them)")
+        for b in waiting:
+            out(f"  {b['status_of']}  ->  {b['status']}  ({safety_sanitize(b.get('reason', ''), 160)})")
+        return 0
     if a.garbage:  # the worker's private drafts that are no longer worth keeping; --apply moves them to the archive, nothing is deleted
         junk = tidy.garbage(r, vs)
         if a.apply:
@@ -777,6 +807,10 @@ def cmd_tidy(a):
         out(tidy.brief(r, vs, a.limit))
         return 0
     found = tidy.candidates(r, vs)
+    if tidy.proposals(r):
+        out(f"{len(tidy.proposals(r))} proposal(s) from the tidy worker are waiting: `logbook tidy --proposals` shows them, `logbook tidy --accept` stores them")
+    for b, ids in tidy.mergeable(vs).items():
+        out(f"branch {b} has {len(ids)} private logs of yours: `logbook tidy --merge-logs` folds the older ones into one")
     out(f"{len(found)} candidate{'' if len(found) == 1 else 's'} (nothing was changed; whether each one is really outdated or repeated is for an agent to judge and you to approve)")
     for c in found[:a.limit]:
         out(f"  {c['id']}  {'yours' if c['mine'] else 'a teammate'}  {safety_sanitize(c['topic'], 80)}")
@@ -985,12 +1019,17 @@ def build_parser():
     s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk; --brief for an agent; --apply stores approved statuses")
     s.add_argument("--limit", type=int, default=20)
     s.add_argument("--no-sync", action="store_true", help="do not fetch shared logs first")
+    s.add_argument("--work", action="store_true", help="run the tidy worker's pass now: judge changed notes with a cheap model, fold logs in auto mode")
+    s.add_argument("--quiet", action="store_true")
+    s.add_argument("--proposals", action="store_true", help="show what the tidy worker proposed and kept for you")
+    s.add_argument("--accept", action="store_true", help="store the worker's proposals (each is checked against git again; asks first in Claude Code)")
+    s.add_argument("--merge-logs", action="store_true", help="fold the older private logs of a branch into one; the originals are archived")
     s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
     s = add("queue", cmd_queue, "list private notes that are not shared yet")
     s.add_argument("--hook", action="store_true", help="the quiet one-line reminder the pre-push hook prints")
-    s = add("config", cmd_config, "show or set: publish (manual|ask|auto), worker (on|off), tidy (manual|auto), worker_calls, quota_pause (percent)")
+    s = add("config", cmd_config, "show or set: publish (manual|ask|auto), worker (on|off), tidy (manual|auto), worker_calls, quota_pause (percent), tidy_model")
     s.add_argument("key", nargs="?")
     s.add_argument("value", nargs="?")
     s = add("purge", cmd_purge, "remove a published entry from your ref")

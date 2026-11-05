@@ -1,16 +1,21 @@
 """Keeping notes true: candidates for tidying, and the validated way to change a note's status.
 
-Python finds candidates and says why, from git and from the notes alone, and checks every proposal before anything is stored. It does not judge
-whether a later commit really outdates a note or whether two notes mean the same thing: that is an agent's call, and the person approves the whole
-list once (`logbook tidy --apply` is a command Claude Code asks about). A status is a small record written by the note's own author; the note itself
-is never edited, so nothing already shared changes under a teammate.
+Python finds candidates and says why, from git and from the notes alone, and checks every proposal before anything is stored. Whether a later commit
+really outdates a note is a judgment: the tidy worker asks a cheap model (`tidy_model`) for it, an agent can do it from `tidy --brief`, and either way
+Python checks the proposals against git. In `manual` mode the proposals wait for the person (`tidy --proposals`, then `tidy --accept`, a command Claude
+Code asks about); in `auto` mode the valid ones are stored by the worker. A status is a small record written by the note's own author; the note itself
+is never edited, so nothing already shared changes under a teammate. Nothing is deleted: merged and junk private entries move to `.git/logbook/archive/`.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import shutil
+import time
 
-from . import capture, ground
+from . import capture, ground, worker
+from .safety import redact
 from . import git as g
 from .entry import HEX_RE, ID_RE, STATES
 from .safety import sanitize
@@ -122,6 +127,10 @@ def apply(repo, views, text):
         return [], ["no proposals on stdin (blocks of status_of / status / commits / reason lines, separated by ---)"]
     if len(blocks) > MAX_APPLY:
         return [], [f"{len(blocks)} proposals; at most {MAX_APPLY} at a time"]
+    return apply_blocks(repo, views, blocks)
+
+
+def apply_blocks(repo, views, blocks):
     checked = [(b, *check(repo, views, b)) for b in blocks]
     errors = [e for _, e, _, _ in checked if e]
     if errors:
@@ -162,8 +171,8 @@ def garbage(repo, views, days=None):
     days = int(days or repo.cfg().get("worker_days", RETENTION_DAYS))
     out = []
     for v in views:
-        if v.get("is_status") or not v["mine"] or v["provenance"] != "worker-written" or v["scope"] != "private":
-            continue
+        if v.get("is_status") or not v["mine"] or v["provenance"] != "worker-written" or v["scope"] != "private" or v["kind"] == "log":
+            continue  # a saved log is the person's record of a session: it is merged (`merge_logs`), never dropped as junk
         files = tracked(repo, v)[:MAX_FILES]
         if v.get("status") == "resolved":
             reason = "resolved"
@@ -190,7 +199,161 @@ def archive(repo, ids):
     return moved
 
 
-def auto(repo):
-    """The automatic mode (`logbook config tidy auto`): archive the worker drafts that `garbage` lists, after a worker pass."""
+# ---- the tidy worker --------------------------------------------------------------------------------------------
+TIDY_MODEL = "haiku"  # `config tidy_model` changes it; it is a different setting from the observer's model on purpose
+MAX_JUDGED = 12  # candidates shown to the model in one call
+MERGE_MIN = 4  # private logs on one branch before they are worth folding into one
+MERGE_MAX = 12  # logs folded in one go
+SYSTEM = """You help keep a team's recorded notes true. You cannot use tools. Below are notes written earlier in this repo, each with the later commits that touched the files it is about. Decide, for each note, only from what is shown:
+- nothing at all if it still looks true or you cannot tell;
+- status: in-progress if a later commit changed part of what it says;
+- status: resolved if a later commit clearly fixed, removed or replaced what it describes.
+Cite only commits listed under that note (the 8-character id is enough). Give a reason that names what the commit changed. Do not guess. Answer with blocks separated by a line of ---, each exactly:
+
+status_of: <note id>
+status: in-progress or resolved
+commits: <commit id>, <commit id>
+reason: one or two sentences
+
+If no note needs a status, answer with exactly: NONE
+"""
+
+
+def _dir(repo):
+    return repo.cdir / "tidy"
+
+
+def _state(repo):
+    try:
+        st = json.loads((_dir(repo) / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    st.setdefault("judged", {})
+    st.setdefault("proposals", [])
+    return st
+
+
+def _save(repo, st):
+    capture.atomic_write(_dir(repo) / "state.json", json.dumps(st))
+
+
+def _fingerprint(c):
+    """What was shown about a candidate: asked again only when a newer commit turns up."""
+    return hashlib.sha1((c["reason"] + "|" + ",".join(c["commits"])).encode("utf-8")).hexdigest()[:12]
+
+
+def build_prompt(repo, views, cands):
+    by_id = {v["id"]: v for v in views}
+    lines = [SYSTEM, "NOTES:"]
+    for c in cands:
+        v = by_id[c["id"]]
+        lines += ["", f"note {c['id']}: {sanitize(v['topic'], 100)}"]
+        lines += [f"  {k}: {sanitize(v['body'][k], 300)}" for k in ("summary", "what", "why", "fix", "decided", "open") if v["body"].get(k)]
+        lines.append("  files: " + sanitize(", ".join(tracked(repo, v)[:6]), 200))
+        lines += [f"  later commit {sha[:8]}: {sanitize(subj, 100)}" for sha, subj in later_commits(repo, v)[:SHOWN_COMMITS]]
+    return "\n".join(lines) + "\n"
+
+
+def work(repo, call=None, now=time.time):
+    """One pass: ask the cheap model about my notes whose files changed in later commits, check every answer against git, then store the valid ones
+    (tidy auto) or keep them for the person (tidy manual). Never raises for a model problem; shares the observer's budget and its pause."""
     from . import tree
-    return archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
+    if not worker.enabled(repo):
+        return {"skipped": "the observer is off"}
+    cfg = repo.cfg()
+    call = call or (lambda p: worker.call_model(p, cfg.get("tidy_model", TIDY_MODEL)))
+    with capture._lock(_dir(repo) / ".lock", timeout=0.2) as got:
+        if not got:
+            return {"skipped": "another tidy pass is running"}
+        led = worker.ledger(repo)
+        if now() < led["cooldown_until"]:
+            return {"skipped": "paused: " + (led.get("pause_reason") or "waiting after the usage allowance ran out")}
+        if led["calls"] >= int(cfg.get("worker_calls", worker.MAX_CALLS)):
+            return {"skipped": "today's call cap is reached"}
+        views = tree.all_views(repo)[0]
+        st = _state(repo)
+        cands = [c for c in candidates(repo, views) if c["mine"] and c["commits"] and st["judged"].get(c["id"]) != _fingerprint(c)][:MAX_JUDGED]
+        if not cands:
+            return {"skipped": "nothing new to judge"}
+        sent, _ = redact(build_prompt(repo, views, cands), cfg.get("deny", []))
+        text, cost, error = call(sent)
+        worker.settle(repo, led, cost, error, now)
+        if error:
+            return {"error": error[:200]}  # nothing is marked as judged, so the next pass asks again
+        good, bad = [], 0
+        for b in parse(text)[:MAX_APPLY]:
+            if check(repo, views, b)[0]:
+                bad += 1
+            else:
+                good.append(b)
+        for c in cands:
+            st["judged"][c["id"]] = _fingerprint(c)
+        applied = []
+        if cfg.get("tidy", "manual") == "auto":
+            for b in good:  # one at a time: a proposal that went stale must not block the rest
+                done, _ = apply_blocks(repo, views, [b])
+                applied += [d[0] for d in done]
+        else:
+            kept = {b["status_of"]: b for b in st["proposals"]}
+            kept.update({b["status_of"]: b for b in good})
+            st["proposals"] = list(kept.values())
+        _save(repo, st)
+    return {"judged": len(cands), "proposed": 0 if applied else len(good), "applied": applied, "rejected": bad, "cost": round(cost, 6)}
+
+
+def proposals(repo):
+    return _state(repo)["proposals"]
+
+
+def accept(repo):
+    """Store the proposals the worker kept for the person, each checked again against git as it is now. Returns (stored note ids, errors)."""
+    from . import tree
+    st = _state(repo)
+    views = tree.all_views(repo)[0]
+    stored, errors = [], []
+    for b in st["proposals"]:
+        done, errs = apply_blocks(repo, views, [b])
+        stored += [d[0] for d in done]
+        errors += errs
+    st["proposals"] = []
+    _save(repo, st)
+    return stored, errors
+
+
+def mergeable(views):
+    """{branch: [ids, newest first]} of my private saved logs, for branches that have enough of them to be worth folding into one."""
+    by = {}
+    for v in sorted(views, key=lambda x: x["id"], reverse=True):
+        if v["kind"] == "log" and v["mine"] and v["scope"] == "private" and not v.get("is_status") and v["branch"]:
+            by.setdefault(v["branch"], []).append(v["id"])
+    return {b: ids for b, ids in by.items() if len(ids) >= MERGE_MIN}
+
+
+def merge_logs(repo, call=None, now=time.time, limit=2):
+    """Fold the older private logs of a branch into one new log (written by the cheap model, or by code without it). The originals move to the archive and
+    the new log lists them as its sources. Returns [(branch, how many were folded, the new log id)]."""
+    from . import savepoint, tree
+    call = call or (lambda p: worker.call_model(p, repo.cfg().get("tidy_model", TIDY_MODEL)))
+    views = tree.all_views(repo)[0]
+    by_id = {v["id"]: v for v in views}
+    done = []
+    for branch, ids in list(mergeable(views).items())[:limit]:
+        logs = [by_id[i] for i in reversed(ids[:MERGE_MAX])]  # oldest first
+        obs = [{"id": v["id"], "type": "change", "title": v["topic"], "subtitle": "", "narrative": " ".join(v["body"].get(k, "") for k in ("what", "why", "summary") if v["body"].get(k))[:600],
+                "facts": [], "files_read": [], "files_modified": v["paths"]} for v in logs]
+        fields, how = savepoint.summarize(repo, branch, obs, call, now)
+        e = savepoint._entry(repo, branch, logs[-1]["sha"] or "", obs, fields)
+        e.supersedes = [v["id"] for v in logs]
+        repo.add_private(e)
+        archive(repo, e.supersedes)
+        done.append((branch, len(logs), e.id))
+    return done
+
+
+def auto(repo, call=None, now=time.time):
+    """Everything the automatic mode does in one pass: judge, fold logs, archive junk drafts."""
+    from . import tree
+    res = work(repo, call, now)
+    res["folded"] = [(b, n) for b, n, _ in merge_logs(repo, call, now)]
+    res["archived"] = archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
+    return res

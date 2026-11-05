@@ -1419,6 +1419,136 @@ def tidy_candidates(repo):
     return tidy.candidates(repo, tree.all_views(repo)[0])
 
 
+class TestTidyWorker(CliRepo):
+    """The tidy worker asks a cheap model whether my notes are outdated, checks every answer against git, and stores or keeps the valid ones."""
+
+    def setUp(self):
+        super().setUp()
+        from getlogbook import tidy, worker
+        self.tidy, self.worker = tidy, worker
+        first = commit(self.d, "add refund filter", {"shop/revenue.py": "x = 2\n"})
+        self.note = capture.make_entry(self.r, "change", "refund filter", {"summary": "filters refunds in total()", "why": "refunds counted as revenue"}, sha=first)
+        self.later = commit(self.d, "rework revenue", {"shop/revenue.py": "x = 3\n"})
+        self.calls = []
+
+    def answer(self, text=None, error="", commit_id=None):
+        text = text if text is not None else f"status_of: {self.note.id}\nstatus: resolved\ncommits: {commit_id or self.later[:8]}\nreason: rework revenue replaced the refund filter\n"
+
+        def call(prompt):
+            self.calls.append(prompt)
+            return text, 0.001, error
+        return call
+
+    def status_of(self):
+        return next(v for v in tree.all_views(self.r)[0] if v["id"] == self.note.id).get("status")
+
+    def test_manual_mode_keeps_checked_proposals_for_the_person_and_asks_nothing_twice(self):
+        res = self.tidy.work(self.r, self.answer())
+        self.assertEqual((res["judged"], res["proposed"], res["applied"], res["rejected"]), (1, 1, [], 0))
+        self.assertEqual(self.status_of(), "open", "nothing is stored without a yes")
+        self.assertIn("rework revenue", self.calls[0])
+        self.assertIn(self.note.id, self.calls[0])
+        self.assertEqual(self.tidy.work(self.r, self.answer())["skipped"], "nothing new to judge")
+        code, text = self.run_cli("tidy", "--proposals")
+        self.assertIn(f"{self.note.id}  ->  resolved", text)
+        self.assertIn("waiting", self.run_cli("tidy", "--no-sync")[1])
+        code, text = self.run_cli("tidy", "--accept")
+        self.assertIn("status stored", text)
+        self.assertEqual(self.status_of(), "resolved")
+        self.assertIn("0 proposal(s)", self.run_cli("tidy", "--proposals")[1])
+
+    def test_auto_mode_stores_the_valid_proposals_itself(self):
+        self.run_cli("config", "tidy", "auto")
+        res = self.tidy.work(self.r, self.answer())
+        self.assertEqual((res["applied"], res["proposed"]), ([self.note.id], 0))
+        self.assertEqual(self.status_of(), "resolved")
+
+    def test_an_invented_commit_or_a_note_that_is_not_mine_is_rejected(self):
+        res = self.tidy.work(self.r, self.answer(commit_id="deadbeef"))
+        self.assertEqual((res["proposed"], res["rejected"]), (0, 1))
+        self.assertEqual(self.tidy.proposals(self.r), [])
+        commit(self.d, "rework again", {"shop/revenue.py": "x = 4\n"})
+        res = self.tidy.work(self.r, self.answer(text=f"status_of: {new_id()}\nstatus: resolved\ncommits: {self.later[:8]}\nreason: r\n"))
+        self.assertEqual((res["proposed"], res["rejected"]), (0, 1))
+
+    def test_none_means_none_and_a_failed_call_is_asked_again(self):
+        self.assertEqual(self.tidy.work(self.r, self.answer("NONE"))["proposed"], 0)
+        self.assertEqual(self.tidy.work(self.r, self.answer())["skipped"], "nothing new to judge", "a NONE was an answer")
+        commit(self.d, "rework a third time", {"shop/revenue.py": "x = 5\n"})
+        self.assertIn("error", self.tidy.work(self.r, self.answer("", error="boom")))
+        self.assertEqual(self.tidy.work(self.r, self.answer("NONE"))["judged"], 1, "the failed call marked nothing as judged")
+
+    def test_it_obeys_the_pause_and_reports_usage(self):
+        def call(prompt):
+            self.worker.last_rate = {"five_hour": {"u": 0.97, "resets": int(time.time()) + 7200}}
+            return "NONE", 0.001, ""
+        self.tidy.work(self.r, call)
+        commit(self.d, "rework a third time", {"shop/revenue.py": "x = 5\n"})
+        self.assertIn("paused: five-hour usage is 97%", self.tidy.work(self.r, self.answer())["skipped"])
+
+    def test_the_model_for_tidy_is_its_own_setting(self):
+        import unittest.mock
+        self.run_cli("config", "tidy_model", "sonnet")
+        self.assertEqual(self.r.cfg()["tidy_model"], "sonnet")
+        seen = []
+        with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": (seen.append(model) or "NONE", 0.0, "")):
+            self.tidy.work(self.r)
+        self.assertEqual(seen, ["sonnet"])
+
+    def test_old_private_logs_on_a_branch_are_folded_into_one_and_the_originals_archived(self):
+        ids = [capture.make_entry(self.r, "log", f"session {i}", {"what": f"did step {i}", "why": f"learned {i}", "summary": f"step {i}"}, paths=["shop/revenue.py"],
+                                  provenance="worker-written").id for i in range(self.tidy.MERGE_MIN)]
+        views = tree.all_views(self.r)[0]
+        self.assertEqual(sum(len(v) for v in self.tidy.mergeable(views).values()), self.tidy.MERGE_MIN)
+        done = self.tidy.merge_logs(self.r, lambda p: (SAVEPOINT_XML, 0.001, ""))
+        ((branch, n, new),) = done
+        self.assertEqual(n, self.tidy.MERGE_MIN)
+        merged = self.r.get_private(new)
+        self.assertEqual((merged.kind, merged.topic, sorted(merged.sources)), ("log", "Refunds no longer counted as revenue", sorted(ids)))
+        self.assertEqual([i for i in ids if self.r.get_private(i)], [], "the originals left the private log")
+        self.assertTrue(all((self.r.cdir / "archive" / f"{i}.json").exists() for i in ids), "and are still readable in the archive")
+        self.assertEqual(self.tidy.mergeable(tree.all_views(self.r)[0]), {})
+
+    def test_a_branch_with_few_logs_is_left_alone_and_a_log_is_never_junk(self):
+        old = capture.make_entry(self.r, "log", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
+        old.created = "2020-01-01T00:00:00"
+        self.r.add_private(old)
+        self.assertEqual(self.tidy.merge_logs(self.r, lambda p: (SAVEPOINT_XML, 0, "")), [])
+        self.assertEqual(self.tidy.garbage(self.r, tree.all_views(self.r)[0]), [], "a saved log is not a stale draft")
+
+    def test_merge_logs_from_the_command_line(self):
+        import unittest.mock
+        for i in range(self.tidy.MERGE_MIN):
+            capture.make_entry(self.r, "log", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
+        self.assertIn("folds the older ones", self.run_cli("tidy", "--no-sync")[1])
+        with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": (SAVEPOINT_XML, 0.0, "")):
+            code, text = self.run_cli("tidy", "--merge-logs", "--no-sync")
+        self.assertIn(f"folded {self.tidy.MERGE_MIN} private logs", text)
+        self.assertIn("nothing to fold", self.run_cli("tidy", "--merge-logs", "--no-sync")[1])
+
+    def test_auto_does_all_of_it_in_one_pass(self):
+        self.run_cli("config", "tidy", "auto")
+        for i in range(self.tidy.MERGE_MIN):
+            capture.make_entry(self.r, "log", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
+        res = self.tidy.auto(self.r, lambda p: (SAVEPOINT_XML if "savepoint" in p else f"status_of: {self.note.id}\nstatus: resolved\ncommits: {self.later[:8]}\nreason: reworked\n", 0.001, ""))
+        self.assertEqual((res["applied"], len(res["folded"]), res["archived"]), ([self.note.id], 1, 0))
+
+    def test_the_hooks_start_the_tidy_pass_only_in_auto_mode(self):
+        import unittest.mock
+        from getlogbook import hookmain
+        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("auto", ["tidy", "--work", "--quiet"])):
+            self.run_cli("config", "tidy", mode)
+            with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+                hookmain.run(["post-merge"])
+            self.assertEqual(spawn.call_args.args[0][-len(expect):], expect, mode)
+
+    def test_the_commands_that_change_things_or_spend_the_allowance_ask(self):
+        from getlogbook import permissions
+        decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
+        self.assertEqual([decide(f"logbook tidy{f}") for f in ("", " --proposals", " --brief", " --work", " --accept", " --merge-logs")],
+                         ["allow", "allow", "allow", "ask", "ask", "ask"])
+
+
 class TestGitLocks(CliRepo):
     """Logbook's background git calls must never take a lock a person's own `git commit` needs: a commit that fails with "Unable to create
     index.lock" because a hook was refreshing the index is the worst way for this tool to be noticed."""
