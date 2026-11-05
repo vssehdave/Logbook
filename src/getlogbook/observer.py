@@ -112,18 +112,19 @@ def digest(o):
     return hashlib.sha1(" ".join((o["type"] + " " + o["title"] + " " + o["narrative"]).lower().split()).encode("utf-8")).hexdigest()[:16]
 
 
-def drain(repo, branch, flush=False, call=worker.call_model, now=time.time):
-    """Observe what is queued on a branch, a few batches at most. Returns what happened and logs it; never raises for a model or network problem."""
-    res = _drain(repo, branch, flush, call, now)
+def drain(repo, branch, flush=False, call=worker.call_model, now=time.time, wait=0.2):
+    """Observe what is queued on a branch, a few batches at most. Returns what happened and logs it; never raises for a model or network problem.
+    `wait`: seconds to wait for a pass that is already running (a hook gives up at once, a savepoint waits)."""
+    res = _drain(repo, branch, flush, call, now, wait)
     worker.log_pass(repo, branch, {"branch": branch[:60], **res}, now)
     return res
 
 
-def _drain(repo, branch, flush, call, now):
+def _drain(repo, branch, flush, call, now, wait=0.2):
     if not worker.enabled(repo):
         return {"skipped": "the observer is off"}
     cfg = repo.cfg()
-    with capture._lock(worker._wdir(repo) / ".lock", timeout=0.2) as got:
+    with capture._lock(worker._wdir(repo) / ".lock", timeout=wait, stale=worker.LOCK_STALE) as got:
         if not got:
             return {"skipped": "another pass is running"}
         led = worker.ledger(repo)

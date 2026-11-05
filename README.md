@@ -14,7 +14,7 @@ particular stack.
 macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
 its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Summaries of the repo
 or a branch are written by your agent on request and go stale when a note is added. Hooks exist only for Claude Code; other agents
-get a rules file. Entries marked `auto-copied` are copied from git or a truncated transcript: they carry no reason and are never
+get a rules file. Entries marked `auto-copied` (written by 0.0.5 and earlier from a transcript or a commit) carry no reason and are never
 injected into an agent's prompt. The only measurements so far are two small smoke tests on a toy repo (see `docs/DESIGN.md`).
 
 ## Try it (no credentials, about 30 seconds)
@@ -28,7 +28,7 @@ injected into an agent's prompt. The only measurements so far are two small smok
     logbook setup          # shows what it will change and asks; --yes to apply, --dry-run to only look
     logbook uninstall      # puts every file back (your notes are kept)
 
-One command starts the repo, fetches teammates' notes when there is a remote, chains a git post-commit hook and a pre-push hook (it only reminds
+One command starts the repo, fetches teammates' notes when there is a remote, chains a git pre-push hook and post-merge/post-rewrite hooks (the pre-push one only reminds
 you of unshared notes, never blocks a push and never sends notes: `logbook sync` does), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
 `.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.

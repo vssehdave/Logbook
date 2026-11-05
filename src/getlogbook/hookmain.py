@@ -18,9 +18,7 @@ def run(argv):
             # in tidy auto the tidy pass does that fetch first, then judges what the pull changed
             more = ["tidy", "--work", "--quiet"] if r.cfg().get("tidy") == "auto" else ["sync", "--fetch-only"]
             capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", *more], r.root)
-        else:  # post-commit: the sweep for hook-less commits runs detached, so the commit never waits
-            r = Repo(".")
-            capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], r.root)
+        # "post-commit": an older install still has a git hook that calls this; it does nothing now (setup removes the hook)
     except Exception:
         pass
     return 0

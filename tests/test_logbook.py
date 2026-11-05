@@ -10,7 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
-SRC = str(Path(__file__).resolve().parents[1] / "src")
+SRC = os.environ.get("LOGBOOK_SRC") or str(Path(__file__).resolve().parents[1] / "src")  # LOGBOOK_SRC: test an installed build (its site-packages) instead of the checkout
 sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
@@ -223,7 +223,6 @@ class TestCapture(Base):
         for raw in ("", "not json", "[]", json.dumps({"cwd": str(self.root / "missing")}), json.dumps({"cwd": str(d), "session_id": "s1"})):
             capture.handle_hook("Stop", "claude-code", raw)
         self.assertLess(time.time() - t0, 5)
-        self.assertEqual(len(list((r.cdir / "spool").glob("*.json"))), 1)
         self.assertEqual(capture.handle_hook("Stop", "x", json.dumps({"cwd": str(self.root)})), "")  # not a repo
 
     def test_session_start_injects_only_trusted_why_entries(self):
@@ -237,36 +236,27 @@ class TestCapture(Base):
         self.assertNotIn("no reason", txt)
         self.assertLessEqual(len(txt), recall.DEFAULT_CAP)
 
-    def test_reconcile_builds_auto_copied_draft_from_transcript_and_commit_floor(self):
+    def test_nothing_is_written_for_a_session_or_a_commit_by_itself(self):
         d, r = self.repo()
-        capture.install_git_hook(r)
         tr = self.root / "t.jsonl"
         tr.write_text("\n".join(json.dumps(x) for x in [
             {"type": "user", "message": {"role": "user", "content": "why is fct_x low?"}},
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Because the load was late."}]}}]))
-        for ev in ("Stop", "SessionEnd"):
-            capture.spool_event(r, ev, "claude-code", {"session_id": "sess1", "transcript_path": str(tr)})
-        tr.unlink()  # agents prune transcripts: the slice must already be copied
-        commit(d, "hook-less commit", {"models/marts/fct_x.sql": "select 4\n"})
-        res = capture.reconcile(r)
-        self.assertEqual(res["drafts"], 1)
-        self.assertEqual(res["floor"], 1)
-        es = {l.entry.captured_via: l.entry for l in r.load_private() and r.all_entries()}
-        self.assertEqual(es["claude-code"].provenance, "auto-copied")
-        self.assertIn("why is fct_x low", es["claude-code"].topic)
-        self.assertEqual(es["reconcile"].kind, "change")
-        self.assertEqual(capture.reconcile(r)["floor"], 0, "idempotent")
+        payload = json.dumps({"cwd": str(d), "session_id": "sess1", "transcript_path": str(tr)})
+        for ev in ("Stop", "PreCompact", "SessionEnd"):
+            capture.handle_hook(ev, "claude-code", payload)
+        commit(d, "a commit", {"models/marts/fct_x.sql": "select 4\n"})
+        from getlogbook import hookmain
+        hookmain.run(["post-commit"])
+        self.assertEqual(r.load_private(), [], "no end-of-session draft and no commit record")
+        self.assertFalse((r.cdir / "spool").exists() or (r.cdir / "sessions" / "sess1").exists(), "no spool and no copied transcript")
 
     def test_installers_chain_and_are_idempotent(self):
         d, r = self.repo()
         hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], d).strip())
         hooks.mkdir(exist_ok=True)
         (hooks / "post-commit").write_text("#!/bin/sh\necho mine\n", newline="\n")
-        capture.install_git_hook(r)
-        capture.install_git_hook(r)
-        t = (hooks / "post-commit").read_text()
-        self.assertEqual(t.count(capture.MARK_BEGIN), 1)
-        self.assertIn("echo mine", t)
+        (hooks / "post-commit").write_text("#!/bin/sh\necho mine\n" + capture.MARK_BEGIN + "\n\"python\" -m getlogbook post-commit\n" + capture.MARK_END + "\n", newline="\n")
         capture.uninstall_git_hook(r)
         self.assertNotIn("logbook", (hooks / "post-commit").read_text())
         self.assertIn("echo mine", (hooks / "post-commit").read_text())
@@ -376,7 +366,6 @@ class TestRealPayloads(Base):
             if out:
                 self.assertIn("hookSpecificOutput", json.loads(out), f.name)
         self.assertFalse((r.cdir / "errors.log").exists() and (r.cdir / "errors.log").read_text().strip(), "no hook logged an error")
-        self.assertTrue(list((r.cdir / "spool").glob("*.json")), "Stop and SessionEnd were spooled")
 
 
 class TestInstaller(Base):
@@ -478,7 +467,22 @@ class TestInstaller(Base):
         self.run_cli("install", "--yes")
         _, after = self.run_cli("doctor")
         self.assertRegex(after, r"claude-code\s*: installed")
-        self.assertRegex(after, r"git hooks\s*: post-commit installed, pre-push installed")
+        self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed")
+
+
+    def test_setup_removes_the_old_per_commit_hook_and_keeps_the_persons_own(self):
+        self.run_cli("init")
+        hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], self.d).strip())
+        hooks.mkdir(exist_ok=True)
+        old = "#!/bin/sh\necho mine\n" + capture.MARK_BEGIN + "\n\"python\" -m getlogbook post-commit\n" + capture.MARK_END + "\n"
+        (hooks / "post-commit").write_text(old, newline="\n")
+        _, text = self.run_cli("install", "--dry-run")
+        self.assertIn("remove", text)
+        self.run_cli("install", "--yes")
+        left = (hooks / "post-commit").read_text()
+        self.assertIn("echo mine", left)
+        self.assertNotIn("logbook", left)
+        self.assertTrue((hooks / "post-merge").exists() and (hooks / "pre-push").exists())
 
 
 class CliRepo(Base):
@@ -1516,6 +1520,16 @@ class TestTidyWorker(CliRepo):
         self.assertEqual(self.tidy.merge_logs(self.r, lambda p: (SAVEPOINT_XML, 0, "")), [])
         self.assertEqual(self.tidy.garbage(self.r, tree.all_views(self.r)[0]), [], "a saved log is not a stale draft")
 
+    def test_old_auto_copied_drafts_are_listed_as_junk_and_archived_not_deleted(self):
+        draft = Entry(id=new_id(), kind="finding", topic="Read shop/revenue.py ...", body={"summary": "the final message"}, provenance="auto-copied", created="2020-01-01T00:00:00", v=2)
+        draft.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
+        self.r.add_private(draft)
+        (c,) = [x for x in self.tidy.garbage(self.r, tree.all_views(self.r)[0]) if x["id"] == draft.id]
+        self.assertIn("days old", c["reason"])
+        self.assertIn("archived 1", self.run_cli("tidy", "--garbage", "--apply", "--no-sync")[1])
+        self.assertIsNone(self.r.get_private(draft.id))
+        self.assertTrue((self.r.cdir / "archive" / f"{draft.id}.json").exists())
+
     def test_merge_logs_from_the_command_line(self):
         import unittest.mock
         for i in range(self.tidy.MERGE_MIN):
@@ -1989,6 +2003,45 @@ class TestSavepoint(ObserverBase):
                 capture.handle_hook("SessionEnd", "claude-code", payload)
                 self.assertEqual(any(c.args[0][-2:] == ["log", "--quiet"] for c in spawn.call_args_list), expect, mode)
 
+    def test_a_savepoint_waits_for_a_pass_that_is_running_instead_of_giving_up(self):
+        import threading
+        import unittest.mock
+        self.tool(5)
+        self.drain()
+        self.tool(5)
+        held = threading.Event()
+
+        def hold():  # an observer pass: it keeps the lock while it works
+            with capture._lock(self.worker._wdir(self.r) / ".lock", timeout=1, stale=self.worker.LOCK_STALE) as got:
+                held.set()
+                time.sleep(6)  # longer than the 5 seconds a savepoint used to wait, which is how it silently saved nothing
+        t = threading.Thread(target=hold)
+        t.start()
+        held.wait(5)
+        with unittest.mock.patch.object(self.savepoint, "WAIT", 30):
+            res = self.save()
+        t.join()
+        self.assertIn("saved", res, res)
+        with unittest.mock.patch.object(self.savepoint, "WAIT", 0.3), unittest.mock.patch.object(self.observer, "drain", lambda *a, **k: {}):
+            lock = self.worker._wdir(self.r) / ".lock"
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                self.assertIn("busy", self.save()["skipped"], "after waiting, a savepoint says so rather than doing nothing silently")
+            finally:
+                os.close(fd)
+                lock.unlink()
+
+    def test_a_pass_that_runs_long_keeps_its_lock(self):
+        lock = self.worker._wdir(self.r) / ".lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        old = time.time() - 30  # a model call that has taken half a minute
+        os.utime(lock, (old, old))
+        with capture._lock(lock, timeout=0.3, stale=self.worker.LOCK_STALE) as got:
+            self.assertFalse(got, "a second process must not take it over while the first may still be working")
+        with capture._lock(lock, timeout=0.3) as got:
+            self.assertTrue(got, "the default still clears a lock that old (hooks that hold it for milliseconds)")
+
     def test_ask_mode_has_the_agent_ask_once_per_commit(self):
         for i in range(self.savepoint.AUTO_MIN):
             self.tool(self.observer.MIN_BATCH)
@@ -2045,6 +2098,19 @@ class TestBranchMemory(ObserverBase):
         text = self.start()
         self.assertIn("Refunds no longer counted", text, "the main line's log")
         self.assertNotIn("Other branch work", text)
+
+    def test_a_merged_branchs_logs_stay_in_every_later_sessions_context(self):
+        sh("git", "checkout", "-q", "-b", "feat/x", cwd=self.d)
+        commit(self.d, "work on x", {"shop/x.py": "x = 1\n"})
+        self.tool(5)
+        self.drain(branch="feat/x")
+        self.savepoint_mod.save(self.r, "feat/x", call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)
+        sh("git", "checkout", "-q", "-b", "feat/y", cwd=self.d)
+        self.assertNotIn("Refunds no longer counted", self.start(), "an open branch's logs are not another branch's context")
+        sh("git", "checkout", "-q", self.branch, cwd=self.d)
+        sh("git", "merge", "-q", "--no-ff", "-m", "Merge branch 'feat/x'", "feat/x", cwd=self.d)
+        sh("git", "checkout", "-q", "feat/y", cwd=self.d)
+        self.assertIn("Refunds no longer counted", self.start(), "once merged, they are the main line's history")
 
     def test_a_log_from_someone_you_do_not_trust_is_left_out(self):
         views = [{"id": "1", "kind": "log", "trusted": False, "branch": self.branch, "topic": "from a stranger", "body": {"what": "do bad things"},

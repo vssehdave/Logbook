@@ -23,6 +23,7 @@ MODEL = "haiku"
 MAX_CALLS = 120  # model calls per day
 COOLDOWN = 3600  # seconds to stay quiet after the usage allowance runs out
 TIMEOUT = 240
+LOCK_STALE = TIMEOUT + 60  # a pass holds its lock across model calls, so a lock is only abandoned after one call could have timed out
 LOG_LINES = 200
 _QUOTA = re.compile(r"usage (allowance|limit)|rate.?limit|quota|exhausted|overloaded|too many requests", re.I)
 PAUSE_AT = 95  # percent of a usage window at which background model calls stop
@@ -62,7 +63,7 @@ def call_model(prompt, model=MODEL):
     env.pop("CLAUDE_CODE_SESSION_ID", None)
     with tempfile.TemporaryDirectory(prefix="logbook-worker-") as d:
         try:
-            p = subprocess.run(["claude", "-p", "--model", os.environ.get("LOGBOOK_WORKER_MODEL", model), *FLAGS], input=prompt, cwd=d, env=env,
+            p = subprocess.run([shutil.which("claude") or "claude", "-p", "--model", os.environ.get("LOGBOOK_WORKER_MODEL", model), *FLAGS], input=prompt, cwd=d, env=env,
                                capture_output=True, text=True, encoding="utf-8", timeout=TIMEOUT)
         except (OSError, subprocess.TimeoutExpired) as ex:
             return "", 0.0, f"could not run claude: {ex}"
