@@ -126,6 +126,15 @@ def spool_event(repo, event, agent, payload):
         checkpoint(repo, item["session"], item["transcript"])
 
 
+def _observe(repo, cfg, flush):
+    """Start an observer pass for the current branch if its queue holds anything. A flush also takes a batch too small to be worth a call by itself."""
+    from . import observer, running, worker
+    if worker.is_on(cfg) and worker.available():
+        branch, _ = running.branch_now(repo)
+        if running.Running(repo, branch).pending_bytes() > 0:
+            observer.spawn_pass(repo, branch, flush=flush)
+
+
 def handle_hook(event, agent, raw):
     """Entry point for `logbook capture`. Returns text for stdout (may be ''). Never raises."""
     repo = None
@@ -144,6 +153,10 @@ def handle_hook(event, agent, raw):
             from . import permissions
             ti = payload.get("tool_input")
             return permissions.hook_output(str(ti.get("command", "")) if isinstance(ti, dict) else "", repo.publish_mode(), str(payload.get("agent_type") or ""))
+        if event in ("PostToolUse", "PostToolUseFailure"):  # queue the tool use for the observer: no model, no git process
+            from . import observer
+            observer.on_tool_use(repo, payload)
+            return ""
         if event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
             from . import recall  # only the prompt-time hooks need retrieval; Stop/SessionEnd stay lean
             files = []
@@ -162,13 +175,15 @@ def handle_hook(event, agent, raw):
             out = recall.hook_json(event, text)
         if event in ("Stop", "PreCompact", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             spool_event(repo, event, agent, payload)
-            if cfg.get("worker") == "on" and event in ("Stop", "SessionEnd") and payload.get("session_id"):  # one pass per finished turn, in the background
-                spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "worker", "--run", str(payload["session_id"])], repo.root)
+            if event in ("Stop", "SessionEnd"):
+                _observe(repo, cfg, flush=event == "SessionEnd")
             if event == "Stop":
                 from . import nudge
                 out = nudge.stop_block(repo, payload)
         if event in ("SessionStart", "PreCompact", "SessionEnd"):
             spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "reconcile", "--quiet"], repo.root)
+        if event == "SessionStart":
+            _observe(repo, cfg, flush=True)  # tool uses a crashed session left in the queue
         return out
     except Exception as ex:  # a hook must never break the agent
         try:
@@ -411,6 +426,8 @@ def claude_snippet(repo, pretool=False):
     mk = lambda ev: [{"hooks": [{"type": "command", "command": f'"{py}" -m getlogbook capture --event {ev} --agent claude-code'}]}]
     hooks = {ev: mk(ev) for ev in CLAUDE_EVENTS}
     hooks["PreToolUse"] = [{"matcher": "Bash", **mk("Permission")[0]}]
+    for ev in ("PostToolUse", "PostToolUseFailure"):  # every tool use goes to the observer's queue; async so the agent never waits for it
+        hooks[ev] = [{"matcher": "*", "hooks": [{**mk(ev)[0]["hooks"][0], "async": True}]}]
     if pretool:
         hooks["PreToolUse"].append({"matcher": "Read|Edit|Write|MultiEdit", **mk("PreToolUse")[0]})
     return {"hooks": hooks}
