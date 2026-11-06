@@ -2808,6 +2808,30 @@ class TestNewsAndTriggers(CliRepo):
         self.run_cli("publish", "--all", "--yes")
         self.assertEqual(outbox.pending_notice(self.r, "s10"), "", "publishing clears it")
 
+    def test_a_teammates_savepoint_notes_cite_correctly_with_a_commit_and_without_one(self):
+        from getlogbook import cites, savepoint
+        rb, bob = self.two_people()
+        sync.sync(self.r)
+        base = g.head_sha(bob)
+        obs = lambda title, mod: {"id": new_id(), "type": "bugfix", "title": title, "subtitle": "", "narrative": f"{title} because of a late load.",
+                                  "facts": [f"{title} fact"], "files_read": [], "files_modified": mod, "t": 0}
+        before = obs("Branch level finding", [])
+        commit(bob, "Fix the export (#7)", {"shop/export.py": "x = 2\n"})
+        after = obs("Commit level finding", ["shop/export.py"])
+        notes = savepoint.notes_from(rb, "main", g.head_sha(bob), base, [before], "1a1b0000000-00000000")
+        notes += savepoint.notes_from(rb, "main", g.head_sha(bob), base, [after], "1a1b0000000-00000000")
+        rb.publish(notes)
+        self.assertTrue(sync.push(rb)["ok"])
+        sync.sync(self.r)
+        views = {v["id"]: v for v in tree.all_views(self.r)[0]}
+        none, some = (cites.record(self.r, views[n.id], i) for i, n in enumerate(notes, 1))
+        self.assertEqual((none["has_commit"], none["commit_header"], none["url"], none["expandable"]), (False, "", "", True))
+        self.assertRegex(none["detail"], r"^Note added by .+ on \d{4}-\d\d-\d\d$")
+        self.assertEqual((some["has_commit"], some["commit_header"], some["expandable"]), (True, "Fix the export (#7)", True))
+        self.assertIn("Commit level finding", some["detail"])
+        self.assertIn(g.head_sha(bob)[:8], some["detail"])
+        self.assertEqual(cites.source_line(self.r, views[notes[0].id])[:16], "Note added by Bo", "the line an agent is given to cite from")
+
     def test_a_merged_branch_is_published_by_the_pull_hook_in_auto_mode_only(self):
         sh("git", "checkout", "-q", "-b", "feat/m", cwd=self.d)
         commit(self.d, "work", {"shop/m.py": "x = 1\n"})
