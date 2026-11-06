@@ -15,8 +15,8 @@ def run(argv):
                 sys.stdout.write(text)
         elif argv[0] == "post-merge":  # after a pull: fetch the shared logs in the background; never push
             r = Repo(".")
-            # in tidy auto the tidy pass does that fetch first, then judges what the pull changed
-            more = ["tidy", "--work", "--quiet"] if r.cfg().get("tidy") == "auto" else ["sync", "--fetch-only"]
+            # in ask and auto mode the tidy pass does that fetch first, then judges what the pull changed
+            more = ["tidy", "--work", "--quiet"] if r.publish_mode() in ("ask", "auto") else ["sync", "--fetch-only"]
             capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", *more], r.root)
         elif argv[0] == "post-commit":  # after a commit: save a log in the background (ask and auto mode; in manual the person runs `logbook log`)
             from . import running, worker
