@@ -128,6 +128,9 @@ def handle_hook(event, agent, raw):
             from . import observer
             observer.on_tool_use(repo, payload)
             return ""
+        if event in ("UserPromptSubmit", "Stop"):  # what the person typed and the agent's final reply: the conversation behind the next log
+            from . import convo
+            convo.record(repo, event, payload)
         if event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
             from . import recall  # only the prompt-time hooks need retrieval; Stop/SessionEnd stay lean
             from . import worker as worker_mod

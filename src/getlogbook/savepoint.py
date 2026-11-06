@@ -14,7 +14,7 @@ import re
 import sys
 import time
 
-from . import capture, ground, observer, running, worker
+from . import capture, convo, ground, observer, running, worker
 from . import git as g
 from .entry import HEX_RE, ID_RE, MAX_LIST, Entry, new_id
 from .safety import redact
@@ -154,15 +154,17 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
         repo.add_private(e)
         qstart, qend = last(run).get("qoff", 0), run.offset()
         run.archive_queue(e.id, qstart, qend)
+        talk, toff = convo.since(run, last(run).get("toff", 0))
+        convo.save(repo, e.id, talk)
         covered = {o["id"] for o in obs}
         keep = [o for o in run.observations() if o["id"] not in covered]  # a pass may have appended since: only the covered ones leave
         if run.obs.exists():
             run.archive(e.id, [o for o in run.observations() if o["id"] in covered])
             run.rewrite(keep)
-        running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qend}))
+        running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qend, "toff": toff}))
     if repo.cfg().get("tidy") == "auto":  # a new log is a moment to tidy: judge changed notes and archive junk, in the background
         capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet"], repo.root)
-    return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "notes": len(covered), "title": e.topic, "by": how}
+    return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "notes": len(covered), "messages": len(talk), "title": e.topic, "by": how}
 
 
 def _entry(repo, branch, sha, obs, fields):

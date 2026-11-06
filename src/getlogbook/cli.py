@@ -7,7 +7,7 @@ import re
 import sys
 import time
 
-from . import capture, cites, ground, nav, recall, sync, tidy, tree
+from . import capture, cites, convo, ground, nav, recall, sync, tidy, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
@@ -215,6 +215,17 @@ def share_copy(r, e, include_evidence, allow_table):
     return c, found
 
 
+def cmd_convo(a):
+    """Print the conversation of a log (private, or shared by you or a teammate). Cleaned like any shared text: it may come from someone else."""
+    r = need_repo()
+    msgs = convo.load(r, a.id)
+    if not msgs:
+        raise SystemExit(f"logbook: no conversation is stored for {a.id}")
+    for m in msgs:
+        out(f"[{m.get('role', '?')}] {safety_sanitize(m['text'], 1500)}")
+    return 0
+
+
 def cmd_publish(a):
     r = need_repo()
     if r.publish_mode() == "never":
@@ -261,21 +272,33 @@ def cmd_publish(a):
         text = c.to_json()
         out(f"--- would publish {eid} (redaction: {len(found)} item(s) masked{': ' + ', '.join(sorted(set(found))) if found else ''})")
         out(text)
-        ready.append((c, digest_hash(text)))
+        talk = convo.shareable(r, eid, a.allow_table) if e.kind == "log" and not a.no_convo else None
+        if talk:
+            data, cf, n = talk
+            out(f"+ conversation behind it: {n} message(s), {len(data)} bytes (redaction: {len(cf)} item(s) masked{': ' + ', '.join(sorted(set(cf))) if cf else ''}); "
+                "what you typed and the agent's final replies, no tool output. The start of each message:")
+            for m in convo.parse(data)[:40]:
+                out(f"    {m.get('role', '?')}: {safety_sanitize(m['text'], 160)}")
+        ready.append((c, digest_hash(text + (digest_hash(talk[0]) if talk else "")), talk[0] if talk else None))
     if not ready:
         out("nothing new to publish.")
         return 0
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
     if not a.yes and _ask("Publish exactly the text above? [y/N] ").strip().lower() != "y":
         raise SystemExit("aborted; nothing published")
-    for c, h in ready:
-        if digest_hash(c.to_json()) != h:
+    for c, h, data in ready:
+        if digest_hash(c.to_json() + (digest_hash(data) if data else "")) != h:
             raise SystemExit("logbook: entry changed after preview; aborting")
-    ref = r.publish([c for c, _ in ready])
+    try:
+        ref = r.publish([c for c, _, _ in ready], {c.id: d for c, _, d in ready if d})
+    except ValueError as ex:
+        raise SystemExit(f"logbook: nothing was published: {ex}")
     keep = getattr(a, "keep", False)
     if not keep:  # a move, not a copy: the shared (redacted) text replaces the private original
-        for c, _ in ready:
+        for c, _, d in ready:
             r.drop_private(c.id)
+            if d:
+                convo.private_path(r, c.id).unlink(missing_ok=True)
     out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref} (local"
         f"{'' if keep else '; the private copy was removed, --keep leaves it'}). `logbook sync` pushes it.")
     if a.push:
@@ -961,6 +984,7 @@ def build_parser():
     s.add_argument("--allow-table", action="store_true")
     s.add_argument("--keep", action="store_true", help="leave the private copy in place after publishing")
     s.add_argument("--no-tidy", action="store_true", help="in auto mode, publish without running tidy first")
+    s.add_argument("--no-convo", action="store_true", help="publish a log without the conversation behind it")
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
     s = add("sync", cmd_sync, "fetch teammates' entries and push yours")
     s.add_argument("--remote", default="origin")
@@ -1033,6 +1057,8 @@ def build_parser():
     s.add_argument("--file", action="append")
     s.add_argument("--session")
     add("stats", cmd_stats, "injection and cost counters")
+    s = add("convo", cmd_convo, "the conversation behind a log: what was typed and the agent's final replies")
+    s.add_argument("id")
     s = add("cites", cmd_cites, "the numbered sources behind an answer in a chat")
     s.add_argument("--session", help="the chat's id (default: the most recent one)")
     s.add_argument("--json", action="store_true")

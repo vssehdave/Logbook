@@ -2582,5 +2582,129 @@ class TestPublishMoves(CliRepo):
         self.assertNotIn(private.id, names)
 
 
+class TestConvo(ObserverBase):
+    """The conversation behind a log: what the person typed and the agent's final replies, redacted, kept per branch, saved with the log, shared with it."""
+
+    def say(self, event, text, **kw):
+        key = "prompt" if event == "UserPromptSubmit" else "last_assistant_message"
+        capture.handle_hook(event, "claude-code", json.dumps({key: text, "session_id": "s1", "prompt_id": "p1", "cwd": str(self.d), **kw}))
+
+    def talk(self):
+        from getlogbook import convo
+        return convo.since(self.run_)[0]
+
+    def test_what_was_typed_and_the_final_reply_are_recorded_and_nothing_else(self):
+        thinking = self.root / "transcript.jsonl"
+        thinking.write_text(json.dumps({"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "PRIVATE MUSING"}]}}), encoding="utf-8")
+        self.say("UserPromptSubmit", "why do totals run high?")
+        self.say("Stop", "Refunds were counted.", transcript_path=str(thinking), thinking="PRIVATE MUSING", tool_response="TOOL OUTPUT")
+        self.assertEqual([(m["role"], m["text"]) for m in self.talk()], [("user", "why do totals run high?"), ("assistant", "Refunds were counted.")])
+        raw = self.run_.dir.joinpath("talk.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("PRIVATE MUSING", raw)
+        self.assertNotIn("TOOL OUTPUT", raw)
+
+    def test_text_a_tool_or_the_harness_injected_empty_replies_and_a_detached_head_are_skipped(self):
+        for text in ("<task-notification>done</task-notification>", "<system-reminder>x</system-reminder>", "<command-name>/clear</command-name>"):
+            self.say("UserPromptSubmit", text)
+        self.say("Stop", "   ")
+        self.assertEqual(self.talk(), [])
+        sh("git", "checkout", "-q", "--detach", cwd=self.d)
+        self.say("UserPromptSubmit", "typed while detached")
+        sh("git", "checkout", "-q", "-", cwd=self.d)
+        self.assertEqual(self.talk(), [])
+
+    def test_the_kill_switch_stops_it_and_a_secret_is_never_stored(self):
+        secret = "sk-ant-api03-Ab3dE9fGh1JkL5mNp7QrS2tUv8WxYz4C"
+        self.say("UserPromptSubmit", f"use the key {secret} and mail dev.person@corp-example.com")
+        (m,) = self.talk()
+        self.assertNotIn(secret, m["text"])
+        self.assertNotIn("corp-example", m["text"])
+        self.run_cli("config", "worker", "off")
+        self.say("UserPromptSubmit", "after the switch")
+        self.assertEqual(len(self.talk()), 1)
+
+    def test_a_savepoint_keeps_only_the_conversation_since_the_last_one(self):
+        from getlogbook import convo, savepoint
+        self.say("UserPromptSubmit", "first question")
+        self.say("Stop", "first answer")
+        self.tool(5)
+        self.drain()
+        a = savepoint.save(self.r, self.branch, call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)
+        self.say("UserPromptSubmit", "second question")
+        self.tool(5)
+        self.drain(OBS_XML.replace("total ignores refunds", "another"))
+        b = savepoint.save(self.r, self.branch, call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)
+        self.assertEqual([m["text"] for m in convo.load(self.r, a["saved"])], ["first question", "first answer"])
+        self.assertEqual([m["text"] for m in convo.load(self.r, b["saved"])], ["second question"])
+        self.assertEqual((a["messages"], b["messages"]), (2, 1))
+
+    def test_a_conversation_over_the_cap_keeps_its_two_ends_and_says_what_it_left_out(self):
+        from getlogbook import convo
+        msgs = [{"role": "user" if i % 2 == 0 else "assistant", "text": f"message {i} " + "x" * 3000} for i in range(200)]
+        lines = convo.fit(msgs, 20000)
+        self.assertLessEqual(sum(len(x.encode()) + 1 for x in lines), 20000)
+        got = [json.loads(x) for x in lines]
+        self.assertTrue(got[0]["text"].startswith("message 0 ") and got[-1]["text"].startswith("message 199 "))
+        (gap,) = [m for m in got if m["role"] == "gap"]
+        self.assertRegex(gap["text"], r"\[\d+ messages left out")
+        self.assertEqual(convo.fit(msgs[:3], 20000), [json.dumps(m, ensure_ascii=False) for m in msgs[:3]], "a short one is kept whole")
+
+    def saved_log(self, *pairs):
+        from getlogbook import savepoint
+        for event, text in pairs:
+            self.say(event, text)
+        self.tool(5)
+        self.drain(OBS_XML.replace("total ignores refunds", "t" + str(len(self.r.load_private()))))
+        return savepoint.save(self.r, self.branch, call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)["saved"]
+
+    def test_publishing_a_log_carries_its_conversation_into_the_shared_tree_and_a_second_publish_keeps_it(self):
+        from getlogbook import convo
+        big = "y" * 5000
+        first = self.saved_log(*[("UserPromptSubmit" if i % 2 == 0 else "Stop", f"m{i} {big}") for i in range(30)])  # about 150 KB: past the 64 KB entry limit
+        code, text = self.run_cli("publish", first, "--yes")
+        self.assertEqual(code or 0, 0, text)
+        self.assertIn("conversation behind it", text)
+        data = self.r.shared_convo(first)
+        self.assertIsNotNone(data)
+        self.assertGreater(len(data), 100_000)
+        self.assertFalse(convo.private_path(self.r, first).exists(), "a move, like the entry")
+        second = self.saved_log(("UserPromptSubmit", "another question"))
+        self.assertEqual(self.run_cli("publish", second, "--yes")[0] or 0, 0)
+        self.assertEqual(self.r.shared_convo(first), data, "rewriting the ref did not drop the large conversation")
+        self.assertIn("m0 ", self.run_cli("convo", first)[1])
+        self.assertIn("another question", self.run_cli("convo", second)[1])
+
+    def test_no_convo_publishes_the_log_alone_and_the_total_cap_refuses_before_writing(self):
+        a = self.saved_log(("UserPromptSubmit", "kept private"))
+        self.assertEqual(self.run_cli("publish", a, "--yes", "--no-convo")[0] or 0, 0)
+        self.assertIsNone(self.r.shared_convo(a))
+        b = self.saved_log(("UserPromptSubmit", "too much for the cap"))
+        (self.d / ".logbook").mkdir(exist_ok=True)
+        (self.d / ".logbook" / "policy.json").write_text(json.dumps({"max_convo_total": 10}), encoding="utf-8")
+        with self.assertRaises(SystemExit) as refused:
+            self.run_cli("publish", b, "--yes")
+        self.assertIn("nothing was published", str(refused.exception))
+        self.assertIsNone(self.r.shared_convo(b))
+
+    def test_purging_a_log_takes_its_conversation_and_a_plain_clone_does_not_download_it(self):
+        from getlogbook import sync
+        a = self.saved_log(("UserPromptSubmit", "to be purged"))
+        b = self.saved_log(("UserPromptSubmit", "to be kept"))
+        self.run_cli("publish", a, b, "--yes")
+        remote = self.root / "remote.git"
+        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
+        sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
+        sh("git", "push", "-q", "origin", "HEAD", cwd=self.d)
+        self.assertTrue(sync.push(self.r)["ok"])
+        clone = self.root / "clone"
+        sh("git", "clone", "-q", "file://" + str(remote).replace("\\", "/"), str(clone), cwd=self.root)
+        refs = subprocess.run(["git", "for-each-ref", "refs/logbook", "refs/logbook-remote"], cwd=clone, capture_output=True, text=True).stdout
+        self.assertEqual(refs.strip(), "", "a plain clone has no logbook refs, so no conversations")
+        self.r.purge(a)
+        tree_now = subprocess.run(["git", "ls-tree", "-r", "--name-only", self.r.own_ref()], cwd=self.d, capture_output=True, text=True).stdout.split()
+        self.assertNotIn(f"convo/{a}.jsonl", tree_now)
+        self.assertIn(f"convo/{b}.jsonl", tree_now)
+
+
 if __name__ == "__main__":
     unittest.main()

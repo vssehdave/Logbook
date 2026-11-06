@@ -148,6 +148,12 @@ def changed_paths(cwd, sha):
     return [l for l in out.splitlines() if l] if rc == 0 else []
 
 
+def blob_at(cwd, ref, path):
+    """The bytes of `path` in the tree of `ref`, or None."""
+    p = subprocess.run(["git", "-C", str(cwd), "cat-file", "blob", f"{ref}:{path}"], capture_output=True, env=_env())
+    return p.stdout if p.returncode == 0 else None
+
+
 def cat_blobs(cwd, oids):
     """oid -> bytes for many blobs in one process."""
     if not oids:

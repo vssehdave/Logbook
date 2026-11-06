@@ -124,6 +124,19 @@ pushes). `logbook tidy` does the same fetch first (`--no-sync` skips it). Nothin
 
 The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A repo policy that turns publishing off (`.logbook/policy.json`) still wins over every mode.
 
+## The conversation behind a log
+
+Two hooks record, with no model, what you typed and the agent's final reply of each turn (`.git/logbook/running/<branch>/talk.jsonl`). Nothing else: not the agent's
+thinking, not tool calls or their output, and not text a tool or Claude Code injected. Secrets and emails are masked before anything is written. `logbook log` keeps
+the part since the last savepoint with the log (`logbook convo <log id>` prints it). `logbook publish` carries it into the shared tree next to the log
+(`convo/<log id>.jsonl`), redacted again with your deny list, pasted table rows replaced, and shows the start of every message in the preview; `--no-convo` publishes
+the log alone. `logbook config worker off` stops this recording too.
+
+It cannot clog the repository: one conversation is at most 200 KB (a longer one keeps its start and its end and says how many messages it left out), all of your
+conversations on the shared ref at most 30 MB (`max_convo_total` in `.logbook/policy.json`; publishing past it is refused, nothing is written), and a plain `git clone`
+or `git fetch` never downloads logbook refs, so teammates who do not use Logbook never carry them. (The `branches` transport puts them under `refs/heads` and a clone
+does fetch those.) `logbook purge <log id>` removes the conversation with the log. Version 0.0.6 and earlier ignore the new folder, and a publish by one of them drops it from your ref.
+
 ## Tidy
 
 Notes go out of date: a later commit changes the files a note is about. `logbook tidy` fetches the shared logs first, then lists your notes and logs that may be outdated
@@ -166,6 +179,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `note` | allow |
 | `ask` | allow |
 | `cites` | allow |
+| `convo` | allow |
 | `log` | allow |
 | `status` | allow |
 | `summarize` | allow |
