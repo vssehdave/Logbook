@@ -29,7 +29,7 @@ injected into an agent's prompt. The only measurements so far are two small smok
     logbook uninstall      # puts every file back (your notes are kept)
 
 One command starts the repo, fetches teammates' notes when there is a remote, chains a git pre-push hook and post-merge/post-rewrite hooks (the pre-push one only reminds
-you of unshared notes, never blocks a push and never sends notes: `logbook sync` does), and for each agent it finds writes that agent's hooks, an
+you of unshared notes, never blocks a push; in `auto` mode it also starts a publish of the queue, in `ask` mode it leaves a note for your next prompt), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
 `.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
@@ -142,6 +142,15 @@ conversations on the shared ref at most 30 MB (`max_convo_total` in `.logbook/po
 or `git fetch` never downloads logbook refs, so teammates who do not use Logbook never carry them. (The `branches` transport puts them under `refs/heads` and a clone
 does fetch those.) `logbook purge <log id>` removes the conversation with the log. Version 0.0.6 and earlier ignore the new folder, and a publish by one of them drops it from your ref.
 
+## Sync, publish and the news
+
+`logbook sync` only brings things in: it fetches what teammates shared, merges your own shelf's two copies if you work from two machines, and prints a short **news** digest of
+what is new since you last looked (who shared how many notes and logs, on which branches, the newest topic). A fetch a git hook started has no terminal to print to, so its news is
+shown to the agent once, at the next prompt or session start. Sync never pushes and never asks. `logbook publish` is the step that sends: it tidies (in `ask` and `auto` mode), fetches,
+moves the queued entries (and the conversations behind logs) into your shared ref, and pushes it (`--no-push` stops before the push). In `auto` mode a **branch merged** (seen by the
+pull hook) or a **`git push`** starts a publish by itself, in the background; the push it makes does not start another. In `ask` mode a `git push` leaves a marker and the agent is
+told once per session to show you the queue and ask. In `manual` mode you run `logbook publish`.
+
 ## Tidy
 
 Notes go out of date: a later commit changes the files a note is about. `logbook tidy` fetches the shared logs first, then lists your notes and logs that may be outdated
@@ -192,7 +201,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `tidy` | allow; `--apply`, `--accept`, `--work`, `--restore` asks |
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
-| `sync` | never: ask, manual: ask, ask: ask, auto: allow |
+| `sync` | allow |
 | `purge` | ask |
 | `gc` | ask |
 | `trust` | ask |
@@ -214,7 +223,8 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
     logbook publish                           # lists your private notes that are not shared yet and asks which
     logbook publish --all                     # preview every one of them with redaction, confirm once
     logbook summarize                         # the notes under the repo or branch, for an agent to write a summary
-    logbook sync                              # fetch teammates' entries, push yours
+    logbook sync                              # fetch teammates' entries and merge them in; says what is new; never pushes
+    logbook queue                             # what publish will share; --add / --remove ids; `logbook note -q` queues a note
     logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match
     logbook ask repo | branch:<name> | commit:<sha> | note:<id>   # walk the tree from the top (docs/SUMMARY-TREE.md)
     logbook cites                             # the numbered sources behind an answer in this chat (links, names, dates)

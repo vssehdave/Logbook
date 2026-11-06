@@ -135,14 +135,16 @@ def push(repo, remote="origin", force=False):
     return {"ok": False, "error": err.strip(), "ref": ref}
 
 
-def sync(repo, remote="origin", fetch_only=False, depth=None):
+def sync(repo, remote="origin", fetch_only=True, depth=None):
+    """Fetch what teammates shared and merge your own shelf's two copies. It never pushes (`publish` does); `fetch_only` is kept for older callers.
+    The result has "news": what is new from teammates since the last look (also kept for the next prompt, see news.py)."""
+    from . import news
     repo.adopt_legacy()
     out = {"fetch": fetch(repo, remote, depth)}
     if out["fetch"]["ok"]:
         out["merge"] = merge_remote(repo, remote)[0]
-    if not fetch_only:
-        out["push"] = push(repo, remote)
     shared, _ = repo.load_shared()
+    out["news"] = news.update(repo) if out["fetch"]["ok"] else []
     out["writers"] = len({l.user for l in shared})
     out["entries"] = len(shared)
     return out

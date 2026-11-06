@@ -13,12 +13,11 @@ import shlex
 # subcommand -> decision. "mode" means: follow the publish mode (see `decide`). Not listed: no opinion.
 TABLE = {
     "note": "allow", "ask": "allow", "cites": "allow", "convo": "allow", "log": "allow", "queue": "allow", "status": "allow", "summarize": "allow",
-    "tidy": "allow", "worker": "allow", "publish": "mode", "sync": "mode",
+    "tidy": "allow", "worker": "allow", "publish": "mode", "sync": "allow",
     "purge": "ask", "gc": "ask", "trust": "ask", "config": "ask", "setup": "ask", "uninstall": "ask",
 }
-# publish: never (policy) and manual deny, ask lets the normal prompt run, auto allows. sync: allow only in auto mode, else ask.
-MODE_RULES = {"publish": {"never": "deny", "manual": "deny", "ask": "ask", "auto": "allow"},
-              "sync": {"never": "ask", "manual": "ask", "ask": "ask", "auto": "allow"}}
+# publish: never (policy) and manual deny, ask lets the normal prompt run, auto allows. sync only fetches and merges, so it is always allowed.
+MODE_RULES = {"publish": {"never": "deny", "manual": "deny", "ask": "ask", "auto": "allow"}}
 ASK_FLAG = {"tidy": ("--apply", "--accept", "--work", "--restore"), "worker": ("--drain",)}  # the flag that turns an allowed command into one that asks: applying a tidy is the person's approval step, a worker pass spends their quota
 NAMES = ("logbook", "getlogbook")
 _HEREDOC = re.compile(r"\s<<-?\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*$")

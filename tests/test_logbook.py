@@ -312,7 +312,7 @@ class TestPolicyAndTrust(Base):
         self.cd(d)
         e = capture.make_entry(r, "finding", "t", {"summary": "s"})
         with self.assertRaises(SystemExit):
-            cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False})())
+            cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False, "no_push": False})())
 
 
 class TestRichNotes(Base):
@@ -334,7 +334,7 @@ class TestRichNotes(Base):
         self.cd(d)
         e = capture.make_entry(r, "finding", "t" * 200, {k: "word " * 400 for k in BODY_FIELDS if k != "evidence"},
                                paths=["f%d/g.txt" % i for i in range(40)])
-        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False})())
+        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False, "no_push": False})())
         shared, _ = r.load_shared()
         pub = next(l.entry for l in shared if l.entry.id == e.id)
         for k in BODY_FIELDS:
@@ -1244,11 +1244,10 @@ class TestPermissions(CliRepo):
         return d[0] if d else None
 
     def test_the_table(self):
-        for sub in ("note", "ask", "cites", "log", "status", "summarize"):
+        for sub in ("note", "ask", "cites", "log", "status", "summarize", "sync"):
             for mode in ("never", "manual", "ask", "auto"):
                 self.assertEqual(self.decide(f"logbook {sub} x", mode), "allow", sub)
         self.assertEqual([self.decide("logbook publish abc", m) for m in ("never", "manual", "ask", "auto")], ["deny", "deny", "ask", "allow"])
-        self.assertEqual([self.decide("logbook sync", m) for m in ("never", "manual", "ask", "auto")], ["ask", "ask", "ask", "allow"])
         for sub in ("purge", "gc", "trust", "config", "setup", "uninstall"):
             self.assertEqual(self.decide(f"logbook {sub}", "auto"), "ask", sub)
         self.assertIsNone(self.decide("logbook someday-command"), "a subcommand not in the table: no opinion")
@@ -2568,20 +2567,22 @@ class TestPublishMoves(CliRepo):
         self.assertEqual(p.returncode, 0, p.stderr)
         return p.stderr
 
-    def test_git_push_only_reminds_and_logbook_sync_is_what_pushes_notes(self):
+    def test_git_push_only_reminds_and_logbook_publish_is_what_pushes_notes(self):
         self.remote_with_hooks()
+        self.run_cli("config", "publish", "manual")  # a hook in ask or auto mode would publish on the push; this is about the reminder
         e = capture.make_entry(self.r, "finding", "one", {"summary": "s", "why": "w"})
-        self.run_cli("publish", e.id, "--yes")
+        self.run_cli("publish", e.id, "--yes", "--no-push")
         self.assertIn("published notes are not pushed yet", self.git_push())
         self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d), "git push never sends notes")
         code, text = self.run_cli("sync")
         self.assertEqual(code, 0, text)
+        self.assertIn("Nothing was pushed", text)
+        self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d), "sync never pushes")
+        e2 = capture.make_entry(self.r, "finding", "two", {"summary": "s", "why": "w"})
+        code, text = self.run_cli("publish", e2.id, "--yes")
+        self.assertIn("pushed.", text)
         self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
         self.assertNotIn("not pushed yet", self.git_push(), "nothing left to remind about")
-        e2 = capture.make_entry(self.r, "finding", "two", {"summary": "s", "why": "w"})
-        self.run_cli("publish", e2.id, "--yes")
-        self.assertIn("not pushed yet", self.git_push())
-        self.assertEqual(self.run_cli("sync")[0], 0, "a second sync with the hook installed works too")
 
     def test_a_closed_stdin_is_no_answer_not_a_traceback(self):
         old = sys.stdin
@@ -2714,6 +2715,117 @@ class TestQueue(CliRepo):
         self.assertEqual(shared & {queued.id, left_out.id}, {queued.id})
         self.assertEqual(self.queued(), set())
         self.assertEqual([e.id for e in self.r.unpublished()], [left_out.id])
+
+
+class TestNewsAndTriggers(CliRepo):
+    """sync only brings things in and says what is new; publish tidies, fetches, moves and pushes; a git push or a merged branch starts a publish by itself."""
+
+    CK = {"paths": [0, 0], "names": [0, 0], "commits": [0, 0], "files": [], "missing": [], "evidence": True, "at": ""}
+
+    def two_people(self):
+        """This repo is alice's. Bob is a clone that shares through the same remote."""
+        remote = self.root / "remote.git"
+        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
+        url = "file://" + str(remote).replace("\\", "/")
+        sh("git", "remote", "add", "origin", url, cwd=self.d)
+        sh("git", "push", "-q", "origin", "HEAD", cwd=self.d)
+        sh("git", "clone", "-q", url, str(self.root / "bob"), cwd=self.root)
+        bob = self.root / "bob"
+        sh("git", "config", "user.email", "b@x.io", cwd=bob)
+        sh("git", "config", "user.name", "Bob", cwd=bob)
+        rb = Repo(bob)
+        rb.init()
+        rb.save_cfg({**rb.cfg(), "display": "Bob"})
+        return rb, bob
+
+    def bob_shares(self, rb, topic):
+        e = capture.make_entry(rb, "finding", topic, {"summary": "s", "why": "w", "evidence": "e"}, provenance="worker-written", checks=self.CK)
+        rb.publish([e])
+        self.assertTrue(sync.push(rb)["ok"])
+
+    def test_sync_fetches_says_what_is_new_once_and_never_pushes(self):
+        rb, _ = self.two_people()
+        self.assertIn("no news", self.run_cli("sync")[1], "the first look only learns what is already there")
+        mine = capture.make_entry(self.r, "finding", "mine", {"summary": "s", "why": "w"})
+        self.r.publish([mine])
+        self.bob_shares(rb, "Bob found the refund bug")
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn("Bob shared 1 note", text)
+        self.assertIn("Bob found the refund bug", text)
+        self.assertIn("Nothing was pushed", text)
+        self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d), "sync never pushes")
+        self.assertIn("no news", self.run_cli("sync")[1], "and says it once")
+
+    def test_news_nobody_saw_is_shown_to_the_agent_at_the_next_prompt_once(self):
+        rb, _ = self.two_people()
+        sync.sync(self.r)
+        self.bob_shares(rb, "Bob changed the export")
+        sync.sync(self.r)  # a fetch started by a git hook: no terminal saw it
+        payload = json.dumps({"cwd": str(self.d), "session_id": "s1", "prompt": "hello"})
+        said = capture.handle_hook("UserPromptSubmit", "claude-code", payload)
+        self.assertIn("News from the shared log", said)
+        self.assertIn("Bob changed the export", said)
+        self.assertNotIn("News from the shared log", capture.handle_hook("UserPromptSubmit", "claude-code", payload))
+
+    def test_publish_tidies_fetches_moves_and_pushes_and_no_push_stops_before_the_last_step(self):
+        self.two_people()
+        a = capture.make_entry(self.r, "finding", "first", {"summary": "s", "why": "w"})
+        b = capture.make_entry(self.r, "finding", "second", {"summary": "s", "why": "w"})
+        code, text = self.run_cli("publish", a.id, "--yes", "--no-push")
+        self.assertNotIn("pushed.", text)
+        self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+        code, text = self.run_cli("publish", b.id, "--yes")
+        self.assertIn("pushed.", text)
+        self.assertIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d))
+        self.assertEqual(self.r.unpublished(), [])
+
+    def hook(self, name):
+        import unittest.mock
+        from getlogbook import hookmain
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            self.assertEqual(hookmain.run([name]), 0)
+        return spawn.call_args.args[0][-3:] if spawn.called else None
+
+    def test_a_git_push_publishes_the_queue_in_auto_mode_and_leaves_a_note_in_ask_mode(self):
+        from getlogbook import outbox
+        capture.make_entry(self.r, "finding", "queued", {"summary": "s", "why": "w"})
+        tidy.queue_pass(self.r)
+        self.run_cli("config", "publish", "manual")
+        self.assertIsNone(self.hook("pre-push"), "manual: nothing starts")
+        self.run_cli("config", "publish", "auto")
+        self.assertEqual(self.hook("pre-push"), ["publish", "--all", "--yes"])
+        self.addCleanup(os.environ.pop, "LOGBOOK_PUBLISHING", None)
+        self.assertIsNone(self.hook("pre-push"), "the push that publish makes does not start another publish")
+        os.environ.pop("LOGBOOK_PUBLISHING")
+        self.run_cli("config", "publish", "ask")
+        self.assertIsNone(self.hook("pre-push"), "ask: a hook has no one to ask, so it starts nothing")
+        said = capture.handle_hook("SessionStart", "claude-code", json.dumps({"cwd": str(self.d), "session_id": "s9"}))
+        self.assertIn("ready to publish", said)
+        self.assertIn("you pushed", said)
+        self.assertNotIn("ready to publish", capture.handle_hook("UserPromptSubmit", "claude-code", json.dumps({"cwd": str(self.d), "session_id": "s9", "prompt": "next"})),
+                         "told once per session")
+        self.run_cli("publish", "--all", "--yes")
+        self.assertEqual(outbox.pending_notice(self.r, "s10"), "", "publishing clears it")
+
+    def test_a_merged_branch_is_published_by_the_pull_hook_in_auto_mode_only(self):
+        sh("git", "checkout", "-q", "-b", "feat/m", cwd=self.d)
+        commit(self.d, "work", {"shop/m.py": "x = 1\n"})
+        e = capture.make_entry(self.r, "finding", "on the branch", {"summary": "s", "why": "w"})
+        tidy.queue_pass(self.r)
+        main = tree.default_branch(self.r)
+        sh("git", "checkout", "-q", main, cwd=self.d)
+        sh("git", "merge", "-q", "--no-ff", "-m", "Merge branch 'feat/m'", "feat/m", cwd=self.d)
+        self.run_cli("config", "publish", "ask")
+        self.assertEqual(self.hook("post-merge")[-2:], ["--work", "--quiet"], "ask: tidy only; the agent is told at session start")
+        self.run_cli("config", "publish", "auto")
+        import unittest.mock
+        from getlogbook import hookmain
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            hookmain.run(["post-merge"])
+        self.addCleanup(os.environ.pop, "LOGBOOK_PUBLISHING", None)
+        self.assertEqual([c.args[0][-3:] for c in spawn.call_args_list], [["tidy", "--work", "--quiet"], ["publish", "--merged", "--yes"]])
+        self.assertIn(e.id, {x.id for x in self.r.unpublished()})
 
 
 class TestConvo(ObserverBase):
