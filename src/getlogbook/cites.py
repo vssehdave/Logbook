@@ -148,7 +148,7 @@ def record(repo, v, n):
     else:
         detail = f"Note added by {v['author']} on {date}"
     return {"n": n, "mark": sup(n), "id": v["id"], "header": v["topic"], "commit_header": commit_header if sha else "", "url": url, "author": v["author"],
-            "date": date, "scope": v["scope"], "mine": v["mine"], "has_commit": bool(sha), "expandable": expandable,
+            "date": date, "scope": v["scope"], "mine": v["mine"], "has_commit": bool(sha), "expandable": expandable, "log": v.get("log", ""),
             "detail": detail if expandable else ""}
 
 

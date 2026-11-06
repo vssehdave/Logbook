@@ -5,11 +5,10 @@ Two hooks feed it, with no model and no git process: the prompt hook (the person
 (a task notice, a system reminder) is skipped. Everything is redacted before it is written, so a secret pasted into a prompt is not stored at all.
 
     .git/logbook/running/<branch>/talk.jsonl   one line per message, only ever appended
-    .git/logbook/convo/<log id>.jsonl          the messages one savepoint covers, trimmed to fit (private)
-    convo/<log id>.jsonl                       the same in the shared tree, written by `logbook publish` next to the log, redacted again
+    .git/logbook/convo/<log id>.jsonl          the messages one savepoint covers, trimmed to fit
 
-A conversation too long for the cap keeps its beginning and its end and says how many messages were left out. Git compresses what it stores, so the size that
-matters is the text: a cap per conversation and a cap on all of one person's conversations bound what the repository grows by.
+All of it stays on this machine, like the log it belongs to: logs and conversations are never published, so nobody else's repository carries them. A conversation too
+long for the cap keeps its beginning and its end and says how many messages were left out.
 """
 from __future__ import annotations
 
@@ -18,9 +17,10 @@ import os
 import time
 
 from . import running
-from .safety import looks_tabular, redact
-from .store import MAX_CONVO, atomic_write
+from .safety import redact
+from .store import atomic_write
 
+MAX_CONVO = 200_000  # bytes kept of one log's conversation
 MAX_MSG = 6000  # characters of one message kept (the start and the end of it)
 SKIP = ("<task-notification", "<system-reminder", "<command-", "<local-command")  # what the harness or a tool injects as a "prompt"
 ROLES = {"UserPromptSubmit": "user", "Stop": "assistant"}
@@ -133,31 +133,7 @@ def parse(data):
 
 
 def load(repo, log_id):
-    """The messages of a log's conversation: the private copy, else the shared one (yours, or a teammate's after a sync). [] when there is none."""
-    try:
-        return parse(private_path(repo, log_id).read_text(encoding="utf-8"))
-    except OSError:
-        return parse(repo.shared_convo(log_id) or b"")
-
-
-def shareable(repo, log_id, allow_table=False):
-    """(bytes to publish, findings, message count) for a log's private conversation, redacted again with today's deny list, or None when it has none.
-    Pasted table rows are replaced, not published (unless allowed)."""
-    msgs = load_private(repo, log_id)
-    if not msgs:
-        return None
-    deny, found, out = repo.cfg().get("deny", []), [], []
-    for m in msgs:
-        text, f = redact(m["text"], deny)
-        found += f
-        if not allow_table and looks_tabular(text):
-            text, found = "[pasted rows left out]", found + ["table-rows"]
-        out.append({**{k: m[k] for k in ("t", "session", "prompt", "role") if k in m}, "text": text})
-    lines = fit(out)
-    return ("\n".join(lines) + "\n").encode("utf-8"), found, len(lines)
-
-
-def load_private(repo, log_id):
+    """The messages of a log's conversation. [] when there is none (a log you did not save here has none)."""
     try:
         return parse(private_path(repo, log_id).read_text(encoding="utf-8"))
     except OSError:

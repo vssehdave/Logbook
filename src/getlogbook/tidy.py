@@ -520,7 +520,7 @@ def restore(repo, ids):
 
 
 def queue_pass(repo):
-    """Keep the publish queue (outbox.py) right, with no model: a log is queued when it is saved; a note when it passes its checks (it names nothing that is missing and
+    """Keep the publish queue (outbox.py) right, with no model: a note is queued when it passes its checks (it names nothing that is missing and
     carries evidence), is not resolved, and is not a person's own note in manual mode (those go in with `note -q`); a status record when its note is queued or
     shared. An entry that was published, archived, or stopped passing leaves again, unless the person queued it. Returns {"queued": [ids], "removed": [ids]}."""
     from . import outbox, tree
@@ -534,7 +534,7 @@ def queue_pass(repo):
         if e.status:
             return False  # decided below, once the notes are
         if e.kind == "log":
-            return True
+            return False  # logs and their conversations stay on this machine
         if (views.get(e.id) or {}).get("status") == "resolved":
             return False
         if e.provenance == "user-written":

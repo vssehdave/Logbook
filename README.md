@@ -114,11 +114,11 @@ One setting, `logbook config publish`, decides how much happens by itself:
 | `auto` | by itself, after every commit, after 5 or more new observations that follow a commit, and when a session ends | when a branch looks merged, the agent is told at session start and runs `logbook publish --branch <name> --yes` |
 
 **The publish queue.** `logbook publish` shares only what is in the queue (`logbook queue` shows it: note id, commit, branch, the note). Tidy keeps it, in every mode, right
-after a log is saved: a log is queued when it is saved; a note when it names nothing that is missing and carries evidence, and is not resolved; a person's own note in `ask` and
+after a log is saved: a note is queued when it names nothing that is missing and carries evidence, and is not resolved; a person's own note in `ask` and
 `auto` mode. In `manual` mode you queue your own note with `logbook note -q`. An entry that was archived, published, or stopped passing leaves the queue again; what you queued by hand
 (`-q`, `logbook queue --add <id>`) stays until it is published, and `logbook queue --remove <id>` takes anything out. `logbook publish <id>` still shares one entry by name.
 
-**Publishing is by branch.** `logbook publish --branch <name>` moves every private log and note filed under that branch to the shared log (the usual redacted preview
+**Publishing is by branch.** `logbook publish --branch <name>` moves every queued note filed under that branch to the shared log (the usual redacted preview
 and checks run first; what they refuse stays private). `logbook publish --merged` does that for every branch that looks merged into the main line. Git alone can see two
 signs: a merge commit on the main line names the branch, or a commit one of the branch's own entries is anchored to is now in the main line's history. A squash merge
 leaves neither, so in `ask` and `auto` mode the agent is told at session start which branches look merged, and, if it has the GitHub tools, can confirm a squashed pull
@@ -129,25 +129,20 @@ pushes). `logbook tidy` does the same fetch first (`--no-sync` skips it). Nothin
 
 The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A repo policy that turns publishing off (`.logbook/policy.json`) still wins over every mode.
 
-## The conversation behind a log
+## Logs stay on your machine; notes are what is shared
 
-Two hooks record, with no model, what you typed and the agent's final reply of each turn (`.git/logbook/running/<branch>/talk.jsonl`). Nothing else: not the agent's
-thinking, not tool calls or their output, and not text a tool or Claude Code injected. Secrets and emails are masked before anything is written. `logbook log` keeps
-the part since the last savepoint with the log (`logbook convo <log id>` prints it). `logbook publish` carries it into the shared tree next to the log
-(`convo/<log id>.jsonl`), redacted again with your deny list, pasted table rows replaced, and shows the start of every message in the preview; `--no-convo` publishes
-the log alone. `logbook config worker off` stops this recording too.
-
-It cannot clog the repository: one conversation is at most 200 KB (a longer one keeps its start and its end and says how many messages it left out), all of your
-conversations on the shared ref at most 30 MB (`max_convo_total` in `.logbook/policy.json`; publishing past it is refused, nothing is written), and a plain `git clone`
-or `git fetch` never downloads logbook refs, so teammates who do not use Logbook never carry them. (The `branches` transport puts them under `refs/heads` and a clone
-does fetch those.) `logbook purge <log id>` removes the conversation with the log. Version 0.0.6 and earlier ignore the new folder, and a publish by one of them drops it from your ref.
+A log (`logbook log`) is the record of a session, and the conversation behind it (what you typed and the agent's final replies, recorded by two hooks with no model; never
+thinking, tool calls or tool output; secrets and emails masked as they are written) is kept with it in `.git/logbook/convo/`. **Neither is ever published.** Only notes go
+to the shared ref, so there is nothing of unknown size or content to carry in a public repository. Every note made at a savepoint keeps the id of its log in `sources`: for
+your own notes that is a way in (`logbook ask note:<id>` says `from your log <log id>`, `logbook convo <log id>` prints the conversation, and `logbook cites --json` carries the
+log id for the band); for a teammate's note the log is not on your machine, so it just shows as a note. `logbook config worker off` stops the recording.
 
 ## Sync, publish and the news
 
 `logbook sync` only brings things in: it fetches what teammates shared, merges your own shelf's two copies if you work from two machines, and prints a short **news** digest of
 what is new since you last looked (who shared how many notes and logs, on which branches, the newest topic). A fetch a git hook started has no terminal to print to, so its news is
 shown to the agent once, at the next prompt or session start. Sync never pushes and never asks. `logbook publish` is the step that sends: it tidies (in `ask` and `auto` mode), fetches,
-moves the queued entries (and the conversations behind logs) into your shared ref, and pushes it (`--no-push` stops before the push). In `auto` mode a **branch merged** (seen by the
+moves the queued notes into your shared ref, and pushes it (`--no-push` stops before the push). In `auto` mode a **branch merged** (seen by the
 pull hook) or a **`git push`** starts a publish by itself, in the background; the push it makes does not start another. In `ask` mode a `git push` leaves a marker and the agent is
 told once per session to show you the queue and ask. In `manual` mode you run `logbook publish`.
 

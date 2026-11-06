@@ -43,6 +43,9 @@ def detail(v):
             rows.append(f"    {k}: {txt(v, v['body'][k])}")
     if v.get("status", "open") != "open":  # set by its author's status record; the reason and the commits come from that record
         rows.append(f"    status: {v['status']} (record {v['status_id']}; commits {', '.join(c[:8] for c in v['status_commits']) or '-'}): {txt(v, v['status_reason'], 300)}")
+    home = v.get("log", "")
+    if home:  # a note of yours made at a savepoint: the log it came from is on this machine
+        rows.append(f"    from your log {home}: `logbook ask note:{home}` for the log, `logbook convo {home}` for the conversation")
     if not v["mine"]:
         rows.append("    (text from another writer is shown sanitised: links, code and instruction-like lines are removed)")
     return "\n".join(rows)
@@ -219,7 +222,7 @@ def share_copy(r, e, include_evidence, allow_table):
 
 
 def cmd_convo(a):
-    """Print the conversation of a log (private, or shared by you or a teammate). Cleaned like any shared text: it may come from someone else."""
+    """Print the conversation behind one of your own logs (it never leaves this machine)."""
     r = need_repo()
     msgs = convo.load(r, a.id)
     if not msgs:
@@ -267,6 +270,9 @@ def cmd_publish(a):
         e = r.get_private(eid)
         if not e:
             raise SystemExit(f"logbook: no private entry {eid}")
+        if e.kind == "log":
+            out(f"skipped {eid}: a log stays on this machine; only notes are published.")
+            continue
         c, found = share_copy(r, e, a.include_evidence, a.allow_table)
         dup = r.duplicate_of(c)
         if dup and dup[0] == "same-id":
@@ -278,14 +284,7 @@ def cmd_publish(a):
         text = c.to_json()
         out(f"--- would publish {eid} (redaction: {len(found)} item(s) masked{': ' + ', '.join(sorted(set(found))) if found else ''})")
         out(text)
-        talk = convo.shareable(r, eid, a.allow_table) if e.kind == "log" and not a.no_convo else None
-        if talk:
-            data, cf, n = talk
-            out(f"+ conversation behind it: {n} message(s), {len(data)} bytes (redaction: {len(cf)} item(s) masked{': ' + ', '.join(sorted(set(cf))) if cf else ''}); "
-                "what you typed and the agent's final replies, no tool output. The start of each message:")
-            for m in convo.parse(data)[:40]:
-                out(f"    {m.get('role', '?')}: {safety_sanitize(m['text'], 160)}")
-        ready.append((c, digest_hash(text + (digest_hash(talk[0]) if talk else "")), talk[0] if talk else None))
+        ready.append((c, digest_hash(text)))
     if not ready:
         out("nothing new to publish.")
         return 0
@@ -299,21 +298,19 @@ def cmd_publish(a):
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
     if not a.yes and _ask("Publish exactly the text above? [y/N] ").strip().lower() != "y":
         raise SystemExit("aborted; nothing published")
-    for c, h, data in ready:
-        if digest_hash(c.to_json() + (digest_hash(data) if data else "")) != h:
+    for c, h in ready:
+        if digest_hash(c.to_json()) != h:
             raise SystemExit("logbook: entry changed after preview; aborting")
     try:
-        ref = r.publish([c for c, _, _ in ready], {c.id: d for c, _, d in ready if d})
+        ref = r.publish([c for c, _ in ready])
     except ValueError as ex:
         raise SystemExit(f"logbook: nothing was published: {ex}")
-    outbox.drop(r, [c.id for c, _, _ in ready])
+    outbox.drop(r, [c.id for c, _ in ready])
     outbox.clear_pending(r)
     keep = getattr(a, "keep", False)
     if not keep:  # a move, not a copy: the shared (redacted) text replaces the private original
-        for c, _, d in ready:
+        for c, _ in ready:
             r.drop_private(c.id)
-            if d:
-                convo.private_path(r, c.id).unlink(missing_ok=True)
     out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref}"
         f"{'' if keep else ' (the private copy was removed, --keep leaves it)'}.")
     if remote and not a.no_push:
@@ -1028,7 +1025,6 @@ def build_parser():
     s.add_argument("--allow-table", action="store_true")
     s.add_argument("--keep", action="store_true", help="leave the private copy in place after publishing")
     s.add_argument("--no-tidy", action="store_true", help="in auto mode, publish without running tidy first")
-    s.add_argument("--no-convo", action="store_true", help="publish a log without the conversation behind it")
     s.add_argument("--no-push", action="store_true", help="write to your shared ref but do not push it")
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
     s = add("sync", cmd_sync, "fetch teammates' entries and merge them in; never pushes (publish does); says what is new")
