@@ -3,7 +3,9 @@
 A stored log is an ordinary private entry of kind `log`. It always carries the branch; it carries a commit only when one was made since the last savepoint.
 The summary comes from the same cheap model as the observations, or, with no model to ask, is put together from the observations by code. Its fields use the
 entry body fields older versions already know: request -> context, completed -> what, learned -> why, investigated -> evidence, next steps -> open.
-The observations it covers move to `running/<branch>/archive/`; observations inherited from the parent branch stay where they are.
+Every observation the log covers also becomes a note of its own (an ordinary `finding` entry with an `obs` record, the same id as the observation, `sources` =
+the log), so it can be cited, tidied and published one by one. The observations and the tool uses behind them move to `running/<branch>/archive/`;
+observations inherited from the parent branch stay where they are.
 """
 from __future__ import annotations
 
@@ -12,8 +14,9 @@ import re
 import sys
 import time
 
-from . import capture, observer, running, worker
-from .entry import ID_RE, MAX_LIST, Entry, new_id
+from . import capture, ground, observer, running, worker
+from . import git as g
+from .entry import HEX_RE, ID_RE, MAX_LIST, Entry, new_id
 from .safety import redact
 
 WAIT = 150  # seconds a savepoint waits for an observer pass already running (it holds the lock across its model calls) before it gives up
@@ -144,16 +147,22 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
         sha = head if commit_made(run, obs, head) else ""
         fields, how = summarize(repo, branch, obs, call, now) if use_model else (fallback(obs), "code")
         e = _entry(repo, branch, sha, obs, fields)
+        prev = last(run).get("head") or (obs[0].get("head") if obs else "")
+        for n in notes_from(repo, branch, sha, prev, obs, e.id):
+            if not repo.get_private(n.id):  # the same observation is never saved as a note twice
+                repo.add_private(n)
         repo.add_private(e)
+        qstart, qend = last(run).get("qoff", 0), run.offset()
+        run.archive_queue(e.id, qstart, qend)
         covered = {o["id"] for o in obs}
         keep = [o for o in run.observations() if o["id"] not in covered]  # a pass may have appended since: only the covered ones leave
         if run.obs.exists():
             run.archive(e.id, [o for o in run.observations() if o["id"] in covered])
             run.rewrite(keep)
-        running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now())}))
-    if repo.cfg().get("tidy") == "auto":  # a new log is a moment to tidy: judge changed notes and fold old logs, in the background
+        running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qend}))
+    if repo.cfg().get("tidy") == "auto":  # a new log is a moment to tidy: judge changed notes and archive junk, in the background
         capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet"], repo.root)
-    return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "title": e.topic, "by": how}
+    return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "notes": len(covered), "title": e.topic, "by": how}
 
 
 def _entry(repo, branch, sha, obs, fields):
@@ -172,3 +181,52 @@ def _entry(repo, branch, sha, obs, fields):
     a["branch"] = branch
     e.anchor = a
     return e
+
+
+# ---- the notes ---------------------------------------------------------------------------------------------------
+def _changed(repo, prev, sha):
+    """Files the commits since the last savepoint changed (the files of `sha` alone when there is no earlier head to compare with)."""
+    if prev and prev != sha and HEX_RE.match(prev):
+        rc, out, _ = g.try_run(["diff", "--name-only", f"{prev}..{sha}"], repo.root)
+        if rc == 0:
+            return {x for x in out.splitlines() if x}
+    return set(g.changed_paths(repo.root, sha))
+
+
+def _rel(root, f):
+    """A file as the repo spells it: forward slashes, relative to the project root when the model gave an absolute path."""
+    f = f.replace("\\", "/")
+    return f[len(root):] if f.casefold().startswith(root.casefold()) else f
+
+
+def notes_from(repo, branch, sha, prev, obs, log_id):
+    """One note per observation. A note is about the commit when a commit since the last savepoint changed a file the observation modified, else about the
+    branch. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents."""
+    from . import tree
+    root = repo.root.resolve().as_posix().rstrip("/") + "/"
+    changed = _changed(repo, prev, sha) if sha else set()
+    commit_a = tree.anchor_for(repo, sha=sha, paths=[], dirty=False, with_base=True) if sha else {}
+    branch_a = tree.anchor_for(repo, paths=[], dirty=False, with_base=True)
+    branch_a.update(sha="", tree="", parent="", patch_id="", subject="", date="", range_pid="")
+    branch_a["branch"] = branch
+    out = []
+    for o in obs:
+        mod = [_rel(root, f) for f in o.get("files_modified", [])]
+        read = [_rel(root, f) for f in o.get("files_read", [])]
+        about = bool(sha and changed & set(mod))
+        a = dict(commit_a if about else branch_a)
+        a["paths"], a["names"] = mod, tree.names_of(mod)
+        sub = o.get("subtitle") or re.split(r"(?<=[.!?])\s", o["narrative"].strip(), maxsplit=1)[0]
+        facts = [f for f in o.get("facts", []) if f]
+        proof = facts + ([f"changed: {', '.join(mod[:6])}"] if mod else []) + ([f"read: {', '.join(read[:6])}"] if read else [])
+        body = {"summary": sub[:300], "why": o["narrative"][:2000]}
+        if facts or mod:  # files read alone prove nothing: the note has evidence only when something was found or changed
+            body["evidence"] = "\n".join(proof)[:2000]
+        out.append(Entry(id=o["id"] if ID_RE.match(str(o.get("id", ""))) else new_id(), kind="finding", topic=o["title"][:200], body=body, anchor=a,
+                         provenance="worker-written", captured_via="savepoint", v=2, level="commit" if about else "branch", sources=[log_id],
+                         checks=ground.check(repo, body, o["title"], mod + read, sha if about else None),
+                         created=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(o.get("t") or time.time())),
+                         obs={"type": o.get("type", ""), "concepts": o.get("concepts", []), "files_read": read, "files_modified": mod,
+                              "session": o.get("session", ""), "t": o.get("t", 0)},
+                         display=repo.cfg().get("display", "") if repo.attribution() == "named" else ""))
+    return out

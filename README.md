@@ -101,7 +101,8 @@ to a prompt, only shown at session start.)
 `logbook log` is a **savepoint**. It first observes whatever tool uses are still queued, then summarizes the observations made on this branch since the last savepoint
 (request, what was looked at, what was learned, what was done, next steps) and stores the result as a **private log** filed under the branch. The commit is optional: a
 log carries one only when a commit was made since the last savepoint, so it can be saved before or after committing. The summary comes from the same cheap model as the
-observations, or, with `--no-model` or no model available, is put together from the observations by code. The observations it covered move to
+observations, or, with `--no-model` or no model available, is put together from the observations by code. Each observation it covered also becomes a note of its own (private until published, shown
+to agents when it carries evidence and names nothing that is missing). The observations and the tool uses behind them move to
 `.git/logbook/running/<branch>/archive/`; the ones a new branch inherited from the main line stay as context. The old view of notes next to commits is `logbook history`.
 
 One setting, `logbook config publish`, decides how much happens by itself:
@@ -131,10 +132,12 @@ different setting from the observer's): `logbook tidy --work` shows it your note
 `in-progress` or `resolved` with a reason. Python then checks every answer against git (the note must be yours; the commits it cites must exist and have touched the
 note's files after it was written) and drops the rest. What happens to the valid ones follows `logbook config tidy`:
 
-| `tidy` | the worker's valid proposals | folding old logs |
-|---|---|---|
-| `manual` (default) | kept for you: `logbook tidy --proposals` shows them, `logbook tidy --accept` stores them (asks first in Claude Code) | `logbook tidy --merge-logs` |
-| `auto` | stored by the worker, one at a time (a status is a small private record; a new one reopens a note) | folded by the worker |
+| `tidy` | the worker's valid proposals |
+|---|---|
+| `manual` (default) | kept for you: `logbook tidy --proposals` shows them, `logbook tidy --accept` stores them (asks first in Claude Code) |
+| `auto` | stored by the worker, one at a time (a status is a small private record; a new one reopens a note) |
+
+Logs are never folded or archived by tidy: a log is the raw record of a session and is kept. Tidy works on notes.
 
 **Junk and repeats.** A private log collects whatever sessions leave behind: a probe or a test run, a one-word reply, an attempt that found nothing, the same thing saved
 twice. Tidy looks at those too, because without it they get published and injected like real records. An exact repeat of an older entry needs no model and is archived
@@ -145,13 +148,11 @@ In `manual` the verdicts wait in `logbook tidy --proposals` and `--accept` archi
 `.git/logbook/archive/` with the reason in `reasons.jsonl`; nothing is deleted, and `logbook tidy --restore <id>` puts one back.
 
 **Before a publish.** In `auto` mode `logbook publish` runs tidy first, whatever the way it was asked (an id, `--branch`, `--merged`, `--all`): it fetches what teammates
-shared, archives the junk and the repeats, folds old logs and updates statuses, and only then publishes what is left. If tidy could not look (the usage allowance is
+shared, archives the junk and the repeats and updates statuses, and only then publishes what is left. If tidy could not look (the usage allowance is
 paused, the day's call cap is reached, the model call failed) nothing is published and it says why; `--no-tidy` publishes unchecked anyway. `ask` and `manual` do not
 start tidy by themselves.
 
-In `auto` the worker runs in the background after a log is saved and after a `git pull`. **Folding**: when a branch has four or more private logs of yours, the older ones are
-summarized into one new log (by the same cheap model, or by code), and the originals move to `.git/logbook/archive/` where they stay readable. Nothing is deleted, a note
-is never edited, and a saved log is never marked true or false (it is only archived, by the triage above, when it is junk or a repeat). The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
+In `auto` the worker runs in the background after a log is saved and after a `git pull`. A log is never folded, edited or marked true or false, and tidy never archives one: it is the record of a session. What tidy judges are the notes the savepoint made from the observations. The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
 commit touches its files, and `--garbage` still archives your old machine-made drafts.
 
 ## What Claude may run without asking (Claude Code)
@@ -168,7 +169,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `log` | allow |
 | `status` | allow |
 | `summarize` | allow |
-| `tidy` | allow; `--apply`, `--accept`, `--work`, `--merge-logs`, `--restore` asks |
+| `tidy` | allow; `--apply`, `--accept`, `--work`, `--restore` asks |
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
 | `sync` | never: ask, manual: ask, ask: ask, auto: allow |

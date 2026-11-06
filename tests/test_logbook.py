@@ -101,6 +101,14 @@ class TestEntry(unittest.TestCase):
         self.assertEqual(e.supersedes, [])
         self.assertFalse(hasattr(e, "user"))  # authorship comes from the ref path, never from the file
 
+    def test_an_observation_record_is_kept_small_and_an_ordinary_note_has_none(self):
+        e = from_dict({"id": new_id(), "obs": {"type": "bugfix", "concepts": ["gotcha"] * 99, "files_modified": ["a.py", 5], "t": True, "evil": "x", "session": "s" * 500}})
+        self.assertEqual((e.obs["type"], len(e.obs["concepts"]), e.obs["files_modified"], len(e.obs["session"])), ("bugfix", 10, ["a.py"], 80))
+        self.assertNotIn("t", e.obs)
+        self.assertNotIn("evil", e.obs)
+        self.assertNotIn("obs", from_dict({"id": new_id()}).to_dict(), "an ordinary note's file stays as it was")
+        self.assertEqual(from_dict(json.loads(e.to_json())).obs, e.obs)
+
     def test_0_0_1_entry_still_loads(self):
         """Files written by 0.0.1 carry anchor.models; they must load with the same names under the new key."""
         old = {"id": new_id(), "kind": "finding", "topic": "late payments", "body": {"summary": "s", "why": "w"},
@@ -1499,25 +1507,10 @@ class TestTidyWorker(CliRepo):
             self.tidy.work(self.r)
         self.assertEqual(seen, ["sonnet"])
 
-    def test_old_private_logs_on_a_branch_are_folded_into_one_and_the_originals_archived(self):
-        ids = [capture.make_entry(self.r, "log", f"session {i}", {"what": f"did step {i}", "why": f"learned {i}", "summary": f"step {i}"}, paths=["shop/revenue.py"],
-                                  provenance="worker-written").id for i in range(self.tidy.MERGE_MIN)]
-        views = tree.all_views(self.r)[0]
-        self.assertEqual(sum(len(v) for v in self.tidy.mergeable(views).values()), self.tidy.MERGE_MIN)
-        done = self.tidy.merge_logs(self.r, lambda p: (SAVEPOINT_XML, 0.001, ""))
-        ((branch, n, new),) = done
-        self.assertEqual(n, self.tidy.MERGE_MIN)
-        merged = self.r.get_private(new)
-        self.assertEqual((merged.kind, merged.topic, sorted(merged.sources)), ("log", "Refunds no longer counted as revenue", sorted(ids)))
-        self.assertEqual([i for i in ids if self.r.get_private(i)], [], "the originals left the private log")
-        self.assertTrue(all((self.r.cdir / "archive" / f"{i}.json").exists() for i in ids), "and are still readable in the archive")
-        self.assertEqual(self.tidy.mergeable(tree.all_views(self.r)[0]), {})
-
-    def test_a_branch_with_few_logs_is_left_alone_and_a_log_is_never_junk(self):
+    def test_a_log_is_never_junk(self):
         old = capture.make_entry(self.r, "log", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
         old.created = "2020-01-01T00:00:00"
         self.r.add_private(old)
-        self.assertEqual(self.tidy.merge_logs(self.r, lambda p: (SAVEPOINT_XML, 0, "")), [])
         self.assertEqual(self.tidy.garbage(self.r, tree.all_views(self.r)[0]), [], "a saved log is not a stale draft")
 
     def test_old_auto_copied_drafts_are_listed_as_junk_and_archived_not_deleted(self):
@@ -1530,22 +1523,10 @@ class TestTidyWorker(CliRepo):
         self.assertIsNone(self.r.get_private(draft.id))
         self.assertTrue((self.r.cdir / "archive" / f"{draft.id}.json").exists())
 
-    def test_merge_logs_from_the_command_line(self):
-        import unittest.mock
-        for i in range(self.tidy.MERGE_MIN):
-            capture.make_entry(self.r, "log", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
-        self.assertIn("folds the older ones", self.run_cli("tidy", "--no-sync")[1])
-        with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": (SAVEPOINT_XML, 0.0, "")):
-            code, text = self.run_cli("tidy", "--merge-logs", "--no-sync")
-        self.assertIn(f"folded {self.tidy.MERGE_MIN} private logs", text)
-        self.assertIn("nothing to fold", self.run_cli("tidy", "--merge-logs", "--no-sync")[1])
-
     def test_auto_does_all_of_it_in_one_pass(self):
         self.run_cli("config", "tidy", "auto")
-        for i in range(self.tidy.MERGE_MIN):
-            capture.make_entry(self.r, "log", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
         res = self.tidy.auto(self.r, lambda p: (SAVEPOINT_XML if "savepoint" in p else f"status_of: {self.note.id}\nstatus: resolved\ncommits: {self.later[:8]}\nreason: reworked\n", 0.001, ""))
-        self.assertEqual((res["applied"], len(res["folded"]), res["archived"]), ([self.note.id], 1, 0))
+        self.assertEqual((res["applied"], res["archived"]), ([self.note.id], 0))
 
     def test_the_hooks_start_the_tidy_pass_only_in_auto_mode(self):
         import unittest.mock
@@ -1559,8 +1540,8 @@ class TestTidyWorker(CliRepo):
     def test_the_commands_that_change_things_or_spend_the_allowance_ask(self):
         from getlogbook import permissions
         decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
-        self.assertEqual([decide(f"logbook tidy{f}") for f in ("", " --proposals", " --brief", " --work", " --accept", " --merge-logs")],
-                         ["allow", "allow", "allow", "ask", "ask", "ask"])
+        self.assertEqual([decide(f"logbook tidy{f}") for f in ("", " --proposals", " --brief", " --work", " --accept")],
+                         ["allow", "allow", "allow", "ask", "ask"])
 
 
 class TestTriage(CliRepo):
@@ -1571,9 +1552,9 @@ class TestTriage(CliRepo):
         super().setUp()
         from getlogbook import tidy, worker
         self.tidy, self.worker = tidy, worker
-        self.good = capture.make_entry(self.r, "log", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
+        self.good = capture.make_entry(self.r, "finding", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
                                                                                                  "summary": "total() skips refunds"}, paths=["shop/revenue.py"], provenance="worker-written")
-        self.probe = capture.make_entry(self.r, "log", "Reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["shop/revenue.py"],
+        self.probe = capture.make_entry(self.r, "finding", "Reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["shop/revenue.py"],
                                         provenance="worker-written")
         self.prompts = []
 
@@ -1603,7 +1584,7 @@ class TestTriage(CliRepo):
 
     def test_an_exact_repeat_is_archived_without_a_model_and_the_older_one_stays(self):
         self.run_cli("config", "worker", "off")  # no model at all
-        again = capture.make_entry(self.r, "log", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
+        again = capture.make_entry(self.r, "finding", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
                                                                                             "summary": "total() skips refunds"}, paths=["shop/revenue.py"], provenance="worker-written")
         res = self.tidy.triage(self.r, apply=True)
         self.assertEqual(res["archived"], [again.id])
@@ -1616,7 +1597,7 @@ class TestTriage(CliRepo):
     def test_auto_archives_what_the_model_calls_junk_and_every_verdict_is_checked(self):
         published = capture.make_entry(self.r, "finding", "shared already", {"summary": "s", "why": "w"})
         self.run_cli("publish", published.id, "--yes")
-        short = capture.make_entry(self.r, "log", "second probe", {"what": "nothing", "summary": "nothing"}, provenance="worker-written")
+        short = capture.make_entry(self.r, "finding", "second probe", {"what": "nothing", "summary": "nothing"}, provenance="worker-written")
         call = self.model(self.verdict(self.probe.id),                                                          # valid
                           self.verdict(new_id()),                                                                 # not an entry that was shown
                           self.verdict(published.id),                                                             # shared: never in the pool
@@ -1643,7 +1624,7 @@ class TestTriage(CliRepo):
         self.assertIn(self.probe.id, self.entries(), "and it can be put back")
 
     def test_one_pass_archives_at_most_ten_and_does_not_ask_again_about_what_it_judged(self):
-        many = [capture.make_entry(self.r, "log", f"probe {i}", {"what": f"nothing {i}", "summary": f"nothing {i}"}, provenance="worker-written") for i in range(14)]
+        many = [capture.make_entry(self.r, "finding", f"probe {i}", {"what": f"nothing {i}", "summary": f"nothing {i}"}, provenance="worker-written") for i in range(14)]
         res = self.tidy.triage(self.r, self.model(*[self.verdict(e.id) for e in many]), apply=True)
         self.assertEqual(len(res["archived"]), self.tidy.TRIAGE_ARCHIVE_MAX)
         self.assertEqual(self.tidy.triage(self.r, self.model(), apply=True)["skipped"], "nothing new to judge", "everything shown was marked as judged")
@@ -1656,14 +1637,14 @@ class TestTriage(CliRepo):
         def call(prompt):
             self.worker.last_rate = {"five_hour": {"u": 0.97, "resets": int(time.time()) + 7200}}
             return "NONE", 0.001, ""
-        capture.make_entry(self.r, "log", "another", {"what": "w2", "summary": "s2"}, provenance="worker-written")
+        capture.make_entry(self.r, "finding", "another", {"what": "w2", "summary": "s2"}, provenance="worker-written")
         self.tidy.triage(self.r, call, apply=True)
-        capture.make_entry(self.r, "log", "and another", {"what": "w3", "summary": "s3"}, provenance="worker-written")
+        capture.make_entry(self.r, "finding", "and another", {"what": "w3", "summary": "s3"}, provenance="worker-written")
         self.assertIn("paused", self.tidy.triage(self.r, self.model(), apply=True)["skipped"])
 
     def test_a_repeat_of_something_archived_in_the_same_pass_follows_it_to_the_one_that_stays(self):
         self.run_cli("config", "worker", "off")
-        twin = capture.make_entry(self.r, "log", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
+        twin = capture.make_entry(self.r, "finding", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
                                                                                            "summary": "total() skips refunds"}, paths=["shop/revenue.py"], provenance="worker-written")
         res = self.tidy.triage(self.r, apply=True)
         self.assertEqual(res["archived"], [twin.id])
@@ -1674,8 +1655,8 @@ class TestTriage(CliRepo):
         import unittest.mock
         self.run_cli("config", "publish", "auto")
         sh("git", "checkout", "-q", "-b", "feat/x", cwd=self.d)
-        keep = capture.make_entry(self.r, "log", "Real work", {"what": "added a filter", "why": "refunds counted", "summary": "added a filter"}, provenance="worker-written")
-        junk = capture.make_entry(self.r, "log", "Probe run", {"what": "answered ok", "summary": "ok"}, provenance="worker-written")
+        keep = capture.make_entry(self.r, "finding", "Real work", {"what": "added a filter", "why": "refunds counted", "summary": "added a filter"}, provenance="worker-written")
+        junk = capture.make_entry(self.r, "finding", "Probe run", {"what": "answered ok", "summary": "ok"}, provenance="worker-written")
         seen = []
 
         def fake(prompt, model="haiku"):
@@ -1694,7 +1675,7 @@ class TestTriage(CliRepo):
         import unittest.mock
         self.run_cli("config", "publish", "auto")
         sh("git", "checkout", "-q", "-b", "feat/y", cwd=self.d)
-        e = capture.make_entry(self.r, "log", "Unchecked", {"what": "w", "summary": "s"}, provenance="worker-written")
+        e = capture.make_entry(self.r, "finding", "Unchecked", {"what": "w", "summary": "s"}, provenance="worker-written")
         with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": ("", 0.0, "Claude usage limit reached")):
             with self.assertRaises(SystemExit) as refused:
                 self.run_cli("publish", "--branch", "feat/y", "--yes")
@@ -2083,6 +2064,67 @@ class TestSavepoint(ObserverBase):
         self.assertEqual(self.run_.observations(), [], "the covered observations left the running log")
         self.assertEqual(self.save()["skipped"], "nothing new since the last savepoint")
         self.assertEqual(self.r.load_shared()[0], [], "private until published")
+
+    def notes(self):
+        return [e for e in self.r.load_private() if e.kind == "finding" and e.captured_via == "savepoint"]
+
+    def test_each_covered_observation_becomes_a_note_that_points_back_to_the_log(self):
+        self.observe()
+        self.save()
+        (log,) = self.logs()
+        (n,) = self.notes()
+        self.assertEqual([n.id], log.sources, "the note has the observation's id, so a savepoint can never save one twice")
+        self.assertEqual((n.sources, n.provenance, n.level, n.obs["type"], n.topic), ([log.id], "worker-written", "branch", "bugfix", "total ignores refunds"))
+        self.assertEqual((n.anchor["branch"], n.anchor["sha"]), (self.branch, ""))
+        self.assertIn("never reads the refunded flag", n.body["evidence"])
+        self.assertEqual(n.checks["paths"], [1, 1], "the file it read exists")
+        self.assertEqual(self.save()["skipped"], "nothing new since the last savepoint")
+        self.assertEqual(len(self.notes()), 1)
+
+    def test_a_note_with_evidence_is_shown_to_agents_and_one_without_is_not(self):
+        self.observe()
+        self.observe(title="reading only")
+        self.run_.rewrite([dict(o, facts=[]) if o["title"] == "reading only" else o for o in self.run_.observations()])
+        self.save()
+        shown = {v["topic"]: recall.injectable(v) for v in tree.all_views(self.r)[0] if v["kind"] == "finding"}
+        self.assertEqual(shown, {"total ignores refunds": True, "reading only": False})
+
+    def test_a_note_is_about_the_commit_only_when_a_commit_changed_a_file_it_modified(self):
+        xml = OBS_XML.replace("<files_modified></files_modified>", "<files_modified><file>shop/tax.py</file></files_modified>")
+        self.tool(5)
+        self.drain(xml)
+        self.tool(5)
+        self.drain(xml.replace("total ignores refunds", "other").replace("adds every order", "adds each order").replace("shop/tax.py", "shop/other.py"))
+        commit(self.d, "tax", {"shop/tax.py": "t = 1\n"})
+        res = self.save()
+        by = {n.topic: n for n in self.notes()}
+        self.assertEqual((by["total ignores refunds"].level, by["total ignores refunds"].anchor["sha"]), ("commit", res["commit"]))
+        self.assertEqual((by["other"].level, by["other"].anchor["sha"]), ("branch", ""))
+
+    def test_the_tool_uses_behind_a_savepoint_are_archived_and_the_queue_is_not_cut(self):
+        self.observe()
+        first = self.save()["saved"]
+        self.observe(title="second")
+        second = self.save()["saved"]
+        d = self.run_.dir / "archive"
+        a, b = [(d / f"{i}.queue").read_text(encoding="utf-8").splitlines() for i in (first, second)]
+        self.assertEqual((len(a), len(b)), (5, 5), "each savepoint keeps its own tool uses")
+        self.assertEqual(len(self.run_.queue.read_text(encoding="utf-8").splitlines()), 10, "the queue file only grows")
+        self.assertEqual(json.loads((self.run_.dir / "savepoint.json").read_text(encoding="utf-8"))["qoff"], self.run_.offset())
+
+    def test_a_queue_the_observer_has_read_does_not_stop_capture(self):
+        import unittest.mock
+        self.tool(5)
+        with unittest.mock.patch.object(self.running, "QUEUE_LIMIT", self.run_.queue.stat().st_size - 1):
+            self.assertFalse(self.run_.push({"tool": "Read"}), "unread bytes over the limit: full")
+            self.drain()
+            self.assertTrue(self.run_.push({"tool": "Read"}), "read bytes do not count")
+
+    def test_tidy_leaves_logs_alone(self):
+        from getlogbook import tidy
+        for i in range(6):
+            capture.make_entry(self.r, "log", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
+        self.assertEqual([v for v in tidy.triage_pool(tree.all_views(self.r)[0]) if v["kind"] == "log"], [])
 
     def test_a_commit_made_since_the_last_savepoint_is_attached_and_none_is_not(self):
         self.observe()

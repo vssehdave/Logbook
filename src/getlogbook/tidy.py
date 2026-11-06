@@ -173,7 +173,7 @@ def garbage(repo, views, days=None):
     out = []
     for v in views:
         if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "log":
-            continue  # a saved log is the person's record of a session: it is merged (`merge_logs`), never dropped as junk
+            continue  # a saved log is the person's record of a session: it is kept, never dropped as junk
         files = tracked(repo, v)[:MAX_FILES]
         if v.get("status") == "resolved":
             reason = "resolved"
@@ -203,8 +203,6 @@ def archive(repo, ids):
 # ---- the tidy worker --------------------------------------------------------------------------------------------
 TIDY_MODEL = "haiku"  # `config tidy_model` changes it; it is a different setting from the observer's model on purpose
 MAX_JUDGED = 12  # candidates shown to the model in one call
-MERGE_MIN = 4  # private logs on one branch before they are worth folding into one
-MERGE_MAX = 12  # logs folded in one go
 SYSTEM = """You help keep a team's recorded notes true. You cannot use tools. Below are notes written earlier in this repo, each with the later commits that touched the files it is about. Decide, for each note, only from what is shown:
 - nothing at all if it still looks true or you cannot tell;
 - status: in-progress if a later commit changed part of what it says;
@@ -325,36 +323,6 @@ def accept(repo):
     return stored, errors
 
 
-def mergeable(views):
-    """{branch: [ids, newest first]} of my private saved logs, for branches that have enough of them to be worth folding into one."""
-    by = {}
-    for v in sorted(views, key=lambda x: x["id"], reverse=True):
-        if v["kind"] == "log" and v["mine"] and v["scope"] == "private" and not v.get("is_status") and v["branch"]:
-            by.setdefault(v["branch"], []).append(v["id"])
-    return {b: ids for b, ids in by.items() if len(ids) >= MERGE_MIN}
-
-
-def merge_logs(repo, call=None, now=time.time, limit=2):
-    """Fold the older private logs of a branch into one new log (written by the cheap model, or by code without it). The originals move to the archive and
-    the new log lists them as its sources. Returns [(branch, how many were folded, the new log id)]."""
-    from . import savepoint, tree
-    call = call or (lambda p: worker.call_model(p, repo.cfg().get("tidy_model", TIDY_MODEL)))
-    views = tree.all_views(repo)[0]
-    by_id = {v["id"]: v for v in views}
-    done = []
-    for branch, ids in list(mergeable(views).items())[:limit]:
-        logs = [by_id[i] for i in reversed(ids[:MERGE_MAX])]  # oldest first
-        obs = [{"id": v["id"], "type": "change", "title": v["topic"], "subtitle": "", "narrative": " ".join(v["body"].get(k, "") for k in ("what", "why", "summary") if v["body"].get(k))[:600],
-                "facts": [], "files_read": [], "files_modified": v["paths"]} for v in logs]
-        fields, how = savepoint.summarize(repo, branch, obs, call, now)
-        e = savepoint._entry(repo, branch, logs[-1]["sha"] or "", obs, fields)
-        e.supersedes = [v["id"] for v in logs]
-        repo.add_private(e)
-        archive(repo, e.supersedes)
-        done.append((branch, len(logs), e.id))
-    return done
-
-
 # ---- triage: junk and repeats in the private log ------------------------------------------------------------------
 # A private log collects whatever sessions leave behind: test and probe runs, a greeting, an attempt that found nothing, the same thing saved twice. Nothing
 # is deleted, but unless something looks at them and moves them out of the way they get published and injected like real records.
@@ -382,8 +350,8 @@ def _norm(v):
 
 
 def triage_pool(views):
-    """My own private entries that triage may archive: logs and notes, not status records, not shared, not auto-copied drafts (`garbage` takes those)."""
-    return [v for v in views if v["mine"] and v["scope"] == "private" and not v.get("is_status") and v["kind"] in ("log", "finding", "change")
+    """My own private notes that triage may archive: not logs (a log is the raw record of a session and is kept), not status records, not shared, not auto-copied drafts (`garbage` takes those)."""
+    return [v for v in views if v["mine"] and v["scope"] == "private" and not v.get("is_status") and v["kind"] in ("finding", "change")
             and v["provenance"] != "auto-copied"]
 
 
@@ -413,7 +381,7 @@ def _branch_state(repo, branch, landed):
 
 def triage_prompt(repo, views, cands):
     from . import branches
-    landed = branches.landed(repo, [v for v in views if v["kind"] == "log"])
+    landed = branches.landed(repo, views)
     lines = [TRIAGE_SYSTEM, "ENTRIES (newest first):"]
     for v in cands:
         files = [f for f in tracked(repo, v)[:6] if f and not f.startswith("-")]
@@ -554,7 +522,7 @@ def run(repo, call=None, now=time.time):
 
 
 def gate(repo, call=None, now=time.time):
-    """What runs before any publish in auto mode: fetch what teammates shared, archive the junk and the repeats, fold old logs, update statuses. If the model could not
+    """What runs before any publish in auto mode: fetch what teammates shared, archive the junk and the repeats, update statuses. If the model could not
     be asked (paused, over the day's cap, an error) the result says why in "blocked": publishing what has not been checked is what this exists to prevent."""
     from . import sync
     if "origin" in sync.remotes(repo):
@@ -564,7 +532,6 @@ def gate(repo, call=None, now=time.time):
             pass
     res = {"triage": triage(repo, call, now, apply=True)}
     res["status"] = work(repo, call, now)
-    res["folded"] = [(b, n) for b, n, _ in merge_logs(repo, call, now)]
     t = res["triage"]
     why = t.get("error") or (t.get("skipped") if str(t.get("skipped", "")).startswith(("paused", "today's call cap", "another tidy pass")) else "")
     res["blocked"] = why or ""
@@ -572,10 +539,9 @@ def gate(repo, call=None, now=time.time):
 
 
 def auto(repo, call=None, now=time.time):
-    """Everything the automatic mode does in one pass: judge changed notes, archive junk and repeats, fold logs, archive old machine-made drafts."""
+    """Everything the automatic mode does in one pass: judge changed notes, archive junk and repeats, archive old machine-made drafts."""
     from . import tree
     res = work(repo, call, now)
     res["triage"] = triage(repo, call, now, apply=True)
-    res["folded"] = [(b, n) for b, n, _ in merge_logs(repo, call, now)]
     res["archived"] = archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
     return res

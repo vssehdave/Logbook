@@ -109,10 +109,7 @@ class Running:
     def push(self, event):
         """Append one event. One write call on an O_APPEND file, so two sessions on the same branch cannot interleave a line. False when the queue is full."""
         self.dir.mkdir(parents=True, exist_ok=True)
-        try:
-            if self.queue.exists() and self.queue.stat().st_size > QUEUE_LIMIT:
-                return False
-        except OSError:
+        if self.pending_bytes() > QUEUE_LIMIT:  # what the observer has already read does not count: only a queue nobody reads fills up
             return False
         fd = os.open(self.queue, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
@@ -190,6 +187,20 @@ class Running:
             d = self.dir / "archive"
             d.mkdir(parents=True, exist_ok=True)
             self.rewrite(records, d / f"{savepoint_id}.jsonl")
+
+    def archive_queue(self, savepoint_id, start, end):
+        """The tool uses behind a savepoint (queue bytes start..end), kept private so a note's evidence can be looked up later. The queue file itself is never cut: a
+        hook may be appending to it."""
+        try:
+            with open(self.queue, "rb") as f:
+                f.seek(start)
+                raw = f.read(max(0, end - start))
+        except OSError:
+            return
+        if raw:
+            d = self.dir / "archive"
+            d.mkdir(parents=True, exist_ok=True)
+            atomic_write(d / f"{savepoint_id}.queue", raw.decode("utf-8", "replace"))
 
     def archived(self, savepoint_id):
         try:

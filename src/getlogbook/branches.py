@@ -26,8 +26,8 @@ def pending(repo):
 
 
 def landed(repo, views):
-    """Names of the branches whose work is in the main line, judged from the given log views: a merge commit on the main line names the branch, or a log's own
-    commit is in the main line's history (not just the commit the branch left it at). Works for logs from teammates too; a squash merge is not seen."""
+    """Names of the branches whose work is in the main line, judged from the given views: a merge commit on the main line names the branch, or an entry's own
+    commit is in the main line's history (not just the commit the branch left it at). Works for entries from teammates too; a squash merge is not seen."""
     base = tree.default_branch(repo)
     if not base:
         return set()
