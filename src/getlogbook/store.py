@@ -7,6 +7,7 @@ Each ref's tip tree holds every entry as entries/<id>.json (state lives in the t
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -15,7 +16,7 @@ import time
 from pathlib import Path
 
 from . import git as g
-from .entry import BODY_FIELDS, Entry, from_dict, from_json
+from .entry import BODY_FIELDS, ID_RE, Entry, from_dict, from_json
 
 PREFIX = "refs/logbook/log"
 REMOTE_NS = "refs/logbook-remote"
@@ -27,9 +28,10 @@ SHELF = "000000"
 PUBLISH_MODES = ("manual", "ask", "auto")  # least to most hands-off
 LEGACY_MODES = {"never": "manual", "claude": "ask"}  # the 0.0.4 names, read as their nearest new mode
 MAX_BLOB = 65536
+MAX_CONVO = 200_000  # bytes of one log's conversation (see convo.py); the only files in the shared tree allowed past MAX_BLOB
 MAX_PER_REF = 5000
 DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "named",
-                  "max_entry_bytes": 32768, "retention_days": 0}
+                  "max_entry_bytes": 32768, "retention_days": 0, "max_convo_total": 30_000_000}
 
 
 def _apply_tombstones(files):
@@ -230,7 +232,7 @@ class Repo:
         for line in out.splitlines():
             meta, _, path = line.partition("\t")
             parts = meta.split()
-            if len(parts) == 4 and parts[1] == "blob" and parts[3].isdigit() and int(parts[3]) <= MAX_BLOB:
+            if len(parts) == 4 and parts[1] == "blob" and parts[3].isdigit() and int(parts[3]) <= (MAX_CONVO if path.startswith("convo/") else MAX_BLOB):
                 files[path] = parts[2]
         return files
 
@@ -272,7 +274,23 @@ class Repo:
                 return "same-text", l
         return None
 
-    def publish(self, entries):
+    def convo_bytes(self, ref):
+        """Bytes of the conversations on a ref (convo/<log id>.jsonl)."""
+        rc, out, _ = g.try_run(["ls-tree", "-r", "--long", ref, "convo"], self.root)
+        return sum(int(l.split()[3]) for l in out.splitlines() if rc == 0 and len(l.split()) >= 5 and l.split()[3].isdigit())
+
+    def shared_convo(self, log_id):
+        """The shared conversation of a log (bytes), from your own ref or any teammate's, or None. The id is checked: it reaches git as part of a path."""
+        if not ID_RE.match(str(log_id)):
+            return None
+        for ref in self.refs():
+            data = g.blob_at(self.root, ref, f"convo/{log_id}.jsonl")
+            if data is not None:
+                return data
+        return None
+
+    def publish(self, entries, convos=None):
+        """Write entries (and, for a log, its conversation: {log id: bytes}) to your shared ref. A conversation is allowed only for an entry in this call."""
         self.adopt_legacy()
         ref = self.own_ref()
         tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
@@ -282,6 +300,15 @@ class Repo:
             if len(data) > self.policy()["max_entry_bytes"]:
                 raise ValueError(f"entry {e.id} is {len(data)} bytes; policy max is {self.policy()['max_entry_bytes']}")
             files[f"entries/{e.id}.json"] = data
+        ids = {e.id for e in entries}
+        added = 0
+        for lid, data in (convos or {}).items():
+            if lid not in ids or not ID_RE.match(lid) or len(data) > MAX_CONVO:
+                raise ValueError(f"conversation of {lid} is not allowed ({len(data)} bytes; the limit is {MAX_CONVO})")
+            added += len(data)
+            files[f"convo/{lid}.jsonl"] = data
+        if added and tip and self.convo_bytes(ref) + added > self.policy()["max_convo_total"]:
+            raise ValueError(f"your shared conversations would pass {self.policy()['max_convo_total']} bytes; publish without them (--no-convo) or raise max_convo_total in .logbook/policy.json")
         self._write_ref(ref, files, f"logbook: +{len(entries)} entries", tip)
         for e in entries:
             self.audit(f"publish {e.id} -> {ref}")
@@ -295,9 +322,12 @@ class Repo:
         if f"entries/{eid}.json" not in files:
             return None
         del files[f"entries/{eid}.json"]
+        files.pop(f"convo/{eid}.jsonl", None)  # a purged log takes its conversation with it
         files[f"tombstones/{eid}.json"] = json.dumps({"id": eid, "reason": reason[:100], "date": time.strftime("%Y-%m-%d")}).encode()
         self._write_ref(ref, files, f"logbook: purge {eid}", None)
         self.drop_private(eid)
+        with contextlib.suppress(OSError):
+            (self.cdir / "convo" / f"{eid}.jsonl").unlink()
         self.audit(f"purge {eid} {ref}")
         return ref
 
