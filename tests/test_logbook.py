@@ -51,6 +51,12 @@ def commit(d, msg, files):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        import unittest.mock
+        from getlogbook import worker
+        self.real_call_model = worker.call_model
+        stub = unittest.mock.patch.object(worker, "call_model", lambda p, model="haiku": ("NONE", 0.0, ""))  # a developer's machine has a real `claude`: no test may spend it
+        stub.start()
+        self.addCleanup(stub.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
@@ -500,12 +506,6 @@ class TestInstaller(Base):
 class CliRepo(Base):
     def setUp(self):
         super().setUp()
-        import unittest.mock
-        from getlogbook import worker
-        self.real_call_model = worker.call_model
-        stub = unittest.mock.patch.object(worker, "call_model", lambda p, model="haiku": ("NONE", 0.0, ""))  # a developer's machine has a real `claude`: no test may spend it
-        stub.start()
-        self.addCleanup(stub.stop)
         self.d = make_repo(self.root, "r", "a@x.io")
         commit(self.d, "base", {"shop/revenue.py": "x = 1\n", "shop/other.py": "y = 1\n"})
         self.r = Repo(self.d)
