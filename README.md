@@ -70,7 +70,7 @@ agent's shell, set `LOGBOOK_WRITER=agent` or `LOGBOOK_WRITER=user`. Notes from b
   something, or for a root cause or decision that must be kept: `logbook note --fields <<'EOF' ... EOF` (summary, context, why, wrong, fix, decided, open, scale,
   paths). A note an agent writes is 3 to 9 lines and has an `evidence:` line (what it ran or read; naming a file is not enough); a one-line note is refused.
   The skill shows the shape and a good example. Nothing asks it to write a note for every task or every commit.
-- **When the work is done** it saves a log (`logbook log`) in `auto` mode by itself, in `ask` mode after asking you (see Modes and savepoints).
+- **When the work is done** it saves a log (`logbook log`) by itself in `ask` and `auto` mode, after every commit (see Modes and savepoints).
 
 ## The observer (on by default, private)
 
@@ -110,8 +110,8 @@ One setting, `logbook config publish`, decides how much happens by itself:
 | mode | `logbook log` (savepoint) | `logbook publish` |
 |---|---|---|
 | `manual` | you run it | you run it |
-| `ask` (default) | after a commit the agent asks you once, then runs it | the agent asks, shows the redacted preview, then runs it |
-| `auto` | by itself, after a commit that follows 5 or more new observations, and when a session ends | when a branch looks merged, the agent is told at session start and runs `logbook publish --branch <name> --yes` |
+| `ask` (default) | by itself, after every commit (a git `post-commit` hook), and when a session ends | the agent asks, shows the redacted preview, then runs it |
+| `auto` | by itself, after every commit, after 5 or more new observations that follow a commit, and when a session ends | when a branch looks merged, the agent is told at session start and runs `logbook publish --branch <name> --yes` |
 
 **Publishing is by branch.** `logbook publish --branch <name>` moves every private log and note filed under that branch to the shared log (the usual redacted preview
 and checks run first; what they refuse stays private). `logbook publish --merged` does that for every branch that looks merged into the main line. Git alone can see two

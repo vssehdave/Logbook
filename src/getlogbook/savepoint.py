@@ -65,27 +65,6 @@ def due(repo, branch, head):
     return len(obs) >= AUTO_MIN and commit_made(run, obs, head)
 
 
-def ask_block(repo, payload):
-    """Ask mode: when a commit follows enough new observations, tell the agent once (per commit) to ask the person whether to save a log. `stop_hook_active`
-    is true on the stop that follows our own block, so this cannot loop."""
-    if repo.publish_mode() != "ask" or payload.get("stop_hook_active"):
-        return ""
-    branch, head = running.branch_now(repo)
-    run = running.Running(repo, branch)
-    if branch == "HEAD" or not due(repo, branch, head):
-        return ""
-    marker = run.dir / "asked"
-    try:
-        if marker.read_text(encoding="utf-8").strip() == head:
-            return ""
-    except OSError:
-        pass
-    running.atomic_write(marker, head)
-    n = len(own(run))
-    return json.dumps({"decision": "block", "reason": f"You committed after {n} recorded observations on branch {branch}. In one short sentence, ask the user whether to save a log of this work "
-                       "(`logbook log`; it stays private until they publish it). If they say yes, run `logbook log` and tell them the result in a line. If they say no, say nothing more."})
-
-
 # ---- the summary ------------------------------------------------------------------------------------------------
 def build_prompt(branch, obs):
     lines = []

@@ -18,7 +18,11 @@ def run(argv):
             # in tidy auto the tidy pass does that fetch first, then judges what the pull changed
             more = ["tidy", "--work", "--quiet"] if r.cfg().get("tidy") == "auto" else ["sync", "--fetch-only"]
             capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", *more], r.root)
-        # "post-commit": an older install still has a git hook that calls this; it does nothing now (setup removes the hook)
+        elif argv[0] == "post-commit":  # after a commit: save a log in the background (ask and auto mode; in manual the person runs `logbook log`)
+            from . import running, worker
+            r = Repo(".")
+            if r.cfg().get("user") and r.publish_mode() in ("ask", "auto") and worker.enabled(r) and running.branch_now(r)[0] != "HEAD":
+                capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "log", "--quiet"], r.root)
     except Exception:
         pass
     return 0
