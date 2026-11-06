@@ -223,7 +223,6 @@ def cmd_publish(a):
         res = tidy.gate(r)
         out("tidy before publishing: " + ", ".join(x for x in (
             f"archived {len(res['triage']['archived'])} junk or repeated entr{'y' if len(res['triage']['archived']) == 1 else 'ies'}" if res["triage"]["archived"] else "",
-            f"folded logs on {len(res['folded'])} branch(es)" if res["folded"] else "",
             f"{len(res['status'].get('applied', []))} status(es) stored" if res["status"].get("applied") else "") if x) or "nothing to tidy")
         if res["blocked"]:
             raise SystemExit(f"logbook: nothing was published: tidy could not check the log ({res['blocked']}). Try again after the pause, or pass --no-tidy to publish unchecked.")
@@ -749,19 +748,12 @@ def cmd_tidy(a):
             sync.sync(r, "origin", fetch_only=True)
         except (SystemExit, OSError, ValueError):
             pass
-    if a.work:  # the tidy worker's pass: judge, fold logs, archive junk (what the hooks start in `tidy auto`)
+    if a.work:  # the tidy worker's pass: judge, archive junk (what the hooks start in `tidy auto`)
         res = tidy.auto(r) if r.cfg().get("tidy", "manual") == "auto" else tidy.run(r)
         if not a.quiet:
             out(json.dumps(res))
         return 0
     vs = views(r)[0]
-    if a.merge_logs:
-        done = tidy.merge_logs(r)
-        for b, n, i in done:
-            out(f"folded {n} private logs on {b} into {i}; the originals are in .git/logbook/archive/")
-        if not done:
-            out(f"nothing to fold: no branch has {tidy.MERGE_MIN} or more private logs of yours")
-        return 0
     if a.restore:
         out(f"restored {tidy.restore(r, a.restore)} of {len(a.restore)} entr{'y' if len(a.restore) == 1 else 'ies'} from .git/logbook/archive/")
         return 0
@@ -808,8 +800,6 @@ def cmd_tidy(a):
     waiting = len(tidy.proposals(r)) + len(tidy.archive_proposals(r))
     if waiting:
         out(f"{waiting} proposal(s) from the tidy worker are waiting: `logbook tidy --proposals` shows them, `logbook tidy --accept` applies them")
-    for b, ids in tidy.mergeable(vs).items():
-        out(f"branch {b} has {len(ids)} private logs of yours: `logbook tidy --merge-logs` folds the older ones into one")
     out(f"{len(found)} candidate{'' if len(found) == 1 else 's'} (nothing was changed; whether each one is really outdated or repeated is for an agent to judge and you to approve)")
     for c in found[:a.limit]:
         out(f"  {c['id']}  {'yours' if c['mine'] else 'a teammate'}  {safety_sanitize(c['topic'], 80)}")
@@ -1015,12 +1005,11 @@ def build_parser():
     s = add("tidy", cmd_tidy, "list notes that may be out of date, repeated or junk; --brief for an agent; --apply stores approved statuses")
     s.add_argument("--limit", type=int, default=20)
     s.add_argument("--no-sync", action="store_true", help="do not fetch shared logs first")
-    s.add_argument("--work", action="store_true", help="run the tidy worker's pass now: judge changed notes with a cheap model, fold logs in auto mode")
+    s.add_argument("--work", action="store_true", help="run the tidy worker's pass now: judge changed notes with a cheap model, archive junk in auto mode")
     s.add_argument("--quiet", action="store_true")
     s.add_argument("--proposals", action="store_true", help="show what the tidy worker proposed and kept for you")
     s.add_argument("--accept", action="store_true", help="store the worker's proposals (each is checked against git again; asks first in Claude Code)")
     s.add_argument("--restore", nargs="+", metavar="ID", help="put archived entries back in the private log")
-    s.add_argument("--merge-logs", action="store_true", help="fold the older private logs of a branch into one; the originals are archived")
     s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")

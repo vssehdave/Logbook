@@ -34,11 +34,12 @@ def new_id():
 class Entry:
     """Plain class (not a dataclass): importing dataclasses/inspect costs ~45 ms on every hook invocation."""
     __slots__ = ("id", "kind", "topic", "body", "anchor", "provenance", "captured_via", "supersedes", "display", "created",
-                 "redacted", "v", "level", "sources", "checks", "status")
+                 "redacted", "v", "level", "sources", "checks", "status", "obs")
 
     def __init__(self, id, kind="finding", topic="", body=None, anchor=None, provenance="user-written", captured_via="cli",
-                 supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None, checks=None, status=None):
+                 supersedes=None, display="", created="", redacted=False, v=1, level="", sources=None, checks=None, status=None, obs=None):
         self.id, self.kind, self.topic = id, kind, topic
+        self.obs = dict(obs or {})  # a note made from an observation at a savepoint: {type, concepts, files_read, files_modified, session, t}. Empty on any other note
         self.status = dict(status or {})  # a status record: {of: note id, state: open|in-progress|resolved, commits: [hex]}. Empty on an ordinary note
         self.body = dict(body or {})
         self.anchor = dict(anchor or {})  # sha tree parent patch_id branch merge_base base subject date pr paths names dirty
@@ -49,7 +50,7 @@ class Entry:
         self.display, self.created, self.redacted, self.v = display, created, redacted, v  # created: display only
 
     def to_dict(self):
-        return {k: getattr(self, k) for k in self.__slots__ if k != "status" or self.status}  # an ordinary note's file stays as it was
+        return {k: getattr(self, k) for k in self.__slots__ if k not in ("status", "obs") or getattr(self, k)}  # an ordinary note's file stays as it was
 
     def copy(self, **changes):
         d = self.to_dict()
@@ -85,6 +86,20 @@ def _checks(c):
     at = c.get("at") if isinstance(c.get("at"), str) and HEX_RE.match(c["at"]) else ""
     return {"paths": _pair(c.get("paths")), "names": _pair(c.get("names")), "commits": _pair(c.get("commits")),
             "files": _strs(c.get("files"))[:20], "missing": [m[:80] for m in _strs(c.get("missing"))[:8]], "evidence": bool(c.get("evidence")), "at": at}
+
+
+OBS_KEYS = ("type", "session")
+
+
+def _obs(o):
+    """The observation record of a note from untrusted data: a few short strings and file lists, nothing else."""
+    if not isinstance(o, dict) or not o:
+        return {}
+    out = {k: _s(o.get(k), 80) for k in OBS_KEYS if o.get(k)}
+    out.update({k: _strs(o.get(k))[:10] for k in ("concepts", "files_read", "files_modified") if o.get(k)})
+    if isinstance(o.get("t"), int) and not isinstance(o.get("t"), bool):
+        out["t"] = max(o["t"], 0)
+    return out
 
 
 STATES = ("open", "in-progress", "resolved")
@@ -123,7 +138,7 @@ def from_dict(d):
                  supersedes=[x for x in _strs(d.get("supersedes")) if ID_RE.match(x)],
                  display=_s(d.get("display"), 60), created=_s(d.get("created"), 40), redacted=bool(d.get("redacted")), v=version,
                  level=d.get("level") if d.get("level") in LEVELS else "",
-                 sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)], checks=_checks(d.get("checks")), status=_status(d.get("status")))
+                 sources=[x for x in _strs(d.get("sources")) if ID_RE.match(x)], checks=_checks(d.get("checks")), status=_status(d.get("status")), obs=_obs(d.get("obs")))
 
 
 def from_json(text):

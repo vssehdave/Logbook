@@ -319,7 +319,7 @@ class TestADay(unittest.TestCase):
         self.assertEqual(running.Running(ra, "feat/a").pending_bytes(), 0, "after the reset the waiting tool uses are observed")
         self.invariants("resumed")
 
-        probe = capture.make_entry(ra, "log", "Probe: reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["src/mod_0.py"],
+        probe = capture.make_entry(ra, "finding", "Probe: reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["src/mod_0.py"],
                                    provenance="worker-written")
         self.assertEqual(probe.anchor["branch"], "feat/a")
 
@@ -343,7 +343,7 @@ class TestADay(unittest.TestCase):
         self.assertEqual(code, 0, text)
         self.assertIn("tidy before publishing", text, "in auto mode tidy ran before anything was published")
         shared_ids = {l.entry.id for l in ra.load_shared()[0]}
-        self.assertNotIn(probe.id, shared_ids, "the throwaway session's log was not published")
+        self.assertNotIn(probe.id, shared_ids, "the throwaway session's note was not published")
         self.assertTrue((ra.cdir / "archive" / f"{probe.id}.json").exists(), "it was archived, not deleted")
         self.assertTrue((mine_before - {probe.id}) <= shared_ids, "everything else on the merged branch was published")
         self.assertFalse([e for e in ra.unpublished() if e.anchor.get("branch") == "feat/a"])
@@ -370,19 +370,19 @@ class TestADay(unittest.TestCase):
         self.assertEqual(self.run_cli(A, "sync")[0], 0)
         self.assertEqual(len(ra.load_shared()[0]), n_shared, "syncing twice changes nothing")
 
-        # 5. tidy: notes whose files changed are judged, old logs are folded
+        # 5. tidy: notes whose files changed are judged; logs stay
         T.sh("git", "switch", "-q", "feat/b", cwd=A)
-        for j in range(5):  # enough private logs on the branch to be worth folding
+        for j in range(5):
             self.session(A, f"s6{j}", 2, start=60 + 3 * j, commit_every=1)
             self.run_cli(A, "log")
         self.assertTrue(any(c[:2] == ["tidy", "--work"] for c in self.spawned[-12:]), "tidy auto runs after a log is saved")
-        archived = list((ra.cdir / "archive").glob("*.json"))
-        self.assertTrue(archived, "the worker folded old logs by itself and the originals are in the archive, not deleted")
-        folded = [v for v in tree.all_views(ra)[0] if v["kind"] == "log" and v["branch"] == "feat/b" and len(v["sources"]) >= tidy.MERGE_MIN]
-        self.assertTrue(folded, "and a log that lists the ones it replaced")
-        self.assertTrue(all(not (ra.cdir / "private" / f"{i}.json").exists() for v in folded for i in v["sources"] if (ra.cdir / "archive" / f"{i}.json").exists()),
-                        "an archived original is no longer in the private log")
-        self.assertEqual(len(tidy.mergeable(tree.all_views(ra)[0]).get("feat/b", [])) < tidy.MERGE_MIN + 1, True)
+        logs = [v for v in tree.all_views(ra)[0] if v["kind"] == "log" and v["branch"] == "feat/b"]
+        self.assertGreaterEqual(len(logs), 5, "every log is kept: nothing folds or archives a log")
+        for v in logs:
+            self.assertTrue((ra.cdir / "private" / f"{v['id']}.json").exists())
+            for oid in v["sources"]:
+                self.assertTrue((ra.cdir / "private" / f"{oid}.json").exists() or (ra.cdir / "archive" / f"{oid}.json").exists(),
+                                "each covered observation is a note, or tidy archived it")
         _, said = self.run_cli(A, "note", "revenue module reads the value", "src/mod_1.py", "--evidence", "x")
         note_id = re.search(r"recorded (\S+)", said).group(1)
         T.commit(A, "rework mod_1 entirely", {"src/mod_1.py": "VALUE = 'reworked'\n"})
