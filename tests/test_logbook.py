@@ -475,22 +475,26 @@ class TestInstaller(Base):
         self.run_cli("install", "--yes")
         _, after = self.run_cli("doctor")
         self.assertRegex(after, r"claude-code\s*: installed")
-        self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed")
+        self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed, post-commit installed")
 
 
-    def test_setup_removes_the_old_per_commit_hook_and_keeps_the_persons_own(self):
+    def test_setup_replaces_the_old_per_commit_block_and_keeps_the_persons_own(self):
         self.run_cli("init")
         hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], self.d).strip())
         hooks.mkdir(exist_ok=True)
         old = "#!/bin/sh\necho mine\n" + capture.MARK_BEGIN + "\n\"python\" -m getlogbook post-commit\n" + capture.MARK_END + "\n"
         (hooks / "post-commit").write_text(old, newline="\n")
         _, text = self.run_cli("install", "--dry-run")
-        self.assertIn("remove", text)
-        self.run_cli("install", "--yes")
+        self.assertRegex(text, r"update\s+git post-commit hook")
+        for _ in range(2):
+            self.run_cli("install", "--yes")
         left = (hooks / "post-commit").read_text()
         self.assertIn("echo mine", left)
-        self.assertNotIn("logbook", left)
+        self.assertEqual(left.count("getlogbook post-commit >/dev/null"), 1, "one block, however often setup runs")
         self.assertTrue((hooks / "post-merge").exists() and (hooks / "pre-push").exists())
+        self.run_cli("uninstall", "--yes")
+        self.assertNotIn("logbook", (hooks / "post-commit").read_text())
+        self.assertIn("echo mine", (hooks / "post-commit").read_text())
 
 
 class CliRepo(Base):
@@ -1903,6 +1907,10 @@ class TestObserver(ObserverBase):
         self.tool(1)
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             capture.handle_hook("SessionEnd", "claude-code", payload)
+            self.assertEqual(spawn.call_args.args[0][-3:], ["getlogbook", "log", "--quiet"], "in ask mode the end of a session saves a log, which observes first")
+            spawn.reset_mock()
+            self.run_cli("config", "publish", "manual")
+            capture.handle_hook("SessionEnd", "claude-code", payload)
             args = [c.args[0] for c in spawn.call_args_list]
             self.assertTrue(any(a[-4:] == ["--drain", "--branch", self.branch, "--flush"] or a[-3:] == ["--drain", "--branch", self.branch] for a in args), args)
             spawn.reset_mock()
@@ -2251,21 +2259,6 @@ class TestSavepoint(ObserverBase):
         with capture._lock(lock, timeout=0.3) as got:
             self.assertTrue(got, "the default still clears a lock that old (hooks that hold it for milliseconds)")
 
-    def test_ask_mode_has_the_agent_ask_once_per_commit(self):
-        for i in range(self.savepoint.AUTO_MIN):
-            self.tool(self.observer.MIN_BATCH)
-            self.drain(OBS_XML.replace("total ignores refunds", f"thing {i}").replace("adds every order", f"adds {i}"), flush=True)
-        self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "no commit yet")
-        commit(self.d, "tax", {"shop/tax.py": "t = 1\n"})
-        self.assertEqual(self.savepoint.ask_block(self.r, {"stop_hook_active": True}), "", "never twice in a row")
-        asked = json.loads(self.savepoint.ask_block(self.r, {}))
-        self.assertEqual(asked["decision"], "block")
-        self.assertIn("logbook log", asked["reason"])
-        self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "once for this commit")
-        self.run_cli("config", "publish", "manual")
-        commit(self.d, "tax2", {"shop/tax2.py": "t = 2\n"})
-        self.assertEqual(self.savepoint.ask_block(self.r, {}), "", "manual mode never asks")
-
 
 class TestBranchMemory(ObserverBase):
     """What a session on a branch starts with: its saved logs and the main line's, and what was observed but not saved yet."""
@@ -2580,6 +2573,43 @@ class TestPublishMoves(CliRepo):
         names = sh("git", "ls-tree", "-r", "--name-only", self.r.own_ref(), cwd=self.d)
         self.assertIn(shared.id, names)
         self.assertNotIn(private.id, names)
+
+
+class TestCommitHook(ObserverBase):
+    """A commit saves a log by itself in ask and auto mode; in manual mode the person runs `logbook log`."""
+
+    def fire(self):
+        import unittest.mock
+        from getlogbook import hookmain
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            self.assertEqual(hookmain.run(["post-commit"]), 0)
+        return spawn.call_args.args[0][-3:] if spawn.called else None
+
+    def test_ask_and_auto_save_a_log_and_manual_does_not(self):
+        for mode, expect in (("ask", ["getlogbook", "log", "--quiet"]), ("auto", ["getlogbook", "log", "--quiet"]), ("manual", None)):
+            self.run_cli("config", "publish", mode)
+            self.assertEqual(self.fire(), expect, mode)
+
+    def test_nothing_starts_on_a_detached_head_with_the_collecting_off_or_for_the_workers_own_commit(self):
+        self.run_cli("config", "publish", "auto")
+        self.run_cli("config", "worker", "off")
+        self.assertIsNone(self.fire())
+        self.run_cli("config", "worker", "on")
+        sh("git", "checkout", "-q", "--detach", cwd=self.d)
+        self.assertIsNone(self.fire())
+        sh("git", "checkout", "-q", "-", cwd=self.d)
+        os.environ[self.worker.GUARD] = "1"
+        self.addCleanup(os.environ.pop, self.worker.GUARD, None)
+        self.assertIsNone(self.fire())
+
+    def test_setup_chains_the_hook_after_the_persons_own_and_it_runs_the_command(self):
+        hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], self.d).strip())
+        hooks.mkdir(exist_ok=True)
+        (hooks / "post-commit").write_text("#!/bin/sh\necho mine\n", newline="\n")
+        capture.install_commit_hook(self.r)
+        text = (hooks / "post-commit").read_text()
+        self.assertTrue(text.index("echo mine") < text.index("getlogbook post-commit"))
+        self.assertIn("getlogbook post-commit >/dev/null 2>&1 || true", text)
 
 
 class TestConvo(ObserverBase):

@@ -94,13 +94,14 @@ def spawn_detached(args, cwd):
 
 def _observe(repo, cfg, flush, end=False):
     """Start an observer pass for the current branch if its queue holds anything. A flush also takes a batch too small to be worth a call by itself.
-    In auto mode a savepoint (`logbook log`, which observes first) starts instead when a commit follows enough new observations, or when the session ends."""
+    In ask and auto mode a savepoint (`logbook log`, which observes first) starts instead when a commit follows enough new observations, or when the session ends
+    (the git post-commit hook saves one at every commit as well)."""
     from . import observer, running, savepoint, worker
     if not (worker.is_on(cfg) and worker.available()):
         return
     branch, head = running.branch_now(repo)
     run = running.Running(repo, branch)
-    if repo.publish_mode() == "auto" and branch != "HEAD" and (savepoint.due(repo, branch, head) or (end and (savepoint.own(run) or run.pending_bytes()))):
+    if repo.publish_mode() in ("ask", "auto") and branch != "HEAD" and (savepoint.due(repo, branch, head) or (end and (savepoint.own(run) or run.pending_bytes()))):
         spawn_detached([cfg.get("interpreter") or sys.executable, "-m", "getlogbook", "log", "--quiet"], repo.root)
     elif run.pending_bytes() > 0:
         observer.spawn_pass(repo, branch, flush=flush)
@@ -150,9 +151,6 @@ def handle_hook(event, agent, raw):
             out = recall.hook_json(event, "\n".join(x for x in (text, note[1] if note else "") if x), note[0] if note else "")
         if event in ("Stop", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             _observe(repo, cfg, flush=event == "SessionEnd", end=event == "SessionEnd")
-            if event == "Stop":
-                from . import savepoint
-                out = savepoint.ask_block(repo, payload)
         if event == "SessionStart":
             _observe(repo, cfg, flush=True)  # tool uses a crashed session left in the queue
         return out
@@ -194,6 +192,19 @@ def _strip_hook_block(f):
 def uninstall_git_hook(repo):
     f = _hooks_dir(repo) / "post-commit"
     _strip_hook_block(f)
+    return f
+
+
+def install_commit_hook(repo):
+    """After every commit, in the background, `logbook post-commit` saves a log in ask and auto mode (see hookmain). Chained after any hook already there."""
+    f = _hooks_dir(repo) / "post-commit"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    _strip_hook_block(f)  # an older version's block did nothing; replace it rather than add a second
+    text = f.read_text(encoding="utf-8") if f.exists() else "#!/bin/sh\n"
+    block = f'{MARK_BEGIN}\n"{_py(repo)}" -m getlogbook post-commit >/dev/null 2>&1 || true\n{MARK_END}\n'
+    f.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8", newline="\n")
+    with contextlib.suppress(OSError):
+        f.chmod(f.stat().st_mode | 0o111)
     return f
 
 

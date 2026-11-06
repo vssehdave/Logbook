@@ -560,7 +560,8 @@ def cmd_doctor(a):
     from . import install as ins
     out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
     out(f"  git hooks   : pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}, "
-        f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}")
+        f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}, "
+        f"post-commit {'installed' if ins.git_hook_installed(r, 'post-commit') else 'missing'}")
     for sm in tree.summaries(views(r)[0]):
         node = "repo" if sm["level"] == "repo" else "branch " + sm["branch"]
         out(f"  summary     : {node}: {'up to date' if sm['fresh'] else str(sm['new_notes']) + ' newer note(s), stale (logbook summarize)'}")
@@ -582,7 +583,8 @@ def cmd_capture(a):
 
 
 def cmd_post_commit(a):
-    return 0  # an older install's git hook still calls this; nothing is recorded per commit any more
+    from . import hookmain
+    return hookmain.run(["post-commit"])  # the git hook's entry point: save a log in the background in ask and auto mode
 
 
 def _targets(a, default):
