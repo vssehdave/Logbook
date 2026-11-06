@@ -1459,7 +1459,7 @@ class TestTidyWorker(CliRepo):
         code, text = self.run_cli("tidy", "--accept")
         self.assertIn("status stored", text)
         self.assertEqual(self.status_of(), "resolved")
-        self.assertIn("0 proposal(s)", self.run_cli("tidy", "--proposals")[1])
+        self.assertIn("0 status proposal(s) and 0 archive proposal(s)", self.run_cli("tidy", "--proposals")[1])
 
     def test_auto_mode_stores_the_valid_proposals_itself(self):
         self.run_cli("config", "tidy", "auto")
@@ -1561,6 +1561,157 @@ class TestTidyWorker(CliRepo):
         decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
         self.assertEqual([decide(f"logbook tidy{f}") for f in ("", " --proposals", " --brief", " --work", " --accept", " --merge-logs")],
                          ["allow", "allow", "allow", "ask", "ask", "ask"])
+
+
+class TestTriage(CliRepo):
+    """A private log collects what sessions leave behind, test and probe runs and repeats among it. The tidy worker has to be able to tell, and nothing it
+    does may delete: entries move to the archive with a reason, and can be put back."""
+
+    def setUp(self):
+        super().setUp()
+        from getlogbook import tidy, worker
+        self.tidy, self.worker = tidy, worker
+        self.good = capture.make_entry(self.r, "log", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
+                                                                                                 "summary": "total() skips refunds"}, paths=["shop/revenue.py"], provenance="worker-written")
+        self.probe = capture.make_entry(self.r, "log", "Reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["shop/revenue.py"],
+                                        provenance="worker-written")
+        self.prompts = []
+
+    def entries(self):
+        return {v["id"] for v in tree.all_views(self.r)[0] if v["scope"] == "private"}
+
+    def model(self, *blocks, error=""):
+        def call(prompt):
+            self.prompts.append(prompt)
+            return ("\n---\n".join(blocks) or "NONE"), 0.001, error
+        return call
+
+    def verdict(self, entry, kind="junk", other="", reason="a probe session that did nothing a reader could use"):
+        return f"entry: {entry}\nverdict: {kind}\n" + (f"redundant_of: {other}\n" if other else "") + f"reason: {reason}"
+
+    def test_the_model_sees_what_the_code_worked_out_about_each_entry(self):
+        sh("git", "checkout", "-q", "-b", "feat/gone", cwd=self.d)
+        stray = capture.make_entry(self.r, "finding", "tried a parser", {"summary": "the parser attempt found nothing"}, paths=["shop/ghost.py"])
+        sh("git", "checkout", "-q", "-", cwd=self.d)
+        sh("git", "branch", "-q", "-D", "feat/gone", cwd=self.d)
+        self.tidy.triage(self.r, self.model(), apply=False)
+        sent = self.prompts[0]
+        self.assertIn(f"entry {stray.id}", sent)
+        self.assertIn("branch is gone and was never merged", sent)
+        self.assertIn("files: 0 of 1 still exist", sent)
+        self.assertIn("Reply with only the word ok", sent)
+
+    def test_an_exact_repeat_is_archived_without_a_model_and_the_older_one_stays(self):
+        self.run_cli("config", "worker", "off")  # no model at all
+        again = capture.make_entry(self.r, "log", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
+                                                                                            "summary": "total() skips refunds"}, paths=["shop/revenue.py"], provenance="worker-written")
+        res = self.tidy.triage(self.r, apply=True)
+        self.assertEqual(res["archived"], [again.id])
+        self.assertIn(self.good.id, self.entries())
+        self.assertNotIn(again.id, self.entries())
+        self.assertTrue((self.r.cdir / "archive" / f"{again.id}.json").exists(), "moved, not deleted")
+        why = [json.loads(x) for x in (self.r.cdir / "archive" / "reasons.jsonl").read_text().splitlines()]
+        self.assertEqual((why[0]["entry"], why[0]["redundant_of"]), (again.id, self.good.id))
+
+    def test_auto_archives_what_the_model_calls_junk_and_every_verdict_is_checked(self):
+        published = capture.make_entry(self.r, "finding", "shared already", {"summary": "s", "why": "w"})
+        self.run_cli("publish", published.id, "--yes")
+        short = capture.make_entry(self.r, "log", "second probe", {"what": "nothing", "summary": "nothing"}, provenance="worker-written")
+        call = self.model(self.verdict(self.probe.id),                                                          # valid
+                          self.verdict(new_id()),                                                                 # not an entry that was shown
+                          self.verdict(published.id),                                                             # shared: never in the pool
+                          self.verdict(self.good.id, "redundant", other=self.good.id),                            # a repeat of itself
+                          self.verdict(short.id, reason="x"),                                                     # no real reason
+                          self.verdict(self.good.id, "delete"))                                                   # not a verdict
+        res = self.tidy.triage(self.r, call, apply=True)
+        self.assertEqual(res["archived"], [self.probe.id])
+        self.assertEqual(res["rejected"], 5)
+        self.assertEqual(self.entries() & {self.good.id, short.id}, {self.good.id, short.id})
+        self.assertEqual(len(self.r.load_shared()[0]), 1, "what was shared is untouched")
+
+    def test_manual_mode_keeps_the_proposals_and_accept_archives_them(self):
+        res = self.tidy.triage(self.r, self.model(self.verdict(self.probe.id)), apply=False)
+        self.assertEqual((res["proposed"], res["archived"]), (1, []))
+        self.assertIn(self.probe.id, self.entries(), "nothing moves without a yes")
+        code, text = self.run_cli("tidy", "--proposals", "--no-sync")
+        self.assertIn(f"{self.probe.id}  ->  archive as junk", text)
+        self.assertIn("waiting", self.run_cli("tidy", "--no-sync")[1])
+        code, text = self.run_cli("tidy", "--accept", "--no-sync")
+        self.assertIn(f"{self.probe.id} archived", text)
+        self.assertNotIn(self.probe.id, self.entries())
+        self.assertIn("restored 1 of 1", self.run_cli("tidy", "--restore", self.probe.id)[1])
+        self.assertIn(self.probe.id, self.entries(), "and it can be put back")
+
+    def test_one_pass_archives_at_most_ten_and_does_not_ask_again_about_what_it_judged(self):
+        many = [capture.make_entry(self.r, "log", f"probe {i}", {"what": f"nothing {i}", "summary": f"nothing {i}"}, provenance="worker-written") for i in range(14)]
+        res = self.tidy.triage(self.r, self.model(*[self.verdict(e.id) for e in many]), apply=True)
+        self.assertEqual(len(res["archived"]), self.tidy.TRIAGE_ARCHIVE_MAX)
+        self.assertEqual(self.tidy.triage(self.r, self.model(), apply=True)["skipped"], "nothing new to judge", "everything shown was marked as judged")
+
+    def test_a_failed_call_judges_nothing_and_the_pause_is_obeyed(self):
+        self.assertIn("error", self.tidy.triage(self.r, self.model(error="boom"), apply=True))
+        res = self.tidy.triage(self.r, self.model(self.verdict(self.probe.id)), apply=True)
+        self.assertEqual(res["archived"], [self.probe.id], "the failed call marked nothing, so the next pass judged them")
+
+        def call(prompt):
+            self.worker.last_rate = {"five_hour": {"u": 0.97, "resets": int(time.time()) + 7200}}
+            return "NONE", 0.001, ""
+        capture.make_entry(self.r, "log", "another", {"what": "w2", "summary": "s2"}, provenance="worker-written")
+        self.tidy.triage(self.r, call, apply=True)
+        capture.make_entry(self.r, "log", "and another", {"what": "w3", "summary": "s3"}, provenance="worker-written")
+        self.assertIn("paused", self.tidy.triage(self.r, self.model(), apply=True)["skipped"])
+
+    def test_a_repeat_of_something_archived_in_the_same_pass_follows_it_to_the_one_that_stays(self):
+        self.run_cli("config", "worker", "off")
+        twin = capture.make_entry(self.r, "log", "Refunds no longer counted as revenue", {"what": "total() now skips refunded orders", "why": "it summed every amount",
+                                                                                           "summary": "total() skips refunds"}, paths=["shop/revenue.py"], provenance="worker-written")
+        res = self.tidy.triage(self.r, apply=True)
+        self.assertEqual(res["archived"], [twin.id])
+        rows = [json.loads(x) for x in (self.r.cdir / "archive" / "reasons.jsonl").read_text().splitlines()]
+        self.assertEqual(rows[-1]["redundant_of"], self.good.id)
+
+    def test_in_auto_mode_publishing_tidies_first_and_the_junk_is_not_published(self):
+        import unittest.mock
+        self.run_cli("config", "publish", "auto")
+        sh("git", "checkout", "-q", "-b", "feat/x", cwd=self.d)
+        keep = capture.make_entry(self.r, "log", "Real work", {"what": "added a filter", "why": "refunds counted", "summary": "added a filter"}, provenance="worker-written")
+        junk = capture.make_entry(self.r, "log", "Probe run", {"what": "answered ok", "summary": "ok"}, provenance="worker-written")
+        seen = []
+
+        def fake(prompt, model="haiku"):
+            seen.append(prompt)
+            return self.verdict(junk.id), 0.001, ""
+        with unittest.mock.patch.object(self.worker, "call_model", fake):
+            code, text = self.run_cli("publish", "--branch", "feat/x", "--yes")
+        self.assertEqual(code, 0, text)
+        self.assertIn("tidy before publishing: archived 1 junk", text)
+        shared = {l.entry.id for l in self.r.load_shared()[0]}
+        self.assertIn(keep.id, shared)
+        self.assertNotIn(junk.id, shared)
+        self.assertTrue((self.r.cdir / "archive" / f"{junk.id}.json").exists())
+
+    def test_publishing_in_auto_mode_stops_when_tidy_could_not_look_and_no_tidy_overrides(self):
+        import unittest.mock
+        self.run_cli("config", "publish", "auto")
+        sh("git", "checkout", "-q", "-b", "feat/y", cwd=self.d)
+        e = capture.make_entry(self.r, "log", "Unchecked", {"what": "w", "summary": "s"}, provenance="worker-written")
+        with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": ("", 0.0, "Claude usage limit reached")):
+            with self.assertRaises(SystemExit) as refused:
+                self.run_cli("publish", "--branch", "feat/y", "--yes")
+        self.assertIn("tidy could not check the log", str(refused.exception))
+        self.assertEqual(self.r.load_shared()[0], [], "nothing was published")
+        self.assertIn(e.id, self.entries())
+        code, text = self.run_cli("publish", "--branch", "feat/y", "--yes", "--no-tidy")
+        self.assertEqual(code, 0, text)
+        self.assertIn(e.id, {l.entry.id for l in self.r.load_shared()[0]})
+
+    def test_ask_and_manual_publishing_do_not_start_tidy(self):
+        import unittest.mock
+        e = capture.make_entry(self.r, "finding", "plain", {"summary": "s", "why": "w"})
+        for mode in ("ask", "manual"):
+            self.run_cli("config", "publish", mode)
+            with unittest.mock.patch.object(self.worker, "call_model", side_effect=AssertionError("tidy must not run")):
+                self.run_cli("publish", e.id, "--yes", "--keep")
 
 
 class TestGitLocks(CliRepo):

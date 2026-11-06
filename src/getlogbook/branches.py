@@ -76,6 +76,6 @@ def reminder(repo, mode):
     if not found:
         return ""
     names = ", ".join(f"{b} ({len(es)})" for b, es, _ in found[:5])
-    how = ("Run `logbook publish --branch <name> --yes` for each (a redacted preview is printed; anything the checks refuse stays private)." if mode == "auto"
+    how = ("Run `logbook publish --branch <name> --yes` for each: in auto mode it runs tidy first (junk and repeated entries are archived, not published), then prints the redacted preview; anything the checks refuse stays private." if mode == "auto"
            else "Ask the user whether to publish them; on a yes run `logbook publish --branch <name>` and show the preview.")
     return f"[logbook] These branches look merged and still have private logs or notes: {names}. {how}"

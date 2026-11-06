@@ -19,7 +19,7 @@ TABLE = {
 # publish: never (policy) and manual deny, ask lets the normal prompt run, auto allows. sync: allow only in auto mode, else ask.
 MODE_RULES = {"publish": {"never": "deny", "manual": "deny", "ask": "ask", "auto": "allow"},
               "sync": {"never": "ask", "manual": "ask", "ask": "ask", "auto": "allow"}}
-ASK_FLAG = {"tidy": ("--apply", "--accept", "--work", "--merge-logs"), "worker": ("--drain",)}  # the flag that turns an allowed command into one that asks: applying a tidy is the person's approval step, a worker pass spends their quota
+ASK_FLAG = {"tidy": ("--apply", "--accept", "--work", "--merge-logs", "--restore"), "worker": ("--drain",)}  # the flag that turns an allowed command into one that asks: applying a tidy is the person's approval step, a worker pass spends their quota
 NAMES = ("logbook", "getlogbook")
 _HEREDOC = re.compile(r"\s<<-?\s*'([A-Za-z_][A-Za-z0-9_]*)'\s*$")
 _SHELL = re.compile(r"[;&|$`<>(){}\\\n]")  # shortcut: any of these anywhere in the command line, even inside quotes, means no opinion; upgrade if it bites
