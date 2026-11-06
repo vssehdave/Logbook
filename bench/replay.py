@@ -78,7 +78,8 @@ def session_events(path):
                     if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in pending:
                         use = pending.pop(b["tool_use_id"])
                         evs.append((ts, branch, "PostToolUseFailure" if b.get("is_error") else "PostToolUse",
-                                    {"tool_name": use["name"], "tool_input": use.get("input") or {}, "tool_response": b.get("content")}))
+                                    {"tool_name": use["name"], "tool_input": use.get("input") or {},
+                                     "tool_response": running.flatten(b.get("content"))[:4000]}))  # Logbook keeps 1,200 characters of it; the rest would only fill memory
         elif d.get("type") == "assistant" and isinstance(content, list):
             for b in content:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
