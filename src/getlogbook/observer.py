@@ -35,6 +35,8 @@ Each batch below holds tool uses from the session: the tool, its input and its o
 
 Skip routine work: listing files, searches that find nothing, reads that lead nowhere, installs without errors, and anything already in the ALREADY RECORDED list (never write the same thing again, even in other words). If a batch holds nothing worth keeping, answer with exactly: <skip reason="short reason" />
 
+A document is not evidence about the present. When a tool use only reads a document (a README, roadmap, changelog, design note, comment or docstring), record what it says as that document's claim ("the roadmap says 0.0.5rc4 is the newest build"), never as a fact about the system, and say it may be out of date. Version numbers, statuses, "done" and "not yet" in documents go stale first. Record a fact about the system only when a command's output or the code itself, in this batch or in ALREADY RECORDED, shows it. Prefer recording what the session found out about code and behavior over what documents say about plans.
+
 Use only what the tool uses show. Do not guess a cause. Do not copy secrets, tokens, email addresses or pasted data rows. A batch gives zero to four observations. Each one is:
 
 <observation>

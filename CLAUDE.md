@@ -1,6 +1,6 @@
 # Logbook: brief for Claude Code
 
-Read `docs/ROADMAP.md` first: where we are, what is next, what was decided. Design of the next phases: `docs/TIDY-AND-MEMTREE.md`.
+Read `docs/ROADMAP.md` first: where we are, what is next, what was decided. Design of the next phases: `docs/TIDY-AND-SUMMARY-TREE.md`.
 
 ## What it is
 

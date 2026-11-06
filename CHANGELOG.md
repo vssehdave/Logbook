@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: the observer wrote what a document says as if it were true.** In the first real use of 0.0.6 a session read a roadmap that still said an old release was the newest, and the saved log recorded that as a fact. The observer and the savepoint prompts now keep a document's claim attributed ("the roadmap says ..."), say it may be out of date, and record a fact about the system only when a command's output or the code shows it. Checked with a real model: given the stale roadmap alone it now writes the claim as the roadmap's, and given the real state beside it it records the contradiction.
+- Docs: the design notes file is now `docs/TIDY-AND-SUMMARY-TREE.md`, and the roadmap describes the 0.0.6 release.
+
 ## 0.0.6 (2026-11-05)
 
 The rescope: Logbook now remembers a session per branch (an observer records it, `logbook log` saves it), shares it by branch once merged, tidies it with a cheap model, and pauses before it uses up your subscription allowance. Read the bullets below from the bottom of this section up for the order they were built in.

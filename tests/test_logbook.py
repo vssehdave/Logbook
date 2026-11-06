@@ -1682,6 +1682,16 @@ class TestObserver(ObserverBase):
         self.assertEqual(self.calls, [])
         self.assertEqual(len(self.drain(flush=True)["observations"]), 1)
 
+    def test_the_model_is_told_a_document_is_a_claim_not_a_fact(self):
+        """A roadmap read in a session said an old release was the newest; the observer recorded that as a fact about the project. The instruction that
+        prevents it must reach the model, with the stale text it applies to. (Whether a model obeys it was checked once with a real model.)"""
+        self.tool(5, tool_response="Last updated: 0.0.5rc4 is the newest build on TestPyPI.")
+        self.drain()
+        sent = self.calls[0]
+        self.assertIn("A document is not evidence about the present", sent)
+        self.assertIn("that document's claim", sent)
+        self.assertIn("0.0.5rc4 is the newest build", sent, "the text it applies to is in the same prompt")
+
     def test_a_skip_answer_keeps_nothing_but_still_moves_the_cursor(self):
         self.tool(5)
         res = self.drain('<skip reason="routine" />')
@@ -1951,6 +1961,12 @@ class TestSavepoint(ObserverBase):
         self.assertEqual((res["by"], res["title"]), ("code", "total ignores refunds"))
         self.observe(title="again")
         self.assertEqual(self.save("not xml at all")["by"], "code")
+
+    def test_the_savepoint_keeps_a_documents_claim_attributed(self):
+        self.observe()
+        self.save()
+        self.assertIn("Keep a claim attributed to where it came from", self.calls[-1])
+        self.assertIn('write "the roadmap says', self.calls[-1])
 
     def test_the_savepoint_takes_the_queued_tool_uses_first(self):
         self.tool(5)
