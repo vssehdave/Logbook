@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "logbook",
-      "description": "A Sources band above the prompt: the numbered notes behind an answer, with commit or pull request links for notes a teammate shared.",
+      "description": "The Logbook Sources band above the prompt (the numbered notes behind an answer, with links to the commit or pull request for notes a teammate shared). The memory itself comes from the getlogbook package: pip install getlogbook, then logbook setup in each repo.",
       "source": "./",
       "category": "productivity"
     }

@@ -19,7 +19,7 @@ injected into an agent's prompt. The only measurements so far are two small smok
 
 ## Try it (no credentials, about 30 seconds)
 
-    pip install getlogbook   # from a clone: pip install .   (or: PYTHONPATH=src python -m getlogbook ...)
+    pipx install getlogbook  # or: pip install getlogbook   (from a clone: pip install .)
                              # the command is `logbook`; the package name is getlogbook because `logbook` on PyPI is taken
     logbook demo           # Alice, Bob and a hostile Mallory on a scratch repo; every claim is checked
 
@@ -37,7 +37,8 @@ always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKI
 
 ## The Bibliography band (Claude Code only, optional)
 
-    /plugin install logbook --marketplace vssehdave/Logbook
+    /plugin marketplace add vssehdave/Logbook
+    /plugin install logbook@logbook
 
 A row above the prompt, always there: **bibliography**, then a dot shaded by the mode (light grey manual, pale yellow ask, darker yellow auto) and the mode's name, which does what **details** does, then how many sources this chat has cited (in grey), a finder on the right, and
 **details** (it reads **compact** while the details are showing). Under it, the sources cited so far, as `¹ title` buttons that fit the width (`+N more` when they do
