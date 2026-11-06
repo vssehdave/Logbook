@@ -127,7 +127,7 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
         fields, how = summarize(repo, branch, obs, call, now) if use_model else (fallback(obs), "code")
         e = _entry(repo, branch, sha, obs, fields)
         prev = last(run).get("head") or (obs[0].get("head") if obs else "")
-        for n in notes_from(repo, branch, sha, prev, obs, e.id):
+        for n in notes_from(repo, branch, sha, prev, obs, e.id, run.queue_text(last(run).get("qoff", 0), run.offset())):
             if not repo.get_private(n.id):  # the same observation is never saved as a note twice
                 repo.add_private(n)
         repo.add_private(e)
@@ -180,9 +180,10 @@ def _rel(root, f):
     return f[len(root):] if f.casefold().startswith(root.casefold()) else f
 
 
-def notes_from(repo, branch, sha, prev, obs, log_id):
+def notes_from(repo, branch, sha, prev, obs, log_id, tool_text=None):
     """One note per observation. A note is about the commit when a commit since the last savepoint changed a file the observation modified, else about the
-    branch. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents."""
+    branch. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents. With `tool_text` (what the
+    tool uses behind the savepoint showed) the identifier-like words in its facts must also appear there, or in what the other observations of the savepoint say."""
     from . import tree
     root = repo.root.resolve().as_posix().rstrip("/") + "/"
     changed = _changed(repo, prev, sha) if sha else set()
@@ -203,9 +204,13 @@ def notes_from(repo, branch, sha, prev, obs, log_id):
         body = {"summary": sub[:300], "why": o["narrative"][:2000]}
         if facts or mod:  # files read alone prove nothing: the note has evidence only when something was found or changed
             body["evidence"] = "\n".join(proof)[:2000]
+        checks = ground.check(repo, body, o["title"], mod + read, sha if about else None)
+        if tool_text is not None:
+            others = " ".join(f"{x['title']} {x['narrative']}" for x in obs if x is not o)
+            checks["unsupported"] = ground.unsupported(facts, tool_text + "\n" + others)
         out.append(Entry(id=o["id"] if ID_RE.match(str(o.get("id", ""))) else new_id(), kind="finding", topic=o["title"][:200], body=body, anchor=a,
                          provenance="worker-written", captured_via="savepoint", v=2, level="commit" if about else "branch", sources=[log_id],
-                         checks=ground.check(repo, body, o["title"], mod + read, sha if about else None),
+                         checks=checks,
                          created=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(o.get("t") or time.time())),
                          obs={"type": o.get("type", ""), "concepts": o.get("concepts", []), "files_read": read, "files_modified": mod,
                               "session": o.get("session", ""), "t": o.get("t", 0)},
