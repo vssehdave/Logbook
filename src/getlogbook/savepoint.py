@@ -21,7 +21,7 @@ AUTO_MIN = 5  # auto mode saves after a commit once this many new observations h
 PROMPT_OBS = 60  # observations shown to the model
 SYSTEM = """You write the savepoint for a coding session on the git branch `{branch}`. You cannot use tools. Below are the observations recorded since the last savepoint, oldest first. Summarize them for a teammate, or a later session, who has not seen the work.
 
-Use only the observations: do not guess a cause and do not add anything they do not say. Do not copy secrets, tokens, email addresses or pasted data rows. Leave a field empty rather than invent it. Answer with exactly:
+Use only the observations: do not guess a cause and do not add anything they do not say. Keep a claim attributed to where it came from: if an observation says a document claims something, write "the roadmap says ..." and do not turn it into a fact about the project; leave out a document's version or status claim unless an observation shows it is still true. Do not copy secrets, tokens, email addresses or pasted data rows. Leave a field empty rather than invent it. Answer with exactly:
 
 <savepoint>
   <title>a short title, under 80 characters</title>
