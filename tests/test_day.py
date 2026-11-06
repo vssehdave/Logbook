@@ -60,6 +60,12 @@ elif "You write the savepoint" in prompt:
     seen = len(re.findall(r"^\d+\. \[", prompt, re.M))
     text = (f"<savepoint><title>Work block {n}</title><request>Keep the day's work moving.</request><investigated>src/mod_0.py</investigated>"
             f"<learned>Block {n} covered {seen} observations.</learned><completed>Completed {seen} steps in block {n}.</completed><next_steps>More tomorrow.</next_steps></savepoint>")
+elif "You keep a person's private log of coding sessions clean" in prompt:
+    blocks = []
+    for m in re.finditer(r"^entry (\S+) \(.*?(?=^entry |\Z)", prompt, re.M | re.S):
+        if "probe" in m.group(0).lower():
+            blocks.append(f"entry: {m.group(1)}\nverdict: junk\nreason: A probe session that left nothing a reader could use.")
+    text = "\n---\n".join(blocks) or "NONE"
 elif "keep a team's recorded notes true" in prompt:
     blocks = []
     for m in re.finditer(r"^note (\S+): .*?(?=^note |\Z)", prompt, re.M | re.S):
@@ -313,6 +319,10 @@ class TestADay(unittest.TestCase):
         self.assertEqual(running.Running(ra, "feat/a").pending_bytes(), 0, "after the reset the waiting tool uses are observed")
         self.invariants("resumed")
 
+        probe = capture.make_entry(ra, "log", "Probe: reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["src/mod_0.py"],
+                                   provenance="worker-written")
+        self.assertEqual(probe.anchor["branch"], "feat/a")
+
         # 3. another branch from main, and the first one merged
         self.tidy_up(A)
         T.sh("git", "switch", "-q", "main", cwd=A)
@@ -331,8 +341,11 @@ class TestADay(unittest.TestCase):
         self.assertTrue(mine_before)
         code, text = self.run_cli(A, "publish", "--branch", "feat/a", "--yes")
         self.assertEqual(code, 0, text)
+        self.assertIn("tidy before publishing", text, "in auto mode tidy ran before anything was published")
         shared_ids = {l.entry.id for l in ra.load_shared()[0]}
-        self.assertTrue(mine_before <= shared_ids, "everything on the merged branch was published")
+        self.assertNotIn(probe.id, shared_ids, "the throwaway session's log was not published")
+        self.assertTrue((ra.cdir / "archive" / f"{probe.id}.json").exists(), "it was archived, not deleted")
+        self.assertTrue((mine_before - {probe.id}) <= shared_ids, "everything else on the merged branch was published")
         self.assertFalse([e for e in ra.unpublished() if e.anchor.get("branch") == "feat/a"])
         self.assertTrue([e for e in ra.unpublished() if e.anchor.get("branch") == "feat/b"], "the open branch stays private")
         self.assertEqual(self.run_cli(A, "sync")[0], 0)

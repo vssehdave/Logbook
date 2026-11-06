@@ -136,9 +136,22 @@ note's files after it was written) and drops the rest. What happens to the valid
 | `manual` (default) | kept for you: `logbook tidy --proposals` shows them, `logbook tidy --accept` stores them (asks first in Claude Code) | `logbook tidy --merge-logs` |
 | `auto` | stored by the worker, one at a time (a status is a small private record; a new one reopens a note) | folded by the worker |
 
+**Junk and repeats.** A private log collects whatever sessions leave behind: a probe or a test run, a one-word reply, an attempt that found nothing, the same thing saved
+twice. Tidy looks at those too, because without it they get published and injected like real records. An exact repeat of an older entry needs no model and is archived
+at once. For the rest the cheap model is shown what the code worked out about each of your private entries (how old it is, whether its branch still exists or was
+merged, how many of its files are still there, what it covers) and answers `junk` or `redundant` (naming the entry to keep) with a reason, only when it is sure.
+Python accepts a verdict only about one of your own private, unpublished entries, with a reason, naming a real other entry for a repeat, and at most ten per pass.
+In `manual` the verdicts wait in `logbook tidy --proposals` and `--accept` archives them; in `auto` they are archived by the worker. Entries move to
+`.git/logbook/archive/` with the reason in `reasons.jsonl`; nothing is deleted, and `logbook tidy --restore <id>` puts one back.
+
+**Before a publish.** In `auto` mode `logbook publish` runs tidy first, whatever the way it was asked (an id, `--branch`, `--merged`, `--all`): it fetches what teammates
+shared, archives the junk and the repeats, folds old logs and updates statuses, and only then publishes what is left. If tidy could not look (the usage allowance is
+paused, the day's call cap is reached, the model call failed) nothing is published and it says why; `--no-tidy` publishes unchecked anyway. `ask` and `manual` do not
+start tidy by themselves.
+
 In `auto` the worker runs in the background after a log is saved and after a `git pull`. **Folding**: when a branch has four or more private logs of yours, the older ones are
 summarized into one new log (by the same cheap model, or by code), and the originals move to `.git/logbook/archive/` where they stay readable. Nothing is deleted, a note
-is never edited, and a saved log is never treated as junk. The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
+is never edited, and a saved log is never marked true or false (it is only archived, by the triage above, when it is junk or a repeat). The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
 commit touches its files, and `--garbage` still archives your old machine-made drafts.
 
 ## What Claude may run without asking (Claude Code)
@@ -155,7 +168,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `log` | allow |
 | `status` | allow |
 | `summarize` | allow |
-| `tidy` | allow; `--apply`, `--accept`, `--work`, `--merge-logs` asks |
+| `tidy` | allow; `--apply`, `--accept`, `--work`, `--merge-logs`, `--restore` asks |
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
 | `sync` | never: ask, manual: ask, ask: ask, auto: allow |
@@ -174,7 +187,7 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
     logbook note --fields                     # the whole note as `key: value` lines on stdin: what an agent uses (no braces or quotes)
     logbook note --json                       # the same as a JSON object
     logbook note --kind finding --topic "late payments" --summary "revenue dip" --why "export stalled" --wrong "1 day under"
-    logbook note --kind change --before-commit --summary "..." --why "..." --wrong "..." --fix "..."   # then commit as usual
+    logbook note --kind change --summary "..." --why "..." --wrong "..." --fix "..."   # after you commit: it is filed under that commit
     logbook note --commit <sha> --summary "..."   # a note about an earlier commit
     logbook publish <id>                      # preview + redaction, you confirm; evidence is opt-in
     logbook publish                           # lists your private notes that are not shared yet and asks which
