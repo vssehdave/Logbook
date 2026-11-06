@@ -368,6 +368,18 @@ def age_days(created):
         return None
 
 
+def local_log(repo, loaded):
+    """The id of the log on this machine that one of your own notes was made from ('' for anyone else's note, or when the log is not here): logs never leave the machine
+    they were saved on, so a teammate's note only says that it came from somewhere."""
+    if loaded.user != repo.user:
+        return ""
+    for i in loaded.entry.sources[:3]:
+        p = repo.get_private(i)
+        if p and p.kind == "log":
+            return i
+    return ""
+
+
 def view(repo, loaded, anch):
     """Flat, JSON-safe dict for one entry (UI and CLI share this)."""
     e, a = loaded.entry, loaded.entry.anchor
@@ -380,7 +392,8 @@ def view(repo, loaded, anch):
             "branch": a.get("branch", ""), "subject": a.get("subject", ""), "sha": a.get("sha", ""), "placed": sha or "",
             "paths": a.get("paths", []), "names": a.get("names", []), "dirty": a.get("dirty", False),
             "supersedes": e.supersedes, "checks": e.checks, "redacted": e.redacted, "level": e.level, "sources": e.sources,
-            "merge_base": a.get("merge_base", ""), "base": a.get("base", ""), "writer": loaded.user, "status_rec": e.status}
+            "merge_base": a.get("merge_base", ""), "base": a.get("base", ""), "writer": loaded.user, "status_rec": e.status,
+            "log": local_log(repo, loaded)}
 
 
 def apply_statuses(views):

@@ -2206,13 +2206,15 @@ class TestSavepoint(ObserverBase):
         self.assertIn("nothing new", self.run_cli("log", "--no-model")[1])
         self.assertIn("detached", self.savepoint.save(self.r, "HEAD")["skipped"])
 
-    def test_a_stored_log_publishes_like_any_note(self):
+    def test_a_stored_log_is_not_published_but_its_notes_are(self):
         self.observe()
         res = self.save()
-        code, text = self.run_cli("publish", res["saved"], "--yes")
+        self.assertIn("stays on this machine", self.run_cli("publish", res["saved"], "--yes")[1])
+        self.assertEqual(self.r.load_shared()[0], [])
+        code, text = self.run_cli("publish", "--all", "--yes")
         self.assertEqual(code, 0, text)
         shared, _ = self.r.load_shared()
-        self.assertEqual([(l.entry.kind, l.entry.anchor["branch"]) for l in shared], [("log", self.branch)])
+        self.assertEqual([(l.entry.kind, l.entry.anchor["branch"], l.entry.sources) for l in shared], [("finding", self.branch, [res["saved"]])])
         self.assertNotIn("evidence", shared[0].entry.body, "what was investigated stays private unless asked for")
 
     def test_auto_saves_after_a_commit_once_enough_observations_have_piled_up(self):
@@ -2654,13 +2656,13 @@ class TestQueue(CliRepo):
     def worker_note(self, topic, checks=None, **kw):
         return capture.make_entry(self.r, "finding", topic, {"summary": "s", "why": "w", "evidence": "ran it"}, provenance="worker-written", checks=checks or self.CK, **kw)
 
-    def test_tidy_queues_logs_and_notes_that_pass_their_checks_and_leaves_the_rest_out(self):
+    def test_tidy_queues_notes_that_pass_their_checks_and_leaves_the_rest_out(self):
         log = capture.make_entry(self.r, "log", "a session", {"what": "w", "summary": "s"}, provenance="worker-written")
         good, bad = self.worker_note("good"), self.worker_note("names a missing file", self.BAD)
         bare = capture.make_entry(self.r, "finding", "no evidence", {"summary": "s", "why": "w"}, provenance="worker-written")
         res = tidy.queue_pass(self.r)
-        self.assertEqual(self.queued(), {log.id, good.id})
-        self.assertEqual((sorted(res["queued"]), res["removed"]), (sorted([log.id, good.id]), []))
+        self.assertEqual(self.queued(), {good.id}, "a log stays on this machine, so it is never queued")
+        self.assertEqual((res["queued"], res["removed"]), ([good.id], []))
         self.assertNotIn(bad.id, self.queued())
         self.assertNotIn(bare.id, self.queued())
 
@@ -2927,53 +2929,34 @@ class TestConvo(ObserverBase):
         self.drain(OBS_XML.replace("total ignores refunds", "t" + str(len(self.r.load_private()))))
         return savepoint.save(self.r, self.branch, call=lambda p: (SAVEPOINT_XML, 0.001, ""), observe=False)["saved"]
 
-    def test_publishing_a_log_carries_its_conversation_into_the_shared_tree_and_a_second_publish_keeps_it(self):
+    def test_a_log_and_its_conversation_never_leave_this_machine(self):
         from getlogbook import convo
-        big = "y" * 5000
-        first = self.saved_log(*[("UserPromptSubmit" if i % 2 == 0 else "Stop", f"m{i} {big}") for i in range(30)])  # about 150 KB: past the 64 KB entry limit
-        code, text = self.run_cli("publish", first, "--yes")
-        self.assertEqual(code or 0, 0, text)
-        self.assertIn("conversation behind it", text)
-        data = self.r.shared_convo(first)
-        self.assertIsNotNone(data)
-        self.assertGreater(len(data), 100_000)
-        self.assertFalse(convo.private_path(self.r, first).exists(), "a move, like the entry")
-        second = self.saved_log(("UserPromptSubmit", "another question"))
-        self.assertEqual(self.run_cli("publish", second, "--yes")[0] or 0, 0)
-        self.assertEqual(self.r.shared_convo(first), data, "rewriting the ref did not drop the large conversation")
-        self.assertIn("m0 ", self.run_cli("convo", first)[1])
-        self.assertIn("another question", self.run_cli("convo", second)[1])
+        log = self.saved_log(("UserPromptSubmit", "a private question"), ("Stop", "a private answer"))
+        self.assertEqual([m["text"] for m in convo.load(self.r, log)], ["a private question", "a private answer"])
+        self.assertIn("a private question", self.run_cli("convo", log)[1])
+        for args in (("publish", log, "--yes"), ("publish", "--all", "--yes"), ("publish", "--branch", self.branch, "--yes")):
+            self.run_cli(*args)
+        shared = self.r.load_shared()[0]
+        self.assertTrue(shared and all(l.entry.kind != "log" for l in shared), "the notes were shared, the log was not")
+        self.assertEqual([x for x in subprocess.run(["git", "ls-tree", "-r", "--name-only", self.r.own_ref()], cwd=self.d, capture_output=True, text=True).stdout.split()
+                          if not x.startswith("entries/")], [], "and nothing but entries is in the shared tree")
+        self.assertEqual(self.run_cli("queue")[1].count(log), 0, "a log is never queued")
+        with self.assertRaises(ValueError):
+            self.r.publish([self.r.get_private(log)])
+        self.assertTrue(convo.private_path(self.r, log).exists())
+        self.assertIn("stays on this machine", self.run_cli("publish", log, "--yes")[1])
 
-    def test_no_convo_publishes_the_log_alone_and_the_total_cap_refuses_before_writing(self):
-        a = self.saved_log(("UserPromptSubmit", "kept private"))
-        self.assertEqual(self.run_cli("publish", a, "--yes", "--no-convo")[0] or 0, 0)
-        self.assertIsNone(self.r.shared_convo(a))
-        b = self.saved_log(("UserPromptSubmit", "too much for the cap"))
-        (self.d / ".logbook").mkdir(exist_ok=True)
-        (self.d / ".logbook" / "policy.json").write_text(json.dumps({"max_convo_total": 10}), encoding="utf-8")
-        with self.assertRaises(SystemExit) as refused:
-            self.run_cli("publish", b, "--yes")
-        self.assertIn("nothing was published", str(refused.exception))
-        self.assertIsNone(self.r.shared_convo(b))
-
-    def test_purging_a_log_takes_its_conversation_and_a_plain_clone_does_not_download_it(self):
-        from getlogbook import sync
-        a = self.saved_log(("UserPromptSubmit", "to be purged"))
-        b = self.saved_log(("UserPromptSubmit", "to be kept"))
-        self.run_cli("publish", a, b, "--yes")
-        remote = self.root / "remote.git"
-        sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
-        sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
-        sh("git", "push", "-q", "origin", "HEAD", cwd=self.d)
-        self.assertTrue(sync.push(self.r)["ok"])
-        clone = self.root / "clone"
-        sh("git", "clone", "-q", "file://" + str(remote).replace("\\", "/"), str(clone), cwd=self.root)
-        refs = subprocess.run(["git", "for-each-ref", "refs/logbook", "refs/logbook-remote"], cwd=clone, capture_output=True, text=True).stdout
-        self.assertEqual(refs.strip(), "", "a plain clone has no logbook refs, so no conversations")
-        self.r.purge(a)
-        tree_now = subprocess.run(["git", "ls-tree", "-r", "--name-only", self.r.own_ref()], cwd=self.d, capture_output=True, text=True).stdout.split()
-        self.assertNotIn(f"convo/{a}.jsonl", tree_now)
-        self.assertIn(f"convo/{b}.jsonl", tree_now)
+    def test_a_note_made_at_a_savepoint_points_at_its_log_for_its_author_only(self):
+        from getlogbook import cites
+        saved = self.saved_log(("UserPromptSubmit", "why"))
+        views = {v["id"]: v for v in tree.all_views(self.r)[0]}
+        note = next(v for v in views.values() if v["kind"] == "finding")
+        self.assertEqual(note["log"], saved, "your own note can open the log it came from")
+        self.assertEqual(cites.record(self.r, note, 1)["log"], saved)
+        self.assertIn(f"from your log {saved}", self.run_cli("ask", f"note:{note['id']}")[1])
+        self.assertEqual(views[saved]["log"], "", "a log has no log of its own")
+        theirs = dict(note, mine=False, scope="shared", log="")  # how the same note looks to a teammate: the log it names is not on their machine
+        self.assertEqual(cites.record(self.r, theirs, 2)["log"], "", "someone else's note just shows as a note")
 
 
 if __name__ == "__main__":

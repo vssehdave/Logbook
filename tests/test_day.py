@@ -338,11 +338,11 @@ class TestADay(unittest.TestCase):
         self.assertTrue(any(c[:2] == ["publish", "--merged"] for c in self.spawned), "auto mode publishes a merged branch by itself, from the git hook")
         shared = ra.load_shared()[0]
         shared_ids = {l.entry.id for l in shared}
-        self.assertTrue([l for l in shared if l.entry.kind == "log" and l.entry.anchor.get("branch") == "feat/a"], "the merged branch's logs were published")
+        self.assertTrue([l for l in shared if l.entry.kind == "finding" and l.entry.anchor.get("branch") == "feat/a"], "the merged branch's notes were published")
+        self.assertFalse([l for l in shared if l.entry.kind == "log"], "and no log, ever: logs stay on this machine")
         self.assertNotIn(probe.id, shared_ids, "the throwaway session's note was not published")
         self.assertTrue((ra.cdir / "archive" / f"{probe.id}.json").exists(), "it was archived, not deleted")
-        self.assertTrue(all(e.kind != "log" for e in ra.unpublished() if e.anchor.get("branch") == "feat/a"),
-                        "what stays private on the merged branch is only notes that tidy left out of the queue")
+        self.assertFalse([e for e in ra.queued() if e.anchor.get("branch") == "feat/a"], "everything tidy queued on the merged branch went out")
         self.assertNotIn("look merged", self.hook(A, "SessionStart", "s5"), "nothing is left on the merged branch to remind the agent about")
         self.assertIn("nothing to publish", self.run_cli(A, "publish", "--branch", "feat/a", "--yes")[1], "publishing again finds nothing and is harmless")
         self.assertTrue([e for e in ra.unpublished() if e.anchor.get("branch") == "feat/b"], "the open branch stays private")
@@ -352,10 +352,11 @@ class TestADay(unittest.TestCase):
         T.sh("git", "pull", "-q", "origin", "main", cwd=B)
         self.assertEqual(self.run_cli(B, "sync", "--fetch-only")[0], 0)
         start = self.hook(B, "SessionStart", "b1")
-        self.assertIn("saved log", start, "the teammate's first context carries what alice's branch left")
-        self.assertIn("Work block", start)
+        self.assertNotIn("saved log", start, "alice's logs never reach bob")
         alice_private = {e.id for e in ra.load_private()}
-        self.assertFalse(alice_private & {l.entry.id for l in rb.all_entries()}, "alice's private log never reaches bob")
+        self.assertFalse(alice_private & {l.entry.id for l in rb.all_entries()}, "nothing alice kept private reaches bob")
+        theirs = [l for l in rb.all_entries() if l.user == ra.user]
+        self.assertTrue(theirs and all(l.entry.kind != "log" for l in theirs), "what bob has of alice's is notes")
         T.sh("git", "switch", "-q", "-c", "feat/c", cwd=B)
         self.session(B, "b2", 4, start=40)
         self.invariants("teammate")
