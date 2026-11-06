@@ -200,6 +200,11 @@ def archive(repo, ids):
     return moved
 
 
+def mode(cfg):
+    """`config tidy`: auto (the default: the worker applies what it decides, and the person is shown it) or manual (it keeps proposals for the person)."""
+    return cfg.get("tidy", "auto")
+
+
 # ---- the tidy worker --------------------------------------------------------------------------------------------
 TIDY_MODEL = "haiku"  # `config tidy_model` changes it; it is a different setting from the observer's model on purpose
 MAX_JUDGED = 12  # candidates shown to the model in one call
@@ -292,7 +297,7 @@ def work(repo, call=None, now=time.time):
         for c in cands:
             st["judged"][c["id"]] = _fingerprint(c)
         applied = []
-        if cfg.get("tidy", "manual") == "auto":
+        if mode(cfg) == "auto":
             for b in good:  # one at a time: a proposal that went stale must not block the rest
                 done, _ = apply_blocks(repo, views, [b])
                 applied += [d[0] for d in done]
@@ -421,7 +426,7 @@ def triage(repo, call=None, now=time.time, apply=None):
     proposals wait for the person (`tidy --proposals`, `--accept`). Nothing is deleted. Never raises for a model problem; shares the observer's budget and pause."""
     from . import tree
     cfg = repo.cfg()
-    apply = (cfg.get("tidy", "manual") == "auto") if apply is None else apply
+    apply = (mode(cfg) == "auto") if apply is None else apply
     views = tree.all_views(repo)[0]
     pool = triage_pool(views)
     by_id = {v["id"]: v for v in views}
@@ -514,10 +519,41 @@ def restore(repo, ids):
     return n
 
 
+def queue_pass(repo):
+    """Keep the publish queue (outbox.py) right, with no model: a log is queued when it is saved; a note when it passes its checks (it names nothing that is missing and
+    carries evidence), is not resolved, and is not a person's own note in manual mode (those go in with `note -q`); a status record when its note is queued or
+    shared. An entry that was published, archived, or stopped passing leaves again, unless the person queued it. Returns {"queued": [ids], "removed": [ids]}."""
+    from . import outbox, tree
+    q = outbox.load(repo)
+    mode = repo.publish_mode()
+    waiting = {e.id: e for e in repo.unpublished()}
+    views = {v["id"]: v for v in tree.all_views(repo)[0]}
+    shared = {l.entry.id for l in repo.load_shared()[0]}
+
+    def wants(e):
+        if e.status:
+            return False  # decided below, once the notes are
+        if e.kind == "log":
+            return True
+        if (views.get(e.id) or {}).get("status") == "resolved":
+            return False
+        if e.provenance == "user-written":
+            return mode in ("ask", "auto")  # in manual mode a person's note is queued by the person
+        return bool(e.checks.get("evidence")) and not ground.problems(e.checks, True)
+
+    want = {i for i, e in waiting.items() if wants(e)}
+    want |= {i for i, e in waiting.items() if e.status and (e.status.get("of") in want or e.status.get("of") in shared or e.status.get("of") in q)}
+    keep = {i for i in q if i in waiting and (q[i].get("by") == "user" or i in want)}
+    added = outbox.add(repo, sorted(want - set(q)), "tidy")
+    gone = outbox.drop(repo, [i for i in q if i not in keep])
+    return {"queued": added, "removed": gone}
+
+
 def run(repo, call=None, now=time.time):
     """The tidy worker's pass in manual mode: statuses for changed notes and triage, both kept as proposals for the person."""
     res = work(repo, call, now)
     res["triage"] = triage(repo, call, now, apply=False)
+    res["queue"] = queue_pass(repo)
     return res
 
 
@@ -532,6 +568,7 @@ def gate(repo, call=None, now=time.time):
             pass
     res = {"triage": triage(repo, call, now, apply=True)}
     res["status"] = work(repo, call, now)
+    res["queue"] = queue_pass(repo)
     t = res["triage"]
     why = t.get("error") or (t.get("skipped") if str(t.get("skipped", "")).startswith(("paused", "today's call cap", "another tidy pass")) else "")
     res["blocked"] = why or ""
@@ -544,4 +581,5 @@ def auto(repo, call=None, now=time.time):
     res = work(repo, call, now)
     res["triage"] = triage(repo, call, now, apply=True)
     res["archived"] = archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
+    res["queue"] = queue_pass(repo)
     return res

@@ -393,6 +393,12 @@ class Repo:
         done = {l.entry.id for l in shared if l.user == self.user}
         return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied"]
 
+    def queued(self):
+        """The private entries in the publish queue (outbox.py) that are not shared yet: what `logbook publish` shares."""
+        from . import outbox
+        q = outbox.load(self)
+        return [e for e in self.unpublished() if e.id in q]
+
     def all_entries(self):
         """Shared (merged at read time, deduped by id) + private overlay. Superseded/purged entries are hidden."""
         shared, tombs = self.load_shared()

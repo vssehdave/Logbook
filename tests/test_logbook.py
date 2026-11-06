@@ -15,7 +15,7 @@ sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
 
-from getlogbook import capture, cli, recall, safety, sync, tree  # noqa: E402
+from getlogbook import capture, cli, recall, safety, sync, tidy, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
 from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
@@ -51,6 +51,12 @@ def commit(d, msg, files):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        import unittest.mock
+        from getlogbook import worker
+        self.real_call_model = worker.call_model
+        stub = unittest.mock.patch.object(worker, "call_model", lambda p, model="haiku": ("NONE", 0.0, ""))  # a developer's machine has a real `claude`: no test may spend it
+        stub.start()
+        self.addCleanup(stub.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
@@ -306,7 +312,7 @@ class TestPolicyAndTrust(Base):
         self.cd(d)
         e = capture.make_entry(r, "finding", "t", {"summary": "s"})
         with self.assertRaises(SystemExit):
-            cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False})())
+            cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False})())
 
 
 class TestRichNotes(Base):
@@ -328,7 +334,7 @@ class TestRichNotes(Base):
         self.cd(d)
         e = capture.make_entry(r, "finding", "t" * 200, {k: "word " * 400 for k in BODY_FIELDS if k != "evidence"},
                                paths=["f%d/g.txt" % i for i in range(40)])
-        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False})())
+        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False})())
         shared, _ = r.load_shared()
         pub = next(l.entry for l in shared if l.entry.id == e.id)
         for k in BODY_FIELDS:
@@ -531,7 +537,7 @@ class TestSharingQueue(CliRepo):
         self.assertEqual(code or 0, 0, text)
         self.assertIn("would publish " + keep.id, text)
         self.assertEqual(self.r.unpublished(), [])
-        self.assertIn("nothing waiting", self.run_cli("queue")[1])
+        self.assertIn("nothing queued", self.run_cli("queue")[1])
         self.assertIn("nothing to publish", self.run_cli("publish", "--all", "--yes")[1])
 
     def test_pre_push_hook_reminds_and_never_blocks(self):
@@ -1459,6 +1465,7 @@ class TestTidyWorker(CliRepo):
         return next(v for v in tree.all_views(self.r)[0] if v["id"] == self.note.id).get("status")
 
     def test_manual_mode_keeps_checked_proposals_for_the_person_and_asks_nothing_twice(self):
+        self.run_cli("config", "tidy", "manual")
         res = self.tidy.work(self.r, self.answer())
         self.assertEqual((res["judged"], res["proposed"], res["applied"], res["rejected"]), (1, 1, [], 0))
         self.assertEqual(self.status_of(), "open", "nothing is stored without a yes")
@@ -1532,11 +1539,11 @@ class TestTidyWorker(CliRepo):
         res = self.tidy.auto(self.r, lambda p: (SAVEPOINT_XML if "savepoint" in p else f"status_of: {self.note.id}\nstatus: resolved\ncommits: {self.later[:8]}\nreason: reworked\n", 0.001, ""))
         self.assertEqual((res["applied"], res["archived"]), ([self.note.id], 0))
 
-    def test_the_hooks_start_the_tidy_pass_only_in_auto_mode(self):
+    def test_the_pull_hook_starts_the_tidy_pass_in_ask_and_auto_mode_only(self):
         import unittest.mock
         from getlogbook import hookmain
-        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("auto", ["tidy", "--work", "--quiet"])):
-            self.run_cli("config", "tidy", mode)
+        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("ask", ["tidy", "--work", "--quiet"]), ("auto", ["tidy", "--work", "--quiet"])):
+            self.run_cli("config", "publish", mode)
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 hookmain.run(["post-merge"])
             self.assertEqual(spawn.call_args.args[0][-len(expect):], expect, mode)
@@ -1600,6 +1607,7 @@ class TestTriage(CliRepo):
 
     def test_auto_archives_what_the_model_calls_junk_and_every_verdict_is_checked(self):
         published = capture.make_entry(self.r, "finding", "shared already", {"summary": "s", "why": "w"})
+        self.run_cli("config", "publish", "manual")  # publishing by hand, so no tidy pass marks the others as judged before the model's answer below
         self.run_cli("publish", published.id, "--yes")
         short = capture.make_entry(self.r, "finding", "second probe", {"what": "nothing", "summary": "nothing"}, provenance="worker-written")
         call = self.model(self.verdict(self.probe.id),                                                          # valid
@@ -1659,7 +1667,8 @@ class TestTriage(CliRepo):
         import unittest.mock
         self.run_cli("config", "publish", "auto")
         sh("git", "checkout", "-q", "-b", "feat/x", cwd=self.d)
-        keep = capture.make_entry(self.r, "finding", "Real work", {"what": "added a filter", "why": "refunds counted", "summary": "added a filter"}, provenance="worker-written")
+        keep = capture.make_entry(self.r, "finding", "Real work", {"what": "added a filter", "why": "refunds counted", "summary": "added a filter", "evidence": "ran it"},
+                                  provenance="worker-written", checks={"paths": [0, 0], "names": [0, 0], "commits": [0, 0], "files": [], "missing": [], "evidence": True, "at": ""})
         junk = capture.make_entry(self.r, "finding", "Probe run", {"what": "answered ok", "summary": "ok"}, provenance="worker-written")
         seen = []
 
@@ -1679,7 +1688,7 @@ class TestTriage(CliRepo):
         import unittest.mock
         self.run_cli("config", "publish", "auto")
         sh("git", "checkout", "-q", "-b", "feat/y", cwd=self.d)
-        e = capture.make_entry(self.r, "finding", "Unchecked", {"what": "w", "summary": "s"}, provenance="worker-written")
+        e = capture.make_entry(self.r, "finding", "Unchecked", {"what": "w", "summary": "s", "evidence": "ran it"}, provenance="worker-written", checks={"paths": [0, 0], "names": [0, 0], "commits": [0, 0], "files": [], "missing": [], "evidence": True, "at": ""})
         with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": ("", 0.0, "Claude usage limit reached")):
             with self.assertRaises(SystemExit) as refused:
                 self.run_cli("publish", "--branch", "feat/y", "--yes")
@@ -1690,13 +1699,17 @@ class TestTriage(CliRepo):
         self.assertEqual(code, 0, text)
         self.assertIn(e.id, {l.entry.id for l in self.r.load_shared()[0]})
 
-    def test_ask_and_manual_publishing_do_not_start_tidy(self):
+    def test_manual_publishing_does_not_start_tidy_and_ask_publishing_does(self):
         import unittest.mock
         e = capture.make_entry(self.r, "finding", "plain", {"summary": "s", "why": "w"})
-        for mode in ("ask", "manual"):
-            self.run_cli("config", "publish", mode)
-            with unittest.mock.patch.object(self.worker, "call_model", side_effect=AssertionError("tidy must not run")):
-                self.run_cli("publish", e.id, "--yes", "--keep")
+        self.run_cli("config", "publish", "manual")
+        with unittest.mock.patch.object(self.worker, "call_model", side_effect=AssertionError("tidy must not run")):
+            self.run_cli("publish", e.id, "--yes", "--keep")
+        self.run_cli("config", "publish", "ask")
+        asked = []
+        with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": (asked.append(p) or "NONE", 0.0, "")):
+            self.assertIn("tidy before publishing", self.run_cli("publish", e.id, "--yes", "--keep")[1])
+        self.assertTrue(asked, "in ask mode tidy looks first, too")
 
 
 class TestGitLocks(CliRepo):
@@ -1927,7 +1940,7 @@ class TestObserver(ObserverBase):
             seen.update(cmd=cmd, **kw)
             return subprocess.CompletedProcess(cmd, 0, STREAM, "")
         with unittest.mock.patch.object(subprocess, "run", fake_run):
-            text, cost, err = self.worker.call_model("hello")
+            text, cost, err = self.real_call_model("hello")
         self.assertEqual((text, cost, err), ("ok", 0.001, ""))
         self.assertEqual(self.worker.last_rate, {"five_hour": {"u": 0.12, "resets": 1793913000}, "seven_day": {"u": 0.58, "resets": 1794290400}})
         for flag in ("stream-json", "--verbose", "--model", "--tools", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "--no-session-persistence"):
@@ -2011,7 +2024,7 @@ class TestObserver(ObserverBase):
     def test_status_config_and_permissions(self):
         from getlogbook import permissions
         code, text = self.run_cli("worker", "--status")
-        self.assertIn("worker on, tidy manual: 0 call(s)", text)
+        self.assertIn("worker on, tidy auto: 0 call(s)", text)
         self.run_cli("config", "worker", "off")
         self.assertNotEqual(self.r.cfg().get("worker"), "on")
         decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
@@ -2127,6 +2140,15 @@ class TestSavepoint(ObserverBase):
             self.assertFalse(self.run_.push({"tool": "Read"}), "unread bytes over the limit: full")
             self.drain()
             self.assertTrue(self.run_.push({"tool": "Read"}), "read bytes do not count")
+
+    def test_a_savepoint_starts_the_tidy_pass_in_every_mode(self):
+        import unittest.mock
+        for mode in ("manual", "ask", "auto"):
+            self.run_cli("config", "publish", mode)
+            self.observe(title=f"in {mode}")
+            with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+                self.save()
+            self.assertEqual(spawn.call_args.args[0][-3:], ["tidy", "--work", "--quiet"], mode)
 
     def test_tidy_leaves_logs_alone(self):
         from getlogbook import tidy
@@ -2330,7 +2352,9 @@ class TestPublishByBranch(CliRepo):
         self.main = tree.default_branch(self.r)
 
     def note_on(self, topic):
-        return capture.make_entry(self.r, "finding", topic, {"summary": f"{topic} is so", "why": "because"}, paths=["shop/revenue.py"])
+        e = capture.make_entry(self.r, "finding", topic, {"summary": f"{topic} is so", "why": "because"}, paths=["shop/revenue.py"])
+        tidy.queue_pass(self.r)  # tidy keeps the queue: here it has just run
+        return e
 
     def feature(self, name, files=None, merge="--no-ff"):
         """A branch with one commit and one note on it, merged into the main line the given way."""
@@ -2398,6 +2422,10 @@ class TestPublishByBranch(CliRepo):
             self.assertIn("getlogbook post-merge", (hooks / name).read_text(encoding="utf-8"), name)
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             self.assertEqual(hookmain.run(["post-merge"]), 0)
+        self.assertEqual(spawn.call_args.args[0][-2:], ["--work", "--quiet"], "in ask mode the tidy pass fetches first, then judges what the pull changed")
+        self.run_cli("config", "publish", "manual")
+        with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
+            hookmain.run(["post-merge"])
         self.assertEqual(spawn.call_args.args[0][-2:], ["sync", "--fetch-only"], "a pull never pushes")
         self.run_cli("uninstall", "--yes", "--agent", "claude-code")
         self.assertFalse((hooks / "post-merge").exists() or (hooks / "post-rewrite").exists())
@@ -2610,6 +2638,82 @@ class TestCommitHook(ObserverBase):
         text = (hooks / "post-commit").read_text()
         self.assertTrue(text.index("echo mine") < text.index("getlogbook post-commit"))
         self.assertIn("getlogbook post-commit >/dev/null 2>&1 || true", text)
+
+
+class TestQueue(CliRepo):
+    """The publish queue: tidy keeps it, a person adds to it with `note -q`, and publish shares only what is in it."""
+
+    CK = {"paths": [0, 0], "names": [0, 0], "commits": [0, 0], "files": [], "missing": [], "evidence": True, "at": ""}
+    BAD = {"paths": [0, 1], "names": [0, 0], "commits": [0, 0], "files": [], "missing": ["gone.py"], "evidence": True, "at": ""}
+
+    def queued(self):
+        from getlogbook import outbox
+        return set(outbox.load(self.r))
+
+    def worker_note(self, topic, checks=None, **kw):
+        return capture.make_entry(self.r, "finding", topic, {"summary": "s", "why": "w", "evidence": "ran it"}, provenance="worker-written", checks=checks or self.CK, **kw)
+
+    def test_tidy_queues_logs_and_notes_that_pass_their_checks_and_leaves_the_rest_out(self):
+        log = capture.make_entry(self.r, "log", "a session", {"what": "w", "summary": "s"}, provenance="worker-written")
+        good, bad = self.worker_note("good"), self.worker_note("names a missing file", self.BAD)
+        bare = capture.make_entry(self.r, "finding", "no evidence", {"summary": "s", "why": "w"}, provenance="worker-written")
+        res = tidy.queue_pass(self.r)
+        self.assertEqual(self.queued(), {log.id, good.id})
+        self.assertEqual((sorted(res["queued"]), res["removed"]), (sorted([log.id, good.id]), []))
+        self.assertNotIn(bad.id, self.queued())
+        self.assertNotIn(bare.id, self.queued())
+
+    def test_a_persons_own_note_is_queued_by_tidy_in_ask_and_auto_and_by_the_person_in_manual(self):
+        mine = capture.make_entry(self.r, "finding", "mine", {"summary": "s", "why": "w"})
+        self.run_cli("config", "publish", "manual")
+        tidy.queue_pass(self.r)
+        self.assertEqual(self.queued(), set(), "manual: nothing is queued for the person")
+        code, text = self.run_cli("note", "-q", "kept for the team", stdin=None)
+        self.assertEqual(code or 0, 0, text)
+        self.assertIn("queued", text)
+        (queued,) = self.queued()
+        self.assertNotEqual(queued, mine.id)
+        tidy.queue_pass(self.r)
+        self.assertEqual(self.queued(), {queued}, "and tidy leaves what the person queued alone")
+        self.run_cli("config", "publish", "ask")
+        tidy.queue_pass(self.r)
+        self.assertEqual(self.queued(), {queued, mine.id})
+
+    def test_an_entry_that_is_archived_or_stops_passing_comes_out_but_what_the_person_queued_stays(self):
+        a, b = self.worker_note("a"), self.worker_note("b")
+        tidy.queue_pass(self.r)
+        self.assertEqual(self.queued(), {a.id, b.id})
+        tidy.archive(self.r, [a.id])
+        b.checks = dict(self.BAD)
+        self.r.add_private(b)
+        res = tidy.queue_pass(self.r)
+        self.assertEqual((self.queued(), sorted(res["removed"])), (set(), sorted([a.id, b.id])))
+        self.run_cli("queue", "--add", b.id)
+        tidy.queue_pass(self.r)
+        self.assertEqual(self.queued(), {b.id}, "queued by hand, so tidy keeps it")
+        self.run_cli("queue", "--remove", b.id)
+        self.assertEqual(self.queued(), set())
+
+    def test_queue_shows_the_note_the_commit_and_the_branch_and_refuses_what_is_not_a_private_entry(self):
+        e = self.worker_note("shown", paths=["shop/revenue.py"])
+        code, text = self.run_cli("queue", "--show")
+        self.assertIn(e.id, text)
+        self.assertIn(e.anchor["sha"][:8], text)
+        self.assertIn(e.anchor["branch"], text)
+        self.assertIn("shown", text)
+        with self.assertRaises(SystemExit):
+            self.run_cli("queue", "--add", new_id())
+
+    def test_publish_all_shares_only_the_queue_and_a_published_entry_leaves_it(self):
+        queued = self.worker_note("queued")
+        left_out = capture.make_entry(self.r, "finding", "left out", {"summary": "s", "why": "w"}, provenance="worker-written")
+        self.run_cli("config", "publish", "manual")
+        code, text = self.run_cli("publish", "--all", "--yes")
+        self.assertEqual(code or 0, 0, text)
+        shared = {l.entry.id for l in self.r.load_shared()[0]}
+        self.assertEqual(shared & {queued.id, left_out.id}, {queued.id})
+        self.assertEqual(self.queued(), set())
+        self.assertEqual([e.id for e in self.r.unpublished()], [left_out.id])
 
 
 class TestConvo(ObserverBase):

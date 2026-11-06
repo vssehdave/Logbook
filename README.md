@@ -113,6 +113,11 @@ One setting, `logbook config publish`, decides how much happens by itself:
 | `ask` (default) | by itself, after every commit (a git `post-commit` hook), and when a session ends | the agent asks, shows the redacted preview, then runs it |
 | `auto` | by itself, after every commit, after 5 or more new observations that follow a commit, and when a session ends | when a branch looks merged, the agent is told at session start and runs `logbook publish --branch <name> --yes` |
 
+**The publish queue.** `logbook publish` shares only what is in the queue (`logbook queue` shows it: note id, commit, branch, the note). Tidy keeps it, in every mode, right
+after a log is saved: a log is queued when it is saved; a note when it names nothing that is missing and carries evidence, and is not resolved; a person's own note in `ask` and
+`auto` mode. In `manual` mode you queue your own note with `logbook note -q`. An entry that was archived, published, or stopped passing leaves the queue again; what you queued by hand
+(`-q`, `logbook queue --add <id>`) stays until it is published, and `logbook queue --remove <id>` takes anything out. `logbook publish <id>` still shares one entry by name.
+
 **Publishing is by branch.** `logbook publish --branch <name>` moves every private log and note filed under that branch to the shared log (the usual redacted preview
 and checks run first; what they refuse stays private). `logbook publish --merged` does that for every branch that looks merged into the main line. Git alone can see two
 signs: a merge commit on the main line names the branch, or a commit one of the branch's own entries is anchored to is now in the main line's history. A squash merge
@@ -160,7 +165,7 @@ Python accepts a verdict only about one of your own private, unpublished entries
 In `manual` the verdicts wait in `logbook tidy --proposals` and `--accept` archives them; in `auto` they are archived by the worker. Entries move to
 `.git/logbook/archive/` with the reason in `reasons.jsonl`; nothing is deleted, and `logbook tidy --restore <id>` puts one back.
 
-**Before a publish.** In `auto` mode `logbook publish` runs tidy first, whatever the way it was asked (an id, `--branch`, `--merged`, `--all`): it fetches what teammates
+**Before a publish.** In `ask` and `auto` mode `logbook publish` runs tidy first, whatever the way it was asked (an id, `--branch`, `--merged`, `--all`): it fetches what teammates
 shared, archives the junk and the repeats and updates statuses, and only then publishes what is left. If tidy could not look (the usage allowance is
 paused, the day's call cap is reached, the model call failed) nothing is published and it says why; `--no-tidy` publishes unchecked anyway. `ask` and `manual` do not
 start tidy by themselves.
@@ -181,6 +186,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `cites` | allow |
 | `convo` | allow |
 | `log` | allow |
+| `queue` | allow |
 | `status` | allow |
 | `summarize` | allow |
 | `tidy` | allow; `--apply`, `--accept`, `--work`, `--restore` asks |

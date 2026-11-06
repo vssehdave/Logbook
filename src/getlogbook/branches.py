@@ -15,10 +15,10 @@ SCAN = 300  # newest first-parent commits on the main line looked through for me
 
 
 def pending(repo):
-    """{branch: [unpublished private entries]} for every branch other than the main line."""
+    """{branch: [queued private entries]} for every branch other than the main line."""
     base = tree.default_branch(repo)
     by = {}
-    for e in repo.unpublished():
+    for e in repo.queued():
         b = e.anchor.get("branch") or ""
         if b and b != base:
             by.setdefault(b, []).append(e)

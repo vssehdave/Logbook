@@ -7,7 +7,7 @@ import re
 import sys
 import time
 
-from . import capture, cites, convo, ground, nav, recall, sync, tidy, tree
+from . import capture, cites, convo, ground, nav, outbox, recall, sync, tidy, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, looks_tabular, redact
@@ -190,6 +190,9 @@ def cmd_note(a):
     e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
                            checks=cks)
     out(f"recorded {e.id} (private)")
+    if a.queue:
+        outbox.add(r, [e.id], "user")
+        out("queued: `logbook publish` will share it (`logbook queue --remove` takes it back out)")
 
 
 def share_copy(r, e, include_evidence, allow_table):
@@ -230,25 +233,28 @@ def cmd_publish(a):
     r = need_repo()
     if r.publish_mode() == "never":
         raise SystemExit("logbook: publishing is off for this repo: its policy turns it off (.logbook/policy.json)")
-    if r.publish_mode() == "auto" and not a.no_tidy:  # auto mode never publishes what tidy has not looked at: junk, repeats and stale notes stay out
+    if r.publish_mode() in ("ask", "auto") and not a.no_tidy:  # nothing is published that tidy has not looked at: junk, repeats and stale notes stay out
         res = tidy.gate(r)
         out("tidy before publishing: " + ", ".join(x for x in (
             f"archived {len(res['triage']['archived'])} junk or repeated entr{'y' if len(res['triage']['archived']) == 1 else 'ies'}" if res["triage"]["archived"] else "",
-            f"{len(res['status'].get('applied', []))} status(es) stored" if res["status"].get("applied") else "") if x) or "nothing to tidy")
+            f"{len(res['status'].get('applied', []))} status(es) stored" if res["status"].get("applied") else "",
+            f"queued {len(res['queue']['queued'])}" if res["queue"]["queued"] else "",
+            f"took {len(res['queue']['removed'])} out of the queue" if res["queue"]["removed"] else "") if x) or "nothing to tidy")
         if res["blocked"]:
             raise SystemExit(f"logbook: nothing was published: tidy could not check the log ({res['blocked']}). Try again after the pause, or pass --no-tidy to publish unchecked.")
     ready = []
+    tidy.queue_pass(r)  # the queue is what publish shares: bring it up to date even when tidy did not run
     if getattr(a, "branch", None) or getattr(a, "merged", False):
         from . import branches
         if a.merged:
             picked = [(b, es) for b, es, _ in branches.merged(r)]
         else:
-            picked = [(a.branch, [e for e in r.unpublished() if e.anchor.get("branch") == a.branch])]
+            picked = [(a.branch, [e for e in r.queued() if e.anchor.get("branch") == a.branch])]
         ids = [e for _, es in picked for e in es]
         if ids:
             out("from branch " + ", ".join(b for b, es in picked if es) + ":")
     elif getattr(a, "all", False):
-        ids = r.unpublished()
+        ids = r.queued()
     elif a.ids:
         ids = a.ids
     else:
@@ -293,6 +299,7 @@ def cmd_publish(a):
         ref = r.publish([c for c, _, _ in ready], {c.id: d for c, _, d in ready if d})
     except ValueError as ex:
         raise SystemExit(f"logbook: nothing was published: {ex}")
+    outbox.drop(r, [c.id for c, _, _ in ready])
     keep = getattr(a, "keep", False)
     if not keep:  # a move, not a copy: the shared (redacted) text replaces the private original
         for c, _, d in ready:
@@ -314,7 +321,7 @@ def _ask(prompt):
 
 def _pick_unpublished(r):
     """Numbered list of private notes not shared yet; asks which ones when a person is at the keyboard."""
-    q = sorted(r.unpublished(), key=lambda e: e.id, reverse=True)
+    q = sorted(r.queued(), key=lambda e: e.id, reverse=True)
     for i, e in enumerate(q, 1):
         out(f"  {i}. {e.id}  {e.kind:<8} {e.topic[:70]}")
     if not q:
@@ -652,25 +659,41 @@ CONFIG_KEYS = {"tidy_model": "text", "quota_pause": None, "publish": PUBLISH_MOD
 
 
 def cmd_queue(a):
-    """Private notes that are not shared yet. Sharing stays your decision: this only lists, and `publish` previews and asks."""
+    """The publish queue: what `logbook publish` will share. Tidy keeps it; --add and --remove change it by hand."""
     r = need_repo()
-    q = r.unpublished() if r.publish_mode() != "never" else []
+    if not a.hook:
+        tidy.queue_pass(r)  # the queue is tidy's: show it as tidy would leave it
+    if a.add or a.remove:
+        mine = {e.id for e in r.unpublished()}
+        bad = [i for i in (a.add or []) if i not in mine]
+        if bad:
+            raise SystemExit(f"logbook: {bad[0]} is not a private entry of yours that is waiting to be shared")
+        if a.add:
+            out(f"queued {len(outbox.add(r, a.add, 'user'))} entr{'y' if len(a.add) == 1 else 'ies'}")
+        if a.remove:
+            out(f"took {len(outbox.drop(r, a.remove))} out of the queue (tidy may queue an entry again if it passes its checks)")
+    q = r.queued() if r.publish_mode() != "never" else []
     if a.hook:
         said = []
-        if q:
-            said.append(f"{len(q)} private note(s) are not shared with your team yet (`logbook publish` shows what would be shared and asks first).")
+        waiting = r.unpublished() if r.publish_mode() != "never" else []  # the push reminder must stay cheap, so it counts what is private, not what tidy has queued
+        if waiting:
+            said.append(f"{len(waiting)} private note(s) are not shared with your team yet (`logbook publish` shows what would be shared and asks first).")
         if "origin" in sync.remotes(r) and sync.unpushed(r):
             said.append("your published notes are not pushed yet (`logbook sync` pushes them).")
         if said:
             print("logbook: " + " ".join(said), file=sys.stderr)
         return 0
+    left = len(r.unpublished()) - len(q)
     if not q:
-        out("nothing waiting: every note of yours is shared, auto-copied, or publishing is off for this repo.")
+        out("nothing queued: " + (f"{left} private entr{'y is' if left == 1 else 'ies are'} not in the queue (tidy leaves out what fails its checks; `logbook queue --add <id>` puts one in)."
+                                  if left else "every entry of yours is shared, or publishing is off for this repo."))
         return 0
-    out(f"{len(q)} private note(s) not shared yet (newest first):")
+    out(f"{len(q)} queued for publishing (newest first): note id, commit, branch, note")
     for e in sorted(q, key=lambda x: x.id, reverse=True):
-        out(f"  {e.id}  {e.kind:<8} {e.topic[:80]}")
-    out("`logbook publish --all` previews them with redaction and asks once; `logbook publish <id>` does one.")
+        out(f"  {e.id}  {(e.anchor.get('sha') or '-')[:8]:<8}  {e.anchor.get('branch') or '-':<20}  {e.kind}: {safety_sanitize(e.topic, 80)}")
+    if left:
+        out(f"{left} more private entr{'y is' if left == 1 else 'ies are'} not queued.")
+    out("`logbook publish --all` previews the queue with redaction and asks once; `logbook publish <id>` does one.")
     return 0
 
 
@@ -774,7 +797,7 @@ def cmd_tidy(a):
         except (SystemExit, OSError, ValueError):
             pass
     if a.work:  # the tidy worker's pass: judge, archive junk (what the hooks start in `tidy auto`)
-        res = tidy.auto(r) if r.cfg().get("tidy", "manual") == "auto" else tidy.run(r)
+        res = tidy.auto(r) if tidy.mode(r.cfg()) == "auto" else tidy.run(r)
         if not a.quiet:
             out(json.dumps(res))
         return 0
@@ -975,6 +998,7 @@ def build_parser():
     s.add_argument("--supersedes", help="comma-separated ids of your own notes this one replaces")
     s.add_argument("--check", action="store_true", help="only look up what the note names and report; save nothing")
     s.add_argument("--allow-ungrounded", action="store_true", help="save a finding or change with no evidence line, marked unverified")
+    s.add_argument("-q", "--queue", action="store_true", help="also put the note in the publish queue")
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="*")
     s.add_argument("--all", action="store_true", help="every private note not shared yet (same preview and one confirmation)")
@@ -1039,7 +1063,10 @@ def build_parser():
     s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
-    s = add("queue", cmd_queue, "list private notes that are not shared yet")
+    s = add("queue", cmd_queue, "show what `logbook publish` will share (the publish queue)")
+    s.add_argument("--show", action="store_true", help="list the queue (the default)")
+    s.add_argument("--add", nargs="+", metavar="ID", help="put private entries in the queue")
+    s.add_argument("--remove", nargs="+", metavar="ID", help="take entries out of the queue")
     s.add_argument("--hook", action="store_true", help="the quiet one-line reminder the pre-push hook prints")
     s = add("config", cmd_config, "show or set: publish (manual|ask|auto), worker (on|off), tidy (manual|auto), worker_calls, quota_pause (percent), tidy_model")
     s.add_argument("key", nargs="?")

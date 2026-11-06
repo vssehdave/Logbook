@@ -339,14 +339,18 @@ class TestADay(unittest.TestCase):
         self.assertIn("feat/a", reminder, "the agent is told the merged branch still has private logs")
         mine_before = {e.id for e in ra.unpublished() if e.anchor.get("branch") == "feat/a"}
         self.assertTrue(mine_before)
+        logs_before = {e.id for e in ra.unpublished() if e.anchor.get("branch") == "feat/a" and e.kind == "log"}
+        self.assertTrue(logs_before)
         code, text = self.run_cli(A, "publish", "--branch", "feat/a", "--yes")
         self.assertEqual(code, 0, text)
         self.assertIn("tidy before publishing", text, "in auto mode tidy ran before anything was published")
         shared_ids = {l.entry.id for l in ra.load_shared()[0]}
         self.assertNotIn(probe.id, shared_ids, "the throwaway session's note was not published")
         self.assertTrue((ra.cdir / "archive" / f"{probe.id}.json").exists(), "it was archived, not deleted")
-        self.assertTrue((mine_before - {probe.id}) <= shared_ids, "everything else on the merged branch was published")
-        self.assertFalse([e for e in ra.unpublished() if e.anchor.get("branch") == "feat/a"])
+        self.assertTrue(logs_before <= shared_ids, "every log of the merged branch was published")
+        self.assertTrue(shared_ids & mine_before, "and what tidy queued with them")
+        self.assertTrue(all(e.kind != "log" for e in ra.unpublished() if e.anchor.get("branch") == "feat/a"),
+                        "what stays private on the merged branch is only notes that tidy left out of the queue")
         self.assertTrue([e for e in ra.unpublished() if e.anchor.get("branch") == "feat/b"], "the open branch stays private")
         self.assertEqual(self.run_cli(A, "sync")[0], 0)
 

@@ -166,6 +166,6 @@ def status(repo):
     led = ledger(repo)
     cfg = repo.cfg()
     paused = time.time() < led["cooldown_until"]
-    return {"worker": "on" if is_on(cfg) else "off", "tidy": cfg.get("tidy", "manual"), "calls_today": led["calls"], "cost_today": led["cost"],
+    return {"worker": "on" if is_on(cfg) else "off", "tidy": cfg.get("tidy", "auto"), "calls_today": led["calls"], "cost_today": led["cost"],
             "notes_written": led["notes"], "cooling_down": paused, "paused_until": led["cooldown_until"] if paused else 0,
             "pause_reason": led.get("pause_reason", "") if paused else "", "usage": led.get("rate") or {}, "last_error": led["last_error"], "last_pass": last_pass(repo)}
