@@ -43,6 +43,40 @@ def add(repo, ids, by="tidy"):
     return new
 
 
+# ---- a publish waiting for a yes (ask mode): a git hook has no conversation to ask in, so it leaves a marker for the next prompt
+def _pending(repo):
+    return repo.cdir / "pending-publish.json"
+
+
+def mark_pending(repo, why):
+    atomic_write(_pending(repo), json.dumps({"why": why[:120], "t": int(time.time()), "told": []}))
+
+
+def clear_pending(repo):
+    try:
+        _pending(repo).unlink()
+    except OSError:
+        pass
+
+
+def pending_notice(repo, session):
+    """What an agent is told once per session when a hook left a publish waiting for the person's yes ('' when nothing is waiting)."""
+    try:
+        d = json.loads(_pending(repo).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    waiting = repo.queued()
+    if not waiting:
+        clear_pending(repo)
+        return ""
+    if session in d.get("told", []):
+        return ""
+    d["told"] = (d.get("told", []) + [session])[-20:]
+    atomic_write(_pending(repo), json.dumps(d))
+    return (f"[logbook] {len(waiting)} queued entr{'y is' if len(waiting) == 1 else 'ies are'} ready to publish ({d.get('why', '')}). Run `logbook queue`, tell the user in one or two "
+            "lines what is in it, and ask whether to publish. On a yes run `logbook publish --all`, show the preview and wait for their yes to it; on a no say nothing more.")
+
+
 def drop(repo, ids):
     """Take these ids out of the queue. Returns the ids that were in it."""
     q = load(repo)

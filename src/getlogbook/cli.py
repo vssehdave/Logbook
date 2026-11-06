@@ -289,6 +289,13 @@ def cmd_publish(a):
     if not ready:
         out("nothing new to publish.")
         return 0
+    remote = "origin" in sync.remotes(r)
+    if remote:  # tidy -> sync -> move -> push: bring in what teammates shared before writing
+        try:
+            for line in sync.sync(r, "origin")["news"]:
+                out("news: " + line)
+        except (SystemExit, OSError, ValueError):
+            pass
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
     if not a.yes and _ask("Publish exactly the text above? [y/N] ").strip().lower() != "y":
         raise SystemExit("aborted; nothing published")
@@ -300,16 +307,20 @@ def cmd_publish(a):
     except ValueError as ex:
         raise SystemExit(f"logbook: nothing was published: {ex}")
     outbox.drop(r, [c.id for c, _, _ in ready])
+    outbox.clear_pending(r)
     keep = getattr(a, "keep", False)
     if not keep:  # a move, not a copy: the shared (redacted) text replaces the private original
         for c, _, d in ready:
             r.drop_private(c.id)
             if d:
                 convo.private_path(r, c.id).unlink(missing_ok=True)
-    out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref} (local"
-        f"{'' if keep else '; the private copy was removed, --keep leaves it'}). `logbook sync` pushes it.")
-    if a.push:
-        out(json.dumps(sync.push(r)))
+    out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref}"
+        f"{'' if keep else ' (the private copy was removed, --keep leaves it)'}.")
+    if remote and not a.no_push:
+        res = sync.push(r)
+        out("pushed." if res["ok"] else "not pushed: " + res.get("error", "")[:200] + " (publish again once the remote is reachable)")
+    elif not remote:
+        out("no remote named origin: the entries stay on this machine until you add one.")
 
 
 def _ask(prompt):
@@ -341,9 +352,16 @@ def _pick_unpublished(r):
 
 def cmd_sync(a):
     r = need_repo()
-    res = sync.sync(r, a.remote, a.fetch_only, a.depth)
-    out(json.dumps(res, indent=2))
-    return 0 if res["fetch"]["ok"] and res.get("push", {"ok": True})["ok"] else 1
+    res = sync.sync(r, a.remote, True, a.depth)
+    if a.json:
+        out(json.dumps(res, indent=2))
+    elif not res["fetch"]["ok"]:
+        out("logbook: could not fetch from " + a.remote + ": " + res["fetch"]["error"][:200])
+    else:
+        out(f"fetched: {res['entries']} shared entr{'y' if res['entries'] == 1 else 'ies'} from {res['writers']} writer(s); your own shelf: {res.get('merge', 'same')}. Nothing was pushed (`logbook publish` pushes).")
+        for line in res["news"] or ["no news since you last looked."]:
+            out("  " + line)
+    return 0 if res["fetch"]["ok"] else 1
 
 
 def cmd_query(a):
@@ -1011,10 +1029,12 @@ def build_parser():
     s.add_argument("--keep", action="store_true", help="leave the private copy in place after publishing")
     s.add_argument("--no-tidy", action="store_true", help="in auto mode, publish without running tidy first")
     s.add_argument("--no-convo", action="store_true", help="publish a log without the conversation behind it")
+    s.add_argument("--no-push", action="store_true", help="write to your shared ref but do not push it")
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
-    s = add("sync", cmd_sync, "fetch teammates' entries and push yours")
+    s = add("sync", cmd_sync, "fetch teammates' entries and merge them in; never pushes (publish does); says what is new")
     s.add_argument("--remote", default="origin")
-    s.add_argument("--fetch-only", action="store_true")
+    s.add_argument("--fetch-only", action="store_true", help="kept for older scripts: sync never pushes now")
+    s.add_argument("--json", action="store_true")
     s.add_argument("--depth", type=int)
     s = add("query", cmd_query, "search entries")
     s.add_argument("q")

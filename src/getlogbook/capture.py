@@ -147,6 +147,9 @@ def handle_hook(event, agent, raw):
             if event == "SessionStart":  # merged branches whose logs are still private: the agent (not the observer) publishes them
                 from . import branches
                 text = "\n".join(x for x in (text, branches.reminder(repo, repo.publish_mode())) if x)
+            if event in ("SessionStart", "UserPromptSubmit"):  # what teammates shared while you were away, and a publish a git hook left waiting for your yes
+                from . import news, outbox
+                text = "\n".join(x for x in (news.take(repo), outbox.pending_notice(repo, sid) if repo.publish_mode() == "ask" else "", text) if x)
             note = worker_mod.pause_notice(repo) if event in ("SessionStart", "UserPromptSubmit") and worker_mod.enabled(repo) else None
             out = recall.hook_json(event, "\n".join(x for x in (text, note[1] if note else "") if x), note[0] if note else "")
         if event in ("Stop", "SessionEnd"):  # prompt-time hooks stay read-only and fast
@@ -214,7 +217,7 @@ def install_pre_push_hook(repo):
     hooks = _hooks_dir(repo)
     hooks.mkdir(parents=True, exist_ok=True)
     f = hooks / "pre-push"
-    block = f'{MARK_BEGIN}\n"{_py(repo)}" -m getlogbook queue --hook >&2 || true\n{MARK_END}\n'
+    block = f'{MARK_BEGIN}\n"{_py(repo)}" -m getlogbook queue --hook >&2 || true\n"{_py(repo)}" -m getlogbook pre-push >/dev/null 2>&1 || true\n{MARK_END}\n'
     _strip_hook_block(f)  # replace the 0.0.3 block, which also pushed notes, rather than keep it
     text = f.read_text(encoding="utf-8") if f.exists() else "#!/bin/sh\n"
     f.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8", newline="\n")  # chain, never overwrite
