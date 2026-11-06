@@ -306,7 +306,7 @@ class TestPolicyAndTrust(Base):
         self.cd(d)
         e = capture.make_entry(r, "finding", "t", {"summary": "s"})
         with self.assertRaises(SystemExit):
-            cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False})())
+            cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False})())
 
 
 class TestRichNotes(Base):
@@ -328,7 +328,7 @@ class TestRichNotes(Base):
         self.cd(d)
         e = capture.make_entry(r, "finding", "t" * 200, {k: "word " * 400 for k in BODY_FIELDS if k != "evidence"},
                                paths=["f%d/g.txt" % i for i in range(40)])
-        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False})())
+        cli.cmd_publish(type("A", (), {"ids": [e.id], "yes": True, "push": False, "include_evidence": False, "allow_table": False, "no_tidy": False, "no_convo": False})())
         shared, _ = r.load_shared()
         pub = next(l.entry for l in shared if l.entry.id == e.id)
         for k in BODY_FIELDS:
