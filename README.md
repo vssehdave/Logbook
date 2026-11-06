@@ -91,10 +91,10 @@ call to a fraction of a cent. `logbook worker --status` shows what it has spent 
 
 ## Branch memory at the start of a session
 
-When a Claude Code session starts, the hook adds a short block before the matching notes: the latest saved logs on this branch and on the main line (each with its
-age and commit, or "no commit"), then what the observer has seen on this branch since the last savepoint. Logs from authors you have not trusted are left out, every
-word is cleaned like any injected note, and the block is marked as data to verify. It is empty when nothing has been recorded. (Logs are not yet picked by relevance
-to a prompt, only shown at session start.)
+When a Claude Code session starts, the hook adds a short block before the matching notes: your latest saved logs on this branch and on the main line (each with its age
+and commit, or "no commit"), the latest notes teammates shared there (their logs stay on their machines), then what the observer has seen on this branch since the last
+savepoint. Notes from authors you have not trusted are left out, every word is cleaned like any injected note, and the block is marked as data to verify. It is empty when
+nothing has been recorded. (Logs are not picked by relevance to a prompt, only shown at session start.)
 
 ## Modes and savepoints
 

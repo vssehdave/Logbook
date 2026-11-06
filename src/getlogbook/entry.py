@@ -85,7 +85,8 @@ def _checks(c):
         return {}
     at = c.get("at") if isinstance(c.get("at"), str) and HEX_RE.match(c["at"]) else ""
     return {"paths": _pair(c.get("paths")), "names": _pair(c.get("names")), "commits": _pair(c.get("commits")),
-            "files": _strs(c.get("files"))[:20], "missing": [m[:80] for m in _strs(c.get("missing"))[:8]], "evidence": bool(c.get("evidence")), "at": at}
+            "files": _strs(c.get("files"))[:20], "missing": [m[:80] for m in _strs(c.get("missing"))[:8]], "evidence": bool(c.get("evidence")), "at": at,
+            "unsupported": [m[:80] for m in _strs(c.get("unsupported"))[:8]]}
 
 
 OBS_KEYS = ("type", "session")

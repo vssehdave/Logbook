@@ -62,6 +62,23 @@ def check(repo, body, topic, paths, sha=None):
             "evidence": bool(body.get("evidence")), "at": g.head_sha(repo.root) or ""}  # naming a file or commit is not evidence: say what was run or read
 
 
+_TOKEN = re.compile(r"[A-Za-z_]\w*(?:[./:]\w+)+|\b[A-Za-z]+_\w+|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b|\b\w+\(\)|\b\d{3,}\b")
+
+
+def unsupported(facts, corpus):
+    """The identifier-like words in these facts that appear nowhere in the corpus (the tool output the facts were drawn from): file paths, dotted and snake_case names,
+    CamelCase, `name()` calls and numbers of three digits or more. Plain prose cannot be looked up, so it is not checked; a name the output never showed is a sign
+    the model supplied it from somewhere else. Returns up to eight."""
+    low, out = corpus.lower(), []
+    for fact in facts:
+        for t in _TOKEN.findall(fact):
+            t = t.rstrip(".:/")
+            bare = t[:-2] if t.endswith("()") else t
+            if len(bare) >= 3 and bare.lower() not in low and bare not in out:
+                out.append(bare)
+    return out[:8]
+
+
 NO_EVIDENCE = "no evidence: add an `evidence:` line with what you ran or read (a command and its result, or file:line); naming a file is not enough"
 MIN_LINES, MAX_LINES = 3, 9
 
@@ -83,6 +100,8 @@ def problems(cks, strict=True):
     if not cks:
         return []
     out = [f"not found: {m}" for m in cks.get("missing", [])]
+    if strict:
+        out += [f"not in the tool output it was drawn from: {m}" for m in cks.get("unsupported", [])]
     if strict and not cks.get("evidence"):
         out.append(NO_EVIDENCE)
     return out

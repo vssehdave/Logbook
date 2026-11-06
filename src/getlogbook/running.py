@@ -202,6 +202,24 @@ class Running:
             d.mkdir(parents=True, exist_ok=True)
             atomic_write(d / f"{savepoint_id}.queue", raw.decode("utf-8", "replace"))
 
+    def queue_text(self, start, end):
+        """The input and output text of the tool uses in queue bytes start..end: what the observer saw, so what a fact can be checked against."""
+        try:
+            with open(self.queue, "rb") as f:
+                f.seek(start)
+                raw = f.read(max(0, end - start))
+        except OSError:
+            return ""
+        parts = []
+        for line in raw.decode("utf-8", "replace").splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict):
+                parts += [str(ev.get("input", "")), str(ev.get("output", ""))]
+        return "\n".join(parts)
+
     def archived(self, savepoint_id):
         try:
             return [json.loads(x) for x in (self.dir / "archive" / f"{savepoint_id}.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]

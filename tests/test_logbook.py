@@ -15,7 +15,7 @@ sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
 
-from getlogbook import capture, cli, recall, safety, sync, tidy, tree  # noqa: E402
+from getlogbook import capture, cli, ground, recall, safety, sync, tidy, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
 from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
@@ -1768,7 +1768,7 @@ class ObserverBase(CliRepo):
 
     def tool(self, n=1, name="Read", **kw):
         for i in range(n):
-            payload = {"tool_name": name, "tool_input": {"file_path": f"shop/revenue{i}.py"}, "tool_response": "def total(orders): return sum(o['amount'] for o in orders)",
+            payload = {"tool_name": name, "tool_input": {"file_path": f"shop/revenue{i}.py"}, "tool_response": "# shop/revenue.py\ndef total(orders): return sum(o['amount'] for o in orders)",
                        "session_id": "s1", "hook_event_name": "PostToolUse", "cwd": str(self.d), **kw}
             self.observer.on_tool_use(self.r, payload)
 
@@ -2100,6 +2100,21 @@ class TestSavepoint(ObserverBase):
         self.assertEqual(n.checks["paths"], [1, 1], "the file it read exists")
         self.assertEqual(self.save()["skipped"], "nothing new since the last savepoint")
         self.assertEqual(len(self.notes()), 1)
+
+    def test_a_fact_that_names_something_the_tool_output_never_showed_is_flagged_and_kept_out(self):
+        self.observe()
+        self.observe(title="invented detail")
+        self.run_.rewrite([dict(o, facts=["retry_backoff() doubles the delay in shop/queue_worker.py"]) if o["title"] == "invented detail" else o for o in self.run_.observations()])
+        self.save()
+        notes = {n.topic: n for n in self.notes()}
+        self.assertEqual(notes["total ignores refunds"].checks["unsupported"], [])
+        self.assertEqual(notes["invented detail"].checks["unsupported"], ["retry_backoff", "shop/queue_worker.py"])
+        shown = {v["topic"]: recall.injectable(v) for v in tree.all_views(self.r)[0] if v["kind"] == "finding"}
+        self.assertEqual(shown, {"total ignores refunds": True, "invented detail": False})
+        tidy.queue_pass(self.r)
+        from getlogbook import outbox
+        self.assertEqual(outbox.load(self.r).keys(), {notes["total ignores refunds"].id})
+        self.assertIn("not in the tool output", "; ".join(ground.problems(notes["invented detail"].checks, True)))
 
     def test_a_note_with_evidence_is_shown_to_agents_and_one_without_is_not(self):
         self.observe()
@@ -2833,6 +2848,18 @@ class TestNewsAndTriggers(CliRepo):
         self.assertIn("Commit level finding", some["detail"])
         self.assertIn(g.head_sha(bob)[:8], some["detail"])
         self.assertEqual(cites.source_line(self.r, views[notes[0].id])[:16], "Note added by Bo", "the line an agent is given to cite from")
+
+    def test_a_teammates_shared_notes_open_the_session_in_place_of_their_logs(self):
+        rb, _ = self.two_people()
+        self.r.save_cfg({**self.r.cfg(), "trusted": [rb.user]})
+        branch = tree.default_branch(self.r)
+        self.bob_shares(rb, "Bob changed the export")
+        sync.sync(self.r)
+        start = recall.digest(self.r, "SessionStart", session="s1")
+        self.assertIn("note from Bob", start)
+        self.assertIn("Bob changed the export", start)
+        self.assertNotIn("saved log", start)
+        self.assertIn(f"branch {branch}", start)
 
     def test_a_merged_branch_is_published_by_the_pull_hook_in_auto_mode_only(self):
         sh("git", "checkout", "-q", "-b", "feat/m", cwd=self.d)
