@@ -455,7 +455,7 @@ def cmd_log(a):
     from . import running, savepoint
     r = need_repo()
     branch = running.branch_now(r)[0]
-    res = savepoint.save(r, branch, use_model=not a.no_model, observe=not a.no_observe)
+    res = savepoint.save(r, branch, use_model=not a.no_model, observe=not a.no_observe, commit=a.commit)
     if "saved" not in res:
         if not a.quiet:
             out("logbook: " + res["skipped"])
@@ -990,6 +990,7 @@ def build_parser():
     s = add("log", cmd_log, "save a log: summarize this branch's session since the last one (private until you publish)")
     s.add_argument("--no-model", action="store_true", help="put the summary together by code, without asking a model")
     s.add_argument("--no-observe", action="store_true", help="do not first observe the tool uses still queued")
+    s.add_argument("--commit", help="the commit this savepoint is about (the git post-commit hook passes it)")
     s.add_argument("--quiet", action="store_true")
     s = add("history", cmd_history, "the notes next to your commits, newest first")
     s.add_argument("-n", type=int, default=20, help="how many commits")

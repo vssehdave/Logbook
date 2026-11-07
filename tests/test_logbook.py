@@ -1765,6 +1765,9 @@ class ObserverBase(CliRepo):
         p = unittest.mock.patch.object(worker, "available", lambda: True)  # CI has no claude on PATH
         p.start()
         self.addCleanup(p.stop)
+        m = unittest.mock.patch.object(observer, "MIN_BATCH", 4)  # most tests queue a handful of tool uses; the real minimum (12) has its own tests
+        m.start()
+        self.addCleanup(m.stop)
 
     def tool(self, n=1, name="Read", **kw):
         for i in range(n):
@@ -1912,6 +1915,20 @@ class TestObserver(ObserverBase):
         (gd / "rebase-merge").mkdir()
         (gd / "rebase-merge" / "head-name").write_text("refs/heads/feat/z\n")
         self.assertEqual(self.running.branch_now(self.r), ("feat/z", sha))
+
+    def test_a_background_pass_waits_for_a_full_batch_but_a_flush_does_not(self):
+        import unittest.mock
+        with unittest.mock.patch.object(self.observer, "MIN_BATCH", 12), unittest.mock.patch.object(self.observer, "spawn_pass") as spawn:
+            self.tool(11)
+            self.assertFalse(spawn.called, "eleven queued tool uses start nothing")
+            self.assertEqual(self.drain()["skipped"], "not enough queued yet")
+            self.tool(1)
+            self.assertTrue(spawn.called, "the twelfth starts a pass")
+            res = self.drain()
+            self.assertEqual(res["calls"], 1)
+            self.tool(3)
+            self.assertIn("skipped", self.drain())
+            self.assertEqual(self.drain(flush=True)["calls"], 1, "a savepoint or the end of a session takes what is there")
 
     def test_the_hooks_start_a_pass_for_the_current_branch(self):
         import unittest.mock
@@ -2163,6 +2180,64 @@ class TestSavepoint(ObserverBase):
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 self.save()
             self.assertEqual(spawn.call_args.args[0][-3:], ["tidy", "--work", "--quiet"], mode)
+
+    def obs_xml(self, title, mod):
+        return (OBS_XML.replace("total ignores refunds", title).replace("adds every order", f"adds every order ({title})")
+                .replace("<files_modified></files_modified>", f"<files_modified><file>{mod}</file></files_modified>" if mod else "<files_modified></files_modified>"))
+
+    def work_and_observe(self, title, mod):
+        self.tool(5)
+        self.drain(self.obs_xml(title, mod))
+
+    def test_each_note_points_at_the_commit_that_holds_its_own_work_when_a_savepoint_spans_several(self):
+        self.work_and_observe("first change", "shop/a.py")
+        commit(self.d, "first", {"shop/a.py": "a = 1\n"})
+        c1 = g.state(self.d)[0]
+        self.work_and_observe("second change", "shop/b.py")
+        commit(self.d, "second", {"shop/b.py": "b = 1\n"})
+        c2 = g.state(self.d)[0]
+        self.work_and_observe("not committed", "shop/c.py")
+        self.work_and_observe("only looked", "")
+        res = self.save()
+        by = {n.topic: n for n in self.notes()}
+        self.assertEqual(res["observations"], 4)
+        self.assertEqual(by["first change"].anchor["sha"], c1)
+        self.assertEqual(by["second change"].anchor["sha"], c2)
+        self.assertEqual((by["not committed"].level, by["not committed"].anchor["sha"]), ("branch", ""))
+        self.assertEqual((by["only looked"].level, by["only looked"].anchor["sha"]), ("branch", ""))
+        self.assertEqual(by["first change"].level, "commit")
+
+    def test_an_observation_remembers_every_commit_head_was_at_while_its_tool_uses_ran(self):
+        self.tool(2)
+        before = g.state(self.d)[0]
+        commit(self.d, "mid", {"shop/m.py": "m = 1\n"})
+        after = g.state(self.d)[0]
+        self.tool(2)
+        self.drain(flush=True)
+        (o,) = self.run_.observations()
+        self.assertEqual(o["heads"], [before, after])
+
+    def test_a_savepoint_started_by_a_commit_leaves_later_work_for_the_next_savepoint(self):
+        self.work_and_observe("before the commit", "shop/a.py")
+        commit(self.d, "first", {"shop/a.py": "a = 1\n"})
+        c1 = g.state(self.d)[0]
+        self.work_and_observe("after the commit", "shop/b.py")  # its tool uses ran with HEAD at c1
+        res = self.save(commit=c1)
+        self.assertEqual((res["observations"], res["commit"]), (1, c1))
+        self.assertEqual([o["title"] for o in self.run_.observations()], ["after the commit"], "left for the next savepoint")
+        commit(self.d, "second", {"shop/b.py": "b = 1\n"})
+        c2 = g.state(self.d)[0]
+        res2 = self.save(commit=c2)
+        self.assertEqual(res2["observations"], 1)
+        by = {n.topic: n for n in self.notes()}
+        self.assertEqual((by["before the commit"].anchor["sha"], by["after the commit"].anchor["sha"]), (c1, c2))
+        self.assertEqual(by["after the commit"].checks["unsupported"], [], "its tool uses were still in the evidence text of the second savepoint")
+
+    def test_a_commit_that_is_not_one_is_ignored(self):
+        self.work_and_observe("plain", "")
+        res = self.save(commit="deadbeef" * 5)
+        self.assertEqual(res["observations"], 1)
+        self.assertEqual(res["commit"], "")
 
     def test_tidy_leaves_logs_alone(self):
         from getlogbook import tidy
@@ -2629,10 +2704,11 @@ class TestCommitHook(ObserverBase):
         from getlogbook import hookmain
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             self.assertEqual(hookmain.run(["post-commit"]), 0)
-        return spawn.call_args.args[0][-3:] if spawn.called else None
+        return spawn.call_args.args[0][-4:] if spawn.called else None
 
-    def test_ask_and_auto_save_a_log_and_manual_does_not(self):
-        for mode, expect in (("ask", ["getlogbook", "log", "--quiet"]), ("auto", ["getlogbook", "log", "--quiet"]), ("manual", None)):
+    def test_ask_and_auto_save_a_log_for_the_commit_that_fired_them_and_manual_does_not(self):
+        sha = self.running.branch_now(self.r)[1]
+        for mode, expect in (("ask", ["log", "--quiet", "--commit", sha]), ("auto", ["log", "--quiet", "--commit", sha]), ("manual", None)):
             self.run_cli("config", "publish", mode)
             self.assertEqual(self.fire(), expect, mode)
 

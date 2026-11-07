@@ -43,7 +43,7 @@ def run(argv):
             from . import running, worker
             r = Repo(".")
             if r.cfg().get("user") and r.publish_mode() in ("ask", "auto") and worker.enabled(r) and running.branch_now(r)[0] != "HEAD":
-                capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "log", "--quiet"], r.root)
+                capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "log", "--quiet", "--commit", running.branch_now(r)[1]], r.root)
     except Exception:
         pass
     return 0

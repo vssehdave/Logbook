@@ -110,7 +110,7 @@ One setting, `logbook config publish`, decides how much happens by itself:
 | mode | `logbook log` (savepoint) | `logbook publish` |
 |---|---|---|
 | `manual` | you run it | you run it |
-| `ask` (default) | by itself, after every commit (a git `post-commit` hook), and when a session ends | the agent asks, shows the redacted preview, then runs it |
+| `ask` (default) | by itself, after every commit (a git `post-commit` hook that passes the commit id), and when a session ends | the agent asks, shows the redacted preview, then runs it |
 | `auto` | by itself, after every commit, after 5 or more new observations that follow a commit, and when a session ends | when a branch looks merged, the agent is told at session start and runs `logbook publish --branch <name> --yes` |
 
 **The publish queue.** `logbook publish` shares only what is in the queue (`logbook queue` shows it: note id, commit, branch, the note). Tidy keeps it, in every mode, right

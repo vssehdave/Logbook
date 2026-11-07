@@ -109,8 +109,10 @@ def summarize(repo, branch, obs, call=worker.call_model, now=time.time):
 
 
 # ---- the savepoint ---------------------------------------------------------------------------------------------
-def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, observe=True):
-    """Make one savepoint. Returns {"saved": entry id, ...} or {"skipped": reason}; never raises for a model problem."""
+def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, observe=True, commit=None):
+    """Make one savepoint. Returns {"saved": entry id, ...} or {"skipped": reason}; never raises for a model problem.
+    `commit` is the commit that started it (the git post-commit hook passes it): the savepoint is about that commit, not about whatever HEAD is by the time the
+    background process runs, and observations whose tool uses ran after the commit are left for the next savepoint."""
     if branch == "HEAD":
         return {"skipped": "HEAD is detached: check out a branch first"}
     if observe and worker.enabled(repo):
@@ -119,15 +121,17 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
     with capture._lock(worker._wdir(repo) / ".lock", timeout=WAIT, stale=worker.LOCK_STALE) as got:
         if not got:
             return {"skipped": "the observer is busy; try again in a moment"}
-        obs = own(run)
+        commit = commit if commit and HEX_RE.match(commit) and g.commit_exists(repo.root, commit) else ""
+        every = own(run)
+        obs = [o for o in every if not (commit and _after(repo, commit, o))]
         if not obs:
             return {"skipped": "nothing new since the last savepoint"}
-        head = running.branch_now(repo)[1]
-        sha = head if commit_made(run, obs, head) else ""
+        head = commit or running.branch_now(repo)[1]
+        sha = head if (commit or commit_made(run, obs, head)) else ""
         fields, how = summarize(repo, branch, obs, call, now) if use_model else (fallback(obs), "code")
         e = _entry(repo, branch, sha, obs, fields)
         prev = last(run).get("head") or (obs[0].get("head") if obs else "")
-        for n in notes_from(repo, branch, sha, prev, obs, e.id, run.queue_text(last(run).get("qoff", 0), run.offset())):
+        for n in notes_from(repo, branch, head, prev, obs, e.id, run.queue_text(last(run).get("qoff", 0), run.offset())):
             if not repo.get_private(n.id):  # the same observation is never saved as a note twice
                 repo.add_private(n)
         repo.add_private(e)
@@ -140,7 +144,8 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
         if run.obs.exists():
             run.archive(e.id, [o for o in run.observations() if o["id"] in covered])
             run.rewrite(keep)
-        running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qend, "toff": toff}))
+        later = len(every) > len(obs)  # observations left for the next savepoint: their tool uses must stay in its evidence text
+        running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qstart if later else qend, "toff": toff}))
     # a new log is a moment to tidy, in every mode: judge changed notes, archive junk, keep the publish queue, in the background
     capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet"], repo.root)
     return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "notes": len(covered), "messages": len(talk), "title": e.topic, "by": how}
@@ -165,13 +170,31 @@ def _entry(repo, branch, sha, obs, fields):
 
 
 # ---- the notes ---------------------------------------------------------------------------------------------------
-def _changed(repo, prev, sha):
-    """Files the commits since the last savepoint changed (the files of `sha` alone when there is no earlier head to compare with)."""
-    if prev and prev != sha and HEX_RE.match(prev):
-        rc, out, _ = g.try_run(["diff", "--name-only", f"{prev}..{sha}"], repo.root)
-        if rc == 0:
-            return {x for x in out.splitlines() if x}
-    return set(g.changed_paths(repo.root, sha))
+def _after(repo, commit, o):
+    """True when the observation's tool uses all ran after `commit` (HEAD was the commit or a descendant when the first of them ran)."""
+    first = next((h for h in o.get("heads", []) if HEX_RE.match(h)), "")
+    return bool(first) and (first == commit or g.try_run(["merge-base", "--is-ancestor", commit, first], repo.root)[0] == 0)
+
+
+def _commit_for(repo, o, end, prev, mod, cache):
+    """The commit that holds an observation's own work: the first commit after HEAD was where its first tool use saw it, up to `end`, that changed a file it modified.
+    '' when there is none (the edits are not committed yet, or it changed nothing). A savepoint can span several commits; this is what tells them apart."""
+    if not end or not mod:
+        return ""
+    start = next((h for h in o.get("heads", []) if HEX_RE.match(h)), "") or prev
+    if not start or not HEX_RE.match(start):
+        return ""
+    if start == end:
+        return ""
+    rc, out, _ = g.try_run(["rev-list", "--reverse", "--first-parent", "-n", "50", f"{start}..{end}"], repo.root)
+    if rc != 0:  # HEAD moved to unrelated history (a rebase, a reset): fall back to the savepoint's own commit
+        return end if mod and set(g.changed_paths(repo.root, end)) & mod else ""
+    for c in out.split():
+        if c not in cache:
+            cache[c] = set(g.changed_paths(repo.root, c))
+        if cache[c] & mod:
+            return c
+    return ""
 
 
 def _rel(root, f):
@@ -180,14 +203,13 @@ def _rel(root, f):
     return f[len(root):] if f.casefold().startswith(root.casefold()) else f
 
 
-def notes_from(repo, branch, sha, prev, obs, log_id, tool_text=None):
-    """One note per observation. A note is about the commit when a commit since the last savepoint changed a file the observation modified, else about the
-    branch. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents. With `tool_text` (what the
+def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
+    """One note per observation. A note is about the commit that holds its own work (see _commit_for; several commits can lie between two savepoints), else about the
+    branch. `end` is the commit the savepoint stops at, `prev` the one the last savepoint stopped at. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents. With `tool_text` (what the
     tool uses behind the savepoint showed) the identifier-like words in its facts must also appear there, or in what the other observations of the savepoint say."""
     from . import tree
     root = repo.root.resolve().as_posix().rstrip("/") + "/"
-    changed = _changed(repo, prev, sha) if sha else set()
-    commit_a = tree.anchor_for(repo, sha=sha, paths=[], dirty=False, with_base=True) if sha else {}
+    cache, anchors = {}, {}
     branch_a = tree.anchor_for(repo, paths=[], dirty=False, with_base=True)
     branch_a.update(sha="", tree="", parent="", patch_id="", subject="", date="", range_pid="")
     branch_a["branch"] = branch
@@ -195,8 +217,11 @@ def notes_from(repo, branch, sha, prev, obs, log_id, tool_text=None):
     for o in obs:
         mod = [_rel(root, f) for f in o.get("files_modified", [])]
         read = [_rel(root, f) for f in o.get("files_read", [])]
-        about = bool(sha and changed & set(mod))
-        a = dict(commit_a if about else branch_a)
+        sha = _commit_for(repo, o, end, prev, set(mod), cache)
+        about = bool(sha)
+        if about and sha not in anchors:
+            anchors[sha] = tree.anchor_for(repo, sha=sha, paths=[], dirty=False, with_base=True)
+        a = dict(anchors[sha] if about else branch_a)
         a["paths"], a["names"] = mod, tree.names_of(mod)
         sub = o.get("subtitle") or re.split(r"(?<=[.!?])\s", o["narrative"].strip(), maxsplit=1)[0]
         facts = [f for f in o.get("facts", []) if f]
@@ -204,7 +229,7 @@ def notes_from(repo, branch, sha, prev, obs, log_id, tool_text=None):
         body = {"summary": sub[:300], "why": o["narrative"][:2000]}
         if facts or mod:  # files read alone prove nothing: the note has evidence only when something was found or changed
             body["evidence"] = "\n".join(proof)[:2000]
-        checks = ground.check(repo, body, o["title"], mod + read, sha if about else None)
+        checks = ground.check(repo, body, o["title"], mod + read, sha or None)
         if tool_text is not None:
             others = " ".join(f"{x['title']} {x['narrative']}" for x in obs if x is not o)
             checks["unsupported"] = ground.unsupported(facts, tool_text + "\n" + others)

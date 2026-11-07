@@ -26,7 +26,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_logbook as T  # noqa: F401  (puts the source on the path and sets the test environment)
-from getlogbook import branches, capture, cli, hookmain, recall, running, savepoint, tidy, tree, worker  # noqa: E402
+from getlogbook import branches, capture, cli, hookmain, observer, recall, running, savepoint, tidy, tree, worker  # noqa: E402
 from getlogbook import git as g  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
 
@@ -115,6 +115,9 @@ class TestADay(unittest.TestCase):
         p2 = mock.patch.object(capture, "spawn_detached", self.spawn)
         p2.start()
         self.addCleanup(p2.stop)
+        p3 = mock.patch.object(observer, "MIN_BATCH", 4)  # this day is compressed to a few tool uses per pass; the real minimum (12) is tested on its own
+        p3.start()
+        self.addCleanup(p3.stop)
         self.rng = random.Random(7)
         self.fed = {}  # (person, branch) -> tool uses the hook should have queued
         self.prompt_outputs = []  # what each UserPromptSubmit hook said back

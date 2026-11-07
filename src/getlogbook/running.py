@@ -124,6 +124,15 @@ class Running:
         except (OSError, ValueError):
             return 0
 
+    def pending_events(self):
+        """How many whole tool uses are queued and not read yet."""
+        try:
+            with open(self.queue, "rb") as f:
+                f.seek(self.offset())
+                return f.read().count(b"\n")
+        except OSError:
+            return 0
+
     def pending_bytes(self):
         try:
             return max(0, self.queue.stat().st_size - self.offset())
