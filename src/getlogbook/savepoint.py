@@ -174,6 +174,14 @@ def _changed(repo, prev, sha):
     return set(g.changed_paths(repo.root, sha))
 
 
+_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./)")
+
+
+def _inside(files):
+    """The files git could know about: a path outside the repository (a scratch script, a file under the home folder) cannot be looked up there."""
+    return [f for f in files if not _OUTSIDE.match(f)]
+
+
 def _rel(root, f):
     """A file as the repo spells it: forward slashes, relative to the project root when the model gave an absolute path."""
     f = f.replace("\\", "/")
@@ -204,7 +212,7 @@ def notes_from(repo, branch, sha, prev, obs, log_id, tool_text=None):
         body = {"summary": sub[:300], "why": o["narrative"][:2000]}
         if facts or mod:  # files read alone prove nothing: the note has evidence only when something was found or changed
             body["evidence"] = "\n".join(proof)[:2000]
-        checks = ground.check(repo, body, o["title"], mod + read, sha if about else None)
+        checks = ground.check(repo, body, o["title"], _inside(mod + read), sha if about else None)
         if tool_text is not None:
             others = " ".join(f"{x['title']} {x['narrative']}" for x in obs if x is not o)
             checks["unsupported"] = ground.unsupported(facts, tool_text + "\n" + others)

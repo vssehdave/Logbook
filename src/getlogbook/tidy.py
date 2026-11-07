@@ -174,6 +174,8 @@ def garbage(repo, views, days=None):
     for v in views:
         if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "log":
             continue  # a saved log is the person's record of a session: it is kept, never dropped as junk
+        if v.get("obs"):
+            continue  # a note made at a savepoint records what was learned or built: a file renamed or deleted later does not make it junk, and age alone does not either (statuses handle staleness)
         files = tracked(repo, v)[:MAX_FILES]
         if v.get("status") == "resolved":
             reason = "resolved"
@@ -335,7 +337,7 @@ TRIAGE_MAX = 25  # entries shown to the model in one call
 TRIAGE_ARCHIVE_MAX = 10  # entries one pass may archive: a model that calls everything junk must not empty the log
 TRIAGE_KEYS = ("entry", "verdict", "redundant_of", "reason")
 TRIAGE_SYSTEM = """You keep a person's private log of coding sessions clean. You cannot use tools. Below are entries from the log, each with facts worked out by code. Decide, only from what is shown, which entries are not worth keeping or sharing:
-- junk: a test, probe, benchmark or throwaway session; a session that left nothing a later reader could use (a greeting, a one-word reply, a failed start, an attempt that found nothing); work that was abandoned (its branch is gone and was never merged, or its files are gone).
+- junk: a test, probe, benchmark or throwaway session; a session that left nothing a later reader could use (a greeting, a one-word reply, a failed start, an attempt that found nothing); work that was abandoned (its branch is gone and was never merged). A file that was renamed or deleted later does not make a note about it junk: what was learned or built there is still history.
 - redundant: says the same thing as another entry; name the entry to keep in redundant_of (keep the better one).
 Do not call an entry junk because it is short or because you cannot tell: when in doubt, leave it out. An entry that records a decision, a cause, a gotcha, or what was built or fixed is worth keeping even when small. Answer with blocks separated by a line of ---, each exactly:
 
