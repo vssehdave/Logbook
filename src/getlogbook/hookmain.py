@@ -25,7 +25,7 @@ def run(argv):
         elif argv[0] == "post-merge":  # after a pull: fetch the shared logs in the background; never push
             r = Repo(".")
             # in ask and auto mode the tidy pass does that fetch first, then judges what the pull changed
-            more = ["tidy", "--work", "--quiet"] if r.publish_mode() in ("ask", "auto") else ["sync", "--fetch-only"]
+            more = ["tidy", "--work", "--quiet", "--no-judge"] if r.publish_mode() in ("ask", "auto") else ["sync", "--fetch-only"]
             capture.spawn_detached([r.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", *more], r.root)
             if r.cfg().get("user") and r.publish_mode() == "auto" and not os.environ.get(PUBLISHING):
                 from . import branches
