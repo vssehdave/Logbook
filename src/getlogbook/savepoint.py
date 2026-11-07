@@ -17,6 +17,7 @@ import time
 from . import capture, convo, ground, observer, running, worker
 from . import git as g
 from .entry import HEX_RE, ID_RE, MAX_LIST, Entry, new_id
+from .safety import inside as safety_inside
 from .safety import redact
 
 WAIT = 150  # seconds a savepoint waits for an observer pass already running (it holds the lock across its model calls) before it gives up
@@ -197,12 +198,7 @@ def _commit_for(repo, o, end, prev, mod, cache):
     return ""
 
 
-_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./|[A-Za-z][A-Za-z0-9+.-]*://)")  # a drive, a root, the home folder, outside the folder, or a URL
-
-
-def _inside(files):
-    """The files git could know about: a path outside the repository (a scratch script, a file under the home folder) or a web address cannot be looked up there."""
-    return [f for f in files if not _OUTSIDE.match(f)]
+_inside = safety_inside  # the files git could know about: a path outside the repository (a scratch script, a file under the home folder) or a web address cannot be looked up there
 
 
 def _rel(root, f):

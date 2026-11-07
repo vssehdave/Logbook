@@ -540,6 +540,26 @@ class TestSharingQueue(CliRepo):
         self.assertIn("nothing queued", self.run_cli("queue")[1])
         self.assertIn("nothing to publish", self.run_cli("publish", "--all", "--yes")[1])
 
+    def test_a_published_note_carries_no_home_folder_and_no_private_session_id(self):
+        e = capture.make_entry(self.r, "finding", r"Bug in C:\Users\ann\work\x.py", {"summary": "the file C:/Users/ann/work/y.py is wrong", "why": "see /home/bob/z.py and src/ok.py"},
+                               paths=["shop/revenue.py", "C:/Users/ann/work/x.py", "/Users/ann/q.py"])
+        e.obs = {"type": "bugfix", "files_read": ["C:/Users/ann/x.py", "shop/revenue.py", "https://github.com/a/b"], "files_modified": ["/tmp/scratch.py"], "session": "private-chat-id"}
+        e.checks = {"paths": [1, 3], "names": [0, 0], "commits": [0, 0], "files": [], "missing": ["C:/Users/ann/gone.py", "no_such_name", "shop/missing.py"], "evidence": True, "at": ""}
+        self.r.add_private(e)
+        self.assertIn("C:/Users/ann/work/x.py", e.anchor["paths"], "the private copy keeps the full path")
+        copy, found = cli.share_copy(self.r, e, False, False)
+        self.assertIn("home-path", found)
+        self.run_cli("publish", e.id, "--yes", "--no-push")
+        (l,) = [x for x in self.r.load_shared()[0] if x.entry.id == e.id]
+        blob = l.entry.to_json()
+        for private in ("ann", "bob", "private-chat-id", "Users", "/home/", "scratch.py", "github.com"):
+            self.assertNotIn(private, blob, private)
+        self.assertEqual(l.entry.anchor["paths"], ["shop/revenue.py"])
+        self.assertEqual(l.entry.obs["files_read"], ["shop/revenue.py"])
+        self.assertEqual(l.entry.checks["missing"], ["no_such_name", "shop/missing.py"])
+        self.assertIn("~/work/y.py", l.entry.body["summary"])
+        self.assertIn("src/ok.py", l.entry.body["why"], "a path inside the repo stays")
+
     def test_pre_push_hook_reminds_and_never_blocks(self):
         self.run_cli("install", "--yes", "--agent", "agents-md")
         remote = self.root / "remote.git"

@@ -46,6 +46,21 @@ def redact(text, deny=()):
     return text, found
 
 
+_HOME = re.compile(r"(?:[A-Za-z]:[\\/]+Users[\\/]+|/Users/|/home/)[^\\/\s\"'`]+")
+_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./|[A-Za-z][A-Za-z0-9+.-]*://)")  # a drive, a root, the home folder, outside the folder, or a web address
+
+
+def scrub_paths(text):
+    """Replace the person's home folder in a path with `~` (`C:/Users/ann/work/x.py` becomes `~/work/x.py`), so a shared note does not carry a user name."""
+    return _HOME.sub("~", text) if isinstance(text, str) else text
+
+
+def inside(files):
+    """The paths that are inside the repository (relative ones). An absolute path, a path in the home folder and a web address are left out: they say nothing a teammate
+    can use, and the first two carry a user name."""
+    return [f for f in files if isinstance(f, str) and f and not _OUTSIDE.match(f)]
+
+
 def looks_tabular(text, run=3):
     """True if >= `run` consecutive lines look like data rows (a pasted query result)."""
     streak = best = 0

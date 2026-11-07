@@ -10,7 +10,7 @@ import time
 from . import capture, cites, convo, ground, nav, outbox, recall, sync, tidy, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
-from .safety import digest_hash, looks_tabular, redact
+from .safety import digest_hash, inside, looks_tabular, redact, scrub_paths
 from .safety import sanitize as safety_sanitize
 from .store import LEGACY_MODES, PUBLISH_MODES, Repo
 
@@ -208,16 +208,26 @@ def share_copy(r, e, include_evidence, allow_table):
         if e.body.get(k):
             body[k], f = redact(e.body[k], deny)
             found += f
+            scrubbed = scrub_paths(body[k])
+            found += ["home-path"] * (scrubbed != body[k])
+            body[k] = scrubbed
     if not allow_table and any(looks_tabular(v) for v in body.values()):
         raise SystemExit("logbook: a field looks like pasted table rows; refusing. Remove it, or pass --allow-table after checking it.")
     c = e.copy(body=body, redacted=True, display=r.cfg().get("display", "") if r.attribution() == "named" else "")
     c.topic, f = redact(e.topic, deny)
     found += f
+    c.topic = scrub_paths(c.topic)
     a = dict(e.anchor)
     for k in ("subject", "branch"):
         a[k], f = redact(a.get(k, ""), deny)
         found += f
+        a[k] = scrub_paths(a[k])
+    for k in ("paths", "old_paths"):  # only paths inside the repository: the rest would carry a user name and mean nothing to a teammate
+        a[k] = inside(a.get(k, []))
     c.anchor = a
+    if c.obs:  # the files a note read and changed, the same way; the session id of a private chat stays private
+        c.obs = {k: (inside(v) if k in ("files_read", "files_modified") else v) for k, v in c.obs.items() if k != "session"}
+    c.checks = dict(c.checks, missing=[scrub_paths(m) for m in c.checks.get("missing", []) if inside([m])])
     return c, found
 
 
