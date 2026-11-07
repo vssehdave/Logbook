@@ -393,7 +393,7 @@ def view(repo, loaded, anch):
             "paths": a.get("paths", []), "names": a.get("names", []), "dirty": a.get("dirty", False),
             "supersedes": e.supersedes, "checks": e.checks, "redacted": e.redacted, "level": e.level, "sources": e.sources,
             "merge_base": a.get("merge_base", ""), "base": a.get("base", ""), "writer": loaded.user, "status_rec": e.status,
-            "log": local_log(repo, loaded)}
+            "log": local_log(repo, loaded), "obs": bool(e.obs)}
 
 
 def apply_statuses(views):
