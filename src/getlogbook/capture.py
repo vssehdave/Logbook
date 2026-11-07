@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import git as g
 from .entry import BODY_FIELDS, LEVELS, Entry, from_json, new_id
-from .safety import inside, localize, repo_relative
+from .safety import inside, localize, repo_relative, repo_roots
 from .store import Repo, atomic_write
 
 MARK_BEGIN, MARK_END = "# >>> logbook >>>", "# <<< logbook <<<"
@@ -41,7 +41,7 @@ def writer():
 
 def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", supersedes=(), sha=None, level="", sources=(), checks=None, status=None):
     from . import tree
-    root = repo.root.resolve().as_posix().rstrip("/") + "/"
+    root = repo_roots(repo)
     body = {k: localize(str(v)[:2000], root) for k, v in body.items() if k in BODY_FIELDS and v}  # no path outside the repository goes into a note, private or shared
     if paths is not None:
         paths = inside([repo_relative(root, p) for p in paths if p])

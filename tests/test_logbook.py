@@ -562,7 +562,7 @@ class TestSharingQueue(CliRepo):
         self.assertIn("src/ok.py", l.entry.body["why"], "a path inside the repo stays")
 
     def test_a_note_never_stores_a_path_outside_the_repository_private_or_shared(self):
-        inside_abs = (self.d / "shop" / "other.py").as_posix()
+        inside_abs = (self.r.root / "shop" / "other.py").as_posix()
         e = capture.make_entry(self.r, "finding", f"Bug in {inside_abs} and C:\\Users\\ann\\x.py",
                                {"summary": f"{inside_abs} reads D:/data/q.csv", "why": "see /tmp/scratch.py, ~/notes.txt and shop/revenue.py", "evidence": "ran /home/bob/run.sh"},
                                paths=["shop/revenue.py", inside_abs, "C:/Users/ann/work/x.py", "/Users/ann/q.py", "https://github.com/a/b"])
@@ -572,6 +572,22 @@ class TestSharingQueue(CliRepo):
             self.assertNotIn(private, blob, private)
         self.assertIn("shop/other.py reads [outside path]", e.body["summary"], "a path inside the repo is made relative, the others are replaced")
         self.assertIn("shop/revenue.py", e.body["why"])
+
+    def test_a_path_inside_the_repo_is_recognised_in_every_spelling_of_the_repo_folder(self):
+        from getlogbook import safety
+        real = self.root / "real-repo"
+        (real / "src").mkdir(parents=True)
+        (real / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        link = self.root / "link-to-repo"
+        try:
+            link.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("this machine cannot make a symbolic link")
+        roots = (real.as_posix().rstrip("/") + "/",)
+        self.assertEqual(safety.repo_relative(roots, (link / "src" / "a.py").as_posix()), "src/a.py", "a path through a symlink is the same file")
+        self.assertEqual(safety.repo_relative(roots, (real / "src" / "a.py").as_posix()), "src/a.py")
+        self.assertEqual(safety.inside([safety.repo_relative(roots, (self.root / "elsewhere" / "b.py").as_posix())]), [], "a file next to the repo is outside it")
+        self.assertEqual(safety.localize(f"{(real / 'src' / 'a.py').as_posix()} and {(self.root / 'elsewhere' / 'b.py').as_posix()}", roots), "src/a.py and [outside path]")
 
     def test_pre_push_hook_reminds_and_never_blocks(self):
         self.run_cli("install", "--yes", "--agent", "agents-md")
@@ -2273,7 +2289,7 @@ class TestSavepoint(ObserverBase):
         self.assertTrue(note.obs, "it is the savepoint note that was kept")
 
     def test_a_savepoint_note_keeps_no_path_outside_the_repository_in_its_text_fields_or_lists(self):
-        inside_abs = (self.d / "shop" / "revenue.py").as_posix()
+        inside_abs = (self.r.root / "shop" / "revenue.py").as_posix()
         o = {"id": new_id(), "type": "change", "title": f"edited {inside_abs}", "subtitle": f"{inside_abs} and C:/Users/ann/x.py", "narrative": f"Worked in {inside_abs}; scratch was C:/Users/ann/.claude/jobs/a/b.py.",
              "facts": [f"{inside_abs} total() was read", "wrote C:/Users/ann/out.txt"], "files_read": [inside_abs, "C:/Users/ann/in.txt", "https://x.io/p"], "files_modified": ["/tmp/s.py", "shop/other.py"], "t": 0}
         (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "1a1b0000000-00000000", "shop/revenue.py total() read")

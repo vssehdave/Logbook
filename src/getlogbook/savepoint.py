@@ -18,7 +18,7 @@ from . import capture, convo, ground, observer, running, worker
 from . import git as g
 from .entry import HEX_RE, ID_RE, MAX_LIST, Entry, new_id
 from .safety import inside as safety_inside
-from .safety import localize, redact, repo_relative
+from .safety import localize, redact, repo_relative, repo_roots
 
 WAIT = 150  # seconds a savepoint waits for an observer pass already running (it holds the lock across its model calls) before it gives up
 AUTO_MIN = 5  # auto mode saves after a commit once this many new observations have piled up
@@ -209,7 +209,7 @@ def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
     branch. `end` is the commit the savepoint stops at, `prev` the one the last savepoint stopped at. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents. With `tool_text` (what the
     tool uses behind the savepoint showed) the identifier-like words in its facts must also appear there, or in what the other observations of the savepoint say."""
     from . import tree
-    root = repo.root.resolve().as_posix().rstrip("/") + "/"
+    root = repo_roots(repo)
     cache, anchors = {}, {}
     branch_a = tree.anchor_for(repo, paths=[], dirty=False, with_base=True)
     branch_a.update(sha="", tree="", parent="", patch_id="", subject="", date="", range_pid="")

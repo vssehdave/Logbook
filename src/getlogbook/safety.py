@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from pathlib import Path
 
 _SECRETS = [
     ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)")),
@@ -57,19 +58,35 @@ def scrub_paths(text):
     return _ABS.sub(OUTSIDE, text) if isinstance(text, str) else text
 
 
-def repo_relative(root, f):
-    """A file as the repo spells it: forward slashes, relative to the project root (a string ending in a slash) when it was given as an absolute path inside it."""
+def repo_roots(repo):
+    """The ways the repository's own folder may be spelled in a path or a text: as git reports it and fully resolved (a symlinked temp folder, `/private/var` against
+    `/var` on macOS, a Windows short name like `RUNNER~1`), each with a trailing slash."""
+    return tuple(dict.fromkeys(p.as_posix().rstrip("/") + "/" for p in (repo.root, repo.root.resolve())))
+
+
+def repo_relative(roots, f):
+    """A file as the repo spells it: forward slashes, relative to the project root when it was given as an absolute path inside it, in any spelling of the root."""
+    roots = (roots,) if isinstance(roots, str) else roots
     f = f.replace("\\", "/")
-    return f[len(root):] if f.casefold().startswith(root.casefold()) else f
+    for root in roots:
+        if f.casefold().startswith(root.casefold()):
+            return f[len(root):]
+    if re.match(r"^(?:[A-Za-z]:|/)", f):
+        try:
+            return Path(f).resolve().relative_to(Path(roots[0]).resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
+    return f
 
 
-def localize(text, root):
+def localize(text, roots):
     """A text with the repository's own folder taken off every path in it (`C:/Users/ann/proj/src/a.py` becomes `src/a.py`), then every other absolute path scrubbed."""
     if not isinstance(text, str):
         return text
-    parts = [re.escape(p) for p in re.split(r"[\\/]+", str(root).replace("\\", "/").strip("/")) if p]
-    if parts:
-        text = re.sub(r"(?<![\w.])/?" + r"[\\/]+".join(parts) + r"[\\/]+", "", text, flags=re.I)
+    for root in ((roots,) if isinstance(roots, str) else roots):
+        parts = [re.escape(p) for p in re.split(r"[\\/]+", str(root).replace("\\", "/").strip("/")) if p]
+        if parts:
+            text = re.sub(r"(?<![\w.])/?" + r"[\\/]+".join(parts) + r"[\\/]+", "", text, flags=re.I)
     return scrub_paths(text)
 
 
