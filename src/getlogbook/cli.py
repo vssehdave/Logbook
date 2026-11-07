@@ -812,7 +812,7 @@ def cmd_tidy(a):
         except (SystemExit, OSError, ValueError):
             pass
     if a.work:  # the tidy worker's pass: judge, archive junk (what the hooks start in `tidy auto`)
-        res = tidy.auto(r) if tidy.mode(r.cfg()) == "auto" else tidy.run(r)
+        res = tidy.auto(r, judge=not a.no_judge) if tidy.mode(r.cfg()) == "auto" else tidy.run(r, judge=not a.no_judge)
         if not a.quiet:
             out(json.dumps(res))
         return 0
@@ -1073,6 +1073,7 @@ def build_parser():
     s.add_argument("--no-sync", action="store_true", help="do not fetch shared logs first")
     s.add_argument("--work", action="store_true", help="run the tidy worker's pass now: judge changed notes with a cheap model, archive junk in auto mode")
     s.add_argument("--quiet", action="store_true")
+    s.add_argument("--no-judge", action="store_true", help="with --work: skip the junk judgment (a model call); a publish does it")
     s.add_argument("--proposals", action="store_true", help="show what the tidy worker proposed and kept for you")
     s.add_argument("--accept", action="store_true", help="store the worker's proposals (each is checked against git again; asks first in Claude Code)")
     s.add_argument("--restore", nargs="+", metavar="ID", help="put archived entries back in the private log")
