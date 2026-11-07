@@ -541,12 +541,13 @@ class TestSharingQueue(CliRepo):
         self.assertIn("nothing to publish", self.run_cli("publish", "--all", "--yes")[1])
 
     def test_a_published_note_carries_no_home_folder_and_no_private_session_id(self):
-        e = capture.make_entry(self.r, "finding", r"Bug in C:\Users\ann\work\x.py", {"summary": "the file C:/Users/ann/work/y.py is wrong", "why": "see /home/bob/z.py and src/ok.py"},
-                               paths=["shop/revenue.py", "C:/Users/ann/work/x.py", "/Users/ann/q.py"])
+        e = capture.make_entry(self.r, "finding", "an older note", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"])
+        e.topic = r"Bug in C:\Users\ann\work\x.py"  # what versions before the rule wrote
+        e.body = {"summary": "the file C:/Users/ann/work/y.py is wrong", "why": "see /home/bob/z.py and src/ok.py"}
+        e.anchor["paths"] = ["shop/revenue.py", "C:/Users/ann/work/x.py", "/Users/ann/q.py"]
         e.obs = {"type": "bugfix", "files_read": ["C:/Users/ann/x.py", "shop/revenue.py", "https://github.com/a/b"], "files_modified": ["/tmp/scratch.py"], "session": "private-chat-id"}
         e.checks = {"paths": [1, 3], "names": [0, 0], "commits": [0, 0], "files": [], "missing": ["C:/Users/ann/gone.py", "no_such_name", "shop/missing.py"], "evidence": True, "at": ""}
         self.r.add_private(e)
-        self.assertIn("C:/Users/ann/work/x.py", e.anchor["paths"], "the private copy keeps the full path")
         copy, found = cli.share_copy(self.r, e, False, False)
         self.assertIn("home-path", found)
         self.run_cli("publish", e.id, "--yes", "--no-push")
@@ -557,8 +558,20 @@ class TestSharingQueue(CliRepo):
         self.assertEqual(l.entry.anchor["paths"], ["shop/revenue.py"])
         self.assertEqual(l.entry.obs["files_read"], ["shop/revenue.py"])
         self.assertEqual(l.entry.checks["missing"], ["no_such_name", "shop/missing.py"])
-        self.assertIn("~/work/y.py", l.entry.body["summary"])
+        self.assertIn("[outside path]", l.entry.body["summary"])
         self.assertIn("src/ok.py", l.entry.body["why"], "a path inside the repo stays")
+
+    def test_a_note_never_stores_a_path_outside_the_repository_private_or_shared(self):
+        inside_abs = (self.d / "shop" / "other.py").as_posix()
+        e = capture.make_entry(self.r, "finding", f"Bug in {inside_abs} and C:\\Users\\ann\\x.py",
+                               {"summary": f"{inside_abs} reads D:/data/q.csv", "why": "see /tmp/scratch.py, ~/notes.txt and shop/revenue.py", "evidence": "ran /home/bob/run.sh"},
+                               paths=["shop/revenue.py", inside_abs, "C:/Users/ann/work/x.py", "/Users/ann/q.py", "https://github.com/a/b"])
+        self.assertEqual(e.anchor["paths"], ["shop/revenue.py", "shop/other.py"])
+        blob = e.to_json()
+        for private in ("ann", "bob", "Users", "/tmp/", "/home/", "D:/", "~/notes", "github.com", self.root.name):
+            self.assertNotIn(private, blob, private)
+        self.assertIn("shop/other.py reads [outside path]", e.body["summary"], "a path inside the repo is made relative, the others are replaced")
+        self.assertIn("shop/revenue.py", e.body["why"])
 
     def test_pre_push_hook_reminds_and_never_blocks(self):
         self.run_cli("install", "--yes", "--agent", "agents-md")
@@ -2001,6 +2014,20 @@ class TestObserver(ObserverBase):
                 self.assertIn("off", self.observer.drain(self.r, self.branch)["skipped"])
             self.assertEqual(spawn.call_count, 0, "the observer's own claude run starts nothing")
 
+    def test_the_ledger_records_the_exact_model_ids_claude_used(self):
+        import unittest.mock
+        stream = json.dumps({"type": "result", "result": "ok", "total_cost_usd": 0.002, "modelUsage": {"claude-haiku-9-9": {"inputTokens": 5}}})
+
+        def fake_run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0, stream, "")
+        with unittest.mock.patch.object(subprocess, "run", fake_run):
+            text, cost, err = self.real_call_model("hello", "haiku")
+        self.assertEqual((text, err, self.worker.last_models), ("ok", "", ["claude-haiku-9-9"]))
+        led = self.worker.ledger(self.r)
+        self.worker.settle(self.r, led, cost, err)
+        self.assertEqual(self.worker.ledger(self.r)["models"], ["claude-haiku-9-9"])
+        self.assertIsNone(self.worker.last_models, "taken by settle")
+
     def test_the_model_runs_cheaply_isolated_and_with_the_guard(self):
         import unittest.mock
         seen = {}
@@ -2245,12 +2272,24 @@ class TestSavepoint(ObserverBase):
         (note,) = self.notes()
         self.assertTrue(note.obs, "it is the savepoint note that was kept")
 
+    def test_a_savepoint_note_keeps_no_path_outside_the_repository_in_its_text_fields_or_lists(self):
+        inside_abs = (self.d / "shop" / "revenue.py").as_posix()
+        o = {"id": new_id(), "type": "change", "title": f"edited {inside_abs}", "subtitle": f"{inside_abs} and C:/Users/ann/x.py", "narrative": f"Worked in {inside_abs}; scratch was C:/Users/ann/.claude/jobs/a/b.py.",
+             "facts": [f"{inside_abs} total() was read", "wrote C:/Users/ann/out.txt"], "files_read": [inside_abs, "C:/Users/ann/in.txt", "https://x.io/p"], "files_modified": ["/tmp/s.py", "shop/other.py"], "t": 0}
+        (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "1a1b0000000-00000000", "shop/revenue.py total() read")
+        blob = n.to_json()
+        for private in ("ann", "Users", "/tmp/", "x.io", self.root.name):
+            self.assertNotIn(private, blob, private)
+        self.assertEqual((n.obs["files_read"], n.obs["files_modified"], n.anchor["paths"]), (["shop/revenue.py"], ["shop/other.py"], ["shop/other.py"]))
+        self.assertEqual(n.topic, "edited shop/revenue.py")
+        self.assertEqual(n.checks["missing"], [])
+
     def test_a_file_outside_the_repository_is_not_looked_up_in_git(self):
         o = {"id": new_id(), "type": "change", "title": "scratch script", "subtitle": "", "narrative": "A script outside the repo did a thing.", "facts": ["ran the script"],
              "files_read": ["C:/Users/someone/.claude/jobs/x/tmp/transfer.py", "/tmp/other.py", "shop/revenue.py"], "files_modified": [], "t": 0}
         (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "1a1b0000000-00000000", "ran the script")
         self.assertEqual((n.checks["missing"], n.checks["paths"]), ([], [1, 1]), "only the file inside the repository was checked")
-        self.assertEqual(n.obs["files_read"][:2], ["C:/Users/someone/.claude/jobs/x/tmp/transfer.py", "/tmp/other.py"], "but the note still says what was read")
+        self.assertEqual(n.obs["files_read"], ["shop/revenue.py"], "and the note does not keep a path outside the repository")
 
     def obs_xml(self, title, mod):
         return (OBS_XML.replace("total ignores refunds", title).replace("adds every order", f"adds every order ({title})")

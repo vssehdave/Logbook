@@ -18,7 +18,7 @@ from . import capture, convo, ground, observer, running, worker
 from . import git as g
 from .entry import HEX_RE, ID_RE, MAX_LIST, Entry, new_id
 from .safety import inside as safety_inside
-from .safety import redact
+from .safety import localize, redact, repo_relative
 
 WAIT = 150  # seconds a savepoint waits for an observer pass already running (it holds the lock across its model calls) before it gives up
 AUTO_MIN = 5  # auto mode saves after a commit once this many new observations have piled up
@@ -201,10 +201,7 @@ def _commit_for(repo, o, end, prev, mod, cache):
 _inside = safety_inside  # the files git could know about: a path outside the repository (a scratch script, a file under the home folder) or a web address cannot be looked up there
 
 
-def _rel(root, f):
-    """A file as the repo spells it: forward slashes, relative to the project root when the model gave an absolute path."""
-    f = f.replace("\\", "/")
-    return f[len(root):] if f.casefold().startswith(root.casefold()) else f
+_rel = repo_relative  # a file as the repo spells it, whatever form the model gave it in
 
 
 def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
@@ -219,8 +216,8 @@ def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
     branch_a["branch"] = branch
     out = []
     for o in obs:
-        mod = [_rel(root, f) for f in o.get("files_modified", [])]
-        read = [_rel(root, f) for f in o.get("files_read", [])]
+        mod = safety_inside([_rel(root, f) for f in o.get("files_modified", [])])  # a path outside the repository is never kept: a note is about this repo
+        read = safety_inside([_rel(root, f) for f in o.get("files_read", [])])
         sha = _commit_for(repo, o, end, prev, set(mod), cache)
         about = bool(sha)
         if about and sha not in anchors:
@@ -230,14 +227,14 @@ def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
         sub = o.get("subtitle") or re.split(r"(?<=[.!?])\s", o["narrative"].strip(), maxsplit=1)[0]
         facts = [f for f in o.get("facts", []) if f]
         proof = facts + ([f"changed: {', '.join(mod[:6])}"] if mod else []) + ([f"read: {', '.join(read[:6])}"] if read else [])
-        body = {"summary": sub[:300], "why": o["narrative"][:2000]}
+        body = {"summary": localize(sub[:300], root), "why": localize(o["narrative"][:2000], root)}
         if facts or mod:  # files read alone prove nothing: the note has evidence only when something was found or changed
-            body["evidence"] = "\n".join(proof)[:2000]
+            body["evidence"] = localize("\n".join(proof)[:2000], root)
         checks = ground.check(repo, body, o["title"], _inside(mod + read), sha or None)
         if tool_text is not None:
             others = " ".join(f"{x['title']} {x['narrative']}" for x in obs if x is not o)
-            checks["unsupported"] = ground.unsupported(facts, tool_text + "\n" + others)
-        out.append(Entry(id=o["id"] if ID_RE.match(str(o.get("id", ""))) else new_id(), kind="finding", topic=o["title"][:200], body=body, anchor=a,
+            checks["unsupported"] = ground.unsupported([localize(f, root) for f in facts], tool_text + "\n" + others)  # the facts as stored: a path outside the repo cannot be looked up and must not be named here
+        out.append(Entry(id=o["id"] if ID_RE.match(str(o.get("id", ""))) else new_id(), kind="finding", topic=localize(o["title"][:200], root), body=body, anchor=a,
                          provenance="worker-written", captured_via="savepoint", v=2, level="commit" if about else "branch", sources=[log_id],
                          checks=checks,
                          created=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(o.get("t") or time.time())),

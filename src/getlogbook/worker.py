@@ -29,6 +29,7 @@ _QUOTA = re.compile(r"usage (allowance|limit)|rate.?limit|quota|exhausted|overlo
 PAUSE_AT = 95  # percent of a usage window at which background model calls stop
 WINDOWS = ("five_hour", "seven_day")
 last_rate = None  # {window: {"u": fraction used, "resets": epoch seconds}} from the most recent call_model, taken by settle()
+last_models = None  # the exact model ids Claude says the most recent call_model used (the name we pass, like "haiku", is an alias), taken by settle()
 FLAGS = ["--output-format", "stream-json", "--verbose", "--no-session-persistence", "--tools", "", "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", ""]
 
 
@@ -57,8 +58,8 @@ def parse_stream(stdout):
 
 def call_model(prompt, model=MODEL):
     """(text, cost in USD, error). The prompt goes on stdin: a command line is limited to about 32,000 characters on Windows."""
-    global last_rate
-    last_rate = None
+    global last_rate, last_models
+    last_rate = last_models = None
     env = dict(os.environ, **{GUARD: "1"})
     env.pop("CLAUDE_CODE_SESSION_ID", None)
     with tempfile.TemporaryDirectory(prefix="logbook-worker-") as d:
@@ -69,6 +70,7 @@ def call_model(prompt, model=MODEL):
             return "", 0.0, f"could not run claude: {ex}"
     j, windows = parse_stream(p.stdout)
     last_rate = windows or None
+    last_models = sorted((j or {}).get("modelUsage") or {}) or None
     if j is None:
         return "", 0.0, (p.stdout + p.stderr).strip()[:300] or f"claude exited {p.returncode}"
     if p.returncode or j.get("is_error"):
@@ -115,8 +117,11 @@ def save(repo, led):
 def settle(repo, led, cost, error, now=time.time):
     """Book one finished model call: its cost, the usage windows Claude reported, and a pause until the reset when a window is at the threshold
     or the call was refused for quota. Saves the ledger."""
-    global last_rate
+    global last_rate, last_models
     rate, last_rate = last_rate, None
+    models, last_models = last_models, None
+    if models:
+        led["models"] = sorted(set(led.get("models", [])) | set(models))  # which models did the work: the name we ask for is an alias that Claude Code resolves
     led.update(calls=led["calls"] + 1, cost=round(led["cost"] + cost, 6), last_run=int(now()), last_error=error[:300])
     if rate:
         led["rate"] = {**rate, "seen": int(now())}

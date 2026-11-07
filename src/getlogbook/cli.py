@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -242,6 +243,28 @@ def cmd_convo(a):
     return 0
 
 
+def _push(r):
+    """Push the shared ref. The git hooks that this push triggers must not start another publish (see hookmain.PUBLISHING)."""
+    from . import hookmain
+    old = os.environ.get(hookmain.PUBLISHING)
+    os.environ[hookmain.PUBLISHING] = "1"
+    try:
+        return sync.push(r)
+    finally:
+        if old is None:
+            os.environ.pop(hookmain.PUBLISHING, None)
+        else:
+            os.environ[hookmain.PUBLISHING] = old
+
+
+def _push_waiting(r, a):
+    """Publish is the step that pushes, so with nothing new to publish it still sends what an earlier `publish --no-push` (or a push that failed) left on this machine."""
+    if getattr(a, "no_push", False) or "origin" not in sync.remotes(r) or not sync.unpushed(r):
+        return
+    res = _push(r)
+    out("pushed what was already published." if res["ok"] else "not pushed: " + res.get("error", "")[:200] + " (publish again once the remote is reachable)")
+
+
 def cmd_publish(a):
     r = need_repo()
     if r.publish_mode() == "never":
@@ -275,6 +298,7 @@ def cmd_publish(a):
     ids = [e.id if hasattr(e, "id") else e for e in ids]
     if not ids:
         out("nothing to publish.")
+        _push_waiting(r, a)
         return 0
     for eid in ids:
         e = r.get_private(eid)
@@ -297,6 +321,7 @@ def cmd_publish(a):
         ready.append((c, digest_hash(text)))
     if not ready:
         out("nothing new to publish.")
+        _push_waiting(r, a)
         return 0
     remote = "origin" in sync.remotes(r)
     if remote:  # tidy -> sync -> move -> push: bring in what teammates shared before writing
@@ -324,7 +349,7 @@ def cmd_publish(a):
     out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref}"
         f"{'' if keep else ' (the private copy was removed, --keep leaves it)'}.")
     if remote and not a.no_push:
-        res = sync.push(r)
+        res = _push(r)
         out("pushed." if res["ok"] else "not pushed: " + res.get("error", "")[:200] + " (publish again once the remote is reachable)")
     elif not remote:
         out("no remote named origin: the entries stay on this machine until you add one.")
@@ -704,7 +729,7 @@ def cmd_queue(a):
         if waiting:
             said.append(f"{len(waiting)} private note(s) are not shared with your team yet (`logbook publish` shows what would be shared and asks first).")
         if "origin" in sync.remotes(r) and sync.unpushed(r):
-            said.append("your published notes are not pushed yet (`logbook sync` pushes them).")
+            said.append("your published notes are not pushed yet (`logbook publish` pushes them).")
         if said:
             print("logbook: " + " ".join(said), file=sys.stderr)
         return 0

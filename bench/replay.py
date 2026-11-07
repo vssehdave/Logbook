@@ -155,6 +155,8 @@ def main(argv=None):
     ap.add_argument("--only", default="", help="comma-separated session id prefixes")
     ap.add_argument("--mode", default="auto", choices=["manual", "ask", "auto"])
     ap.add_argument("--resume", action="store_true", help="carry on from <work>/checkpoint.json in the clone already there")
+    ap.add_argument("--model", default="", help="the model for every background call: a full model id pins it (the default, the alias `haiku`, is resolved by Claude Code)")
+    ap.add_argument("--no-preflight", action="store_true", help="skip the one tiny model call that checks the model works and the allowance is not spent")
     a = ap.parse_args(argv)
     a.source, a.sessions, a.work = a.source.resolve(), a.sessions.resolve(), a.work.resolve()
     a.work.mkdir(parents=True, exist_ok=True)
@@ -176,6 +178,16 @@ def main(argv=None):
         events = events[:a.limit]
     print(f"{len(events)} hook calls from {len({e[3]['session_id'] for e in events})} sessions", file=sys.stderr)
 
+    if a.model:
+        os.environ["LOGBOOK_WORKER_MODEL"] = a.model
+    code = {"commit": sh("git", "rev-parse", "HEAD", cwd=Path(__file__).resolve().parent.parent, check=False),
+            "uncommitted_changes": bool(sh("git", "status", "--porcelain", "--untracked-files=no", cwd=Path(__file__).resolve().parent.parent, check=False))}
+    print(f"logbook code: {code['commit'][:10]}{' (with uncommitted changes)' if code['uncommitted_changes'] else ''}", file=sys.stderr)
+    if not a.fake and not a.no_preflight:  # one tiny call, so a wrong model or a spent allowance fails now and not after an hour
+        text, cost, err = worker.call_model("Reply with only the word ok.", os.environ.get("LOGBOOK_WORKER_MODEL", worker.MODEL))
+        print(f"preflight: model {worker.last_models or 'not reported'}, {cost:.4f} USD" + (f", FAILED: {err[:200]}" if err else ""), file=sys.stderr)
+        if err:
+            raise SystemExit("the model could not be called, so nothing was started: " + err[:200])
     clone = Clone(a.source, a.work, email, existing=a.resume)
     os.chdir(clone.path)
     repo = Repo(clone.path)
@@ -242,7 +254,8 @@ def main(argv=None):
     shared = repo.load_shared()[0]
     led = worker.ledger(repo)
     report = {"completed": not paused, "next_hook_call": done if not paused else i, "of": len(events),
-              "paused": {"reason": paused[0], "until": int(paused[1])} if paused else None, "hook_calls": done, "seconds": int(time.time() - t0), "background_steps": len(spawned), "errors": errors[:20],
+              "paused": {"reason": paused[0], "until": int(paused[1])} if paused else None, "code": code,
+              "models": led.get("models"), "model_asked_for": os.environ.get("LOGBOOK_WORKER_MODEL", worker.MODEL), "hook_calls": done, "seconds": int(time.time() - t0), "background_steps": len(spawned), "errors": errors[:20],
               "private": {k: sum(1 for e in entries if e.kind == k) for k in ("log", "finding", "change", "summary")},
               "shared": {k: sum(1 for l in shared if l.entry.kind == k) for k in ("finding", "change", "summary", "log")}, "archived": len(list((repo.cdir / "archive").glob("*.json"))), "queue": len(repo.queued()),
               "model_calls": led["calls"], "cost_usd": round(led["cost"], 4), "branches": sorted({e.anchor.get("branch", "") for e in entries}),

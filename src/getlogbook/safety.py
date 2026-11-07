@@ -46,13 +46,31 @@ def redact(text, deny=()):
     return text, found
 
 
-_HOME = re.compile(r"(?:[A-Za-z]:[\\/]+Users[\\/]+|/Users/|/home/)[^\\/\s\"'`]+")
+_ABS = re.compile(r"(?<![\w./:-])(?:[A-Za-z]:[\\/]+|~[\\/]|/(?:Users|home|tmp|var|etc|opt|usr|mnt|private|srv|root|Volumes)/)[^\s\"'`)\]>,;]*")
 _OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./|[A-Za-z][A-Za-z0-9+.-]*://)")  # a drive, a root, the home folder, outside the folder, or a web address
+OUTSIDE = "[outside path]"
 
 
 def scrub_paths(text):
-    """Replace the person's home folder in a path with `~` (`C:/Users/ann/work/x.py` becomes `~/work/x.py`), so a shared note does not carry a user name."""
-    return _HOME.sub("~", text) if isinstance(text, str) else text
+    """Replace every absolute path in a text (a drive, the home folder, /tmp and the other system roots) with `[outside path]`: a note must not carry a user name or a place
+    on a disk that means nothing to a teammate. Paths inside the repository are made relative first (see `localize`), so they survive."""
+    return _ABS.sub(OUTSIDE, text) if isinstance(text, str) else text
+
+
+def repo_relative(root, f):
+    """A file as the repo spells it: forward slashes, relative to the project root (a string ending in a slash) when it was given as an absolute path inside it."""
+    f = f.replace("\\", "/")
+    return f[len(root):] if f.casefold().startswith(root.casefold()) else f
+
+
+def localize(text, root):
+    """A text with the repository's own folder taken off every path in it (`C:/Users/ann/proj/src/a.py` becomes `src/a.py`), then every other absolute path scrubbed."""
+    if not isinstance(text, str):
+        return text
+    parts = [re.escape(p) for p in re.split(r"[\\/]+", str(root).replace("\\", "/").strip("/")) if p]
+    if parts:
+        text = re.sub(r"(?<![\w.])/?" + r"[\\/]+".join(parts) + r"[\\/]+", "", text, flags=re.I)
+    return scrub_paths(text)
 
 
 def inside(files):

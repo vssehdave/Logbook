@@ -17,6 +17,7 @@ from pathlib import Path
 
 from . import git as g
 from .entry import BODY_FIELDS, LEVELS, Entry, from_json, new_id
+from .safety import inside, localize, repo_relative
 from .store import Repo, atomic_write
 
 MARK_BEGIN, MARK_END = "# >>> logbook >>>", "# <<< logbook <<<"
@@ -40,8 +41,11 @@ def writer():
 
 def make_entry(repo, kind, topic, body, paths=None, provenance=None, via="cli", supersedes=(), sha=None, level="", sources=(), checks=None, status=None):
     from . import tree
-    body = {k: str(v)[:2000] for k, v in body.items() if k in BODY_FIELDS and v}
-    e = Entry(id=new_id(), kind=kind, topic=topic[:200], body=body, provenance=provenance or writer(), captured_via=via,
+    root = repo.root.resolve().as_posix().rstrip("/") + "/"
+    body = {k: localize(str(v)[:2000], root) for k, v in body.items() if k in BODY_FIELDS and v}  # no path outside the repository goes into a note, private or shared
+    if paths is not None:
+        paths = inside([repo_relative(root, p) for p in paths if p])
+    e = Entry(id=new_id(), kind=kind, topic=localize(topic[:200], root), body=body, provenance=provenance or writer(), captured_via=via,
               supersedes=list(supersedes), created=now(), level=level if level in LEVELS else "", sources=list(sources), v=2, checks=checks, status=status,
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
     e.anchor = tree.anchor_for(repo, sha=sha, paths=paths, with_base=True)  # sha: note about an earlier commit
