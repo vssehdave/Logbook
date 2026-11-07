@@ -197,11 +197,11 @@ def _commit_for(repo, o, end, prev, mod, cache):
     return ""
 
 
-_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./)")
+_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./|[A-Za-z][A-Za-z0-9+.-]*://)")  # a drive, a root, the home folder, outside the folder, or a URL
 
 
 def _inside(files):
-    """The files git could know about: a path outside the repository (a scratch script, a file under the home folder) cannot be looked up there."""
+    """The files git could know about: a path outside the repository (a scratch script, a file under the home folder) or a web address cannot be looked up there."""
     return [f for f in files if not _OUTSIDE.match(f)]
 
 
