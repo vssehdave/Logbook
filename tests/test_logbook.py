@@ -1585,6 +1585,16 @@ class TestTidyWorker(CliRepo):
             self.tidy.work(self.r)
         self.assertEqual(seen, ["sonnet"])
 
+    def test_notes_made_in_the_same_second_are_judged_newest_first(self):
+        a = capture.make_entry(self.r, "finding", "older", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"])
+        b = capture.make_entry(self.r, "finding", "newer", {"summary": "t", "why": "x"}, paths=["shop/revenue.py"])
+        for e in (a, b):
+            e.created = "2026-11-07T10:00:00"  # one second, as on a fast machine
+            self.r.add_private(e)
+        commit(self.d, "rework", {"shop/revenue.py": "x = 2\n"})
+        got = [c["id"] for c in self.tidy.candidates(self.r, tree.all_views(self.r)[0]) if c["commits"] and c["id"] in (a.id, b.id)]
+        self.assertEqual(got, [b.id, a.id])
+
     def test_a_log_is_never_junk(self):
         old = capture.make_entry(self.r, "log", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
         old.created = "2020-01-01T00:00:00"
