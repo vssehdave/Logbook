@@ -147,7 +147,7 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
         later = len(every) > len(obs)  # observations left for the next savepoint: their tool uses must stay in its evidence text
         running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qstart if later else qend, "toff": toff}))
     # a new log is a moment to tidy, in every mode: judge changed notes, archive junk, keep the publish queue, in the background
-    capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet"], repo.root)
+    capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet", "--no-judge"], repo.root)
     return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "notes": len(covered), "messages": len(talk), "title": e.topic, "by": how}
 
 
@@ -197,6 +197,14 @@ def _commit_for(repo, o, end, prev, mod, cache):
     return ""
 
 
+_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./)")
+
+
+def _inside(files):
+    """The files git could know about: a path outside the repository (a scratch script, a file under the home folder) cannot be looked up there."""
+    return [f for f in files if not _OUTSIDE.match(f)]
+
+
 def _rel(root, f):
     """A file as the repo spells it: forward slashes, relative to the project root when the model gave an absolute path."""
     f = f.replace("\\", "/")
@@ -229,7 +237,7 @@ def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
         body = {"summary": sub[:300], "why": o["narrative"][:2000]}
         if facts or mod:  # files read alone prove nothing: the note has evidence only when something was found or changed
             body["evidence"] = "\n".join(proof)[:2000]
-        checks = ground.check(repo, body, o["title"], mod + read, sha or None)
+        checks = ground.check(repo, body, o["title"], _inside(mod + read), sha or None)
         if tool_text is not None:
             others = " ".join(f"{x['title']} {x['narrative']}" for x in obs if x is not o)
             checks["unsupported"] = ground.unsupported(facts, tool_text + "\n" + others)

@@ -169,6 +169,8 @@ Python accepts a verdict only about one of your own private, unpublished entries
 In `manual` the verdicts wait in `logbook tidy --proposals` and `--accept` archives them; in `auto` they are archived by the worker. Entries move to
 `.git/logbook/archive/` with the reason in `reasons.jsonl`; nothing is deleted, and `logbook tidy --restore <id>` puts one back.
 
+**When the junk judgment runs.** Between publishes tidy makes no junk-judging model call: a savepoint or a pull starts `tidy --work --no-judge`, which still archives exact repeats, applies statuses to changed notes, keeps the queue and clears old drafts. The judgment itself (the cheap model reading what the code worked out about each entry) runs in the tidy that always precedes a publish, or when you run `logbook tidy --work` yourself.
+
 **Before a publish.** In `ask` and `auto` mode `logbook publish` runs tidy first, whatever the way it was asked (an id, `--branch`, `--merged`, `--all`): it fetches what teammates
 shared, archives the junk and the repeats and updates statuses, and only then publishes what is left. If tidy could not look (the usage allowance is
 paused, the day's call cap is reached, the model call failed) nothing is published and it says why; `--no-tidy` publishes unchecked anyway. `ask` and `manual` do not

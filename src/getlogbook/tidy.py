@@ -174,6 +174,8 @@ def garbage(repo, views, days=None):
     for v in views:
         if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "log":
             continue  # a saved log is the person's record of a session: it is kept, never dropped as junk
+        if v.get("obs"):
+            continue  # a note made at a savepoint records what was learned or built: a file renamed or deleted later does not make it junk, and age alone does not either (statuses handle staleness)
         files = tracked(repo, v)[:MAX_FILES]
         if v.get("status") == "resolved":
             reason = "resolved"
@@ -335,7 +337,7 @@ TRIAGE_MAX = 25  # entries shown to the model in one call
 TRIAGE_ARCHIVE_MAX = 10  # entries one pass may archive: a model that calls everything junk must not empty the log
 TRIAGE_KEYS = ("entry", "verdict", "redundant_of", "reason")
 TRIAGE_SYSTEM = """You keep a person's private log of coding sessions clean. You cannot use tools. Below are entries from the log, each with facts worked out by code. Decide, only from what is shown, which entries are not worth keeping or sharing:
-- junk: a test, probe, benchmark or throwaway session; a session that left nothing a later reader could use (a greeting, a one-word reply, a failed start, an attempt that found nothing); work that was abandoned (its branch is gone and was never merged, or its files are gone).
+- junk: a test, probe, benchmark or throwaway session; a session that left nothing a later reader could use (a greeting, a one-word reply, a failed start, an attempt that found nothing); work that was abandoned (its branch is gone and was never merged). A file that was renamed or deleted later does not make a note about it junk: what was learned or built there is still history.
 - redundant: says the same thing as another entry; name the entry to keep in redundant_of (keep the better one).
 Do not call an entry junk because it is short or because you cannot tell: when in doubt, leave it out. An entry that records a decision, a cause, a gotcha, or what was built or fixed is worth keeping even when small. Answer with blocks separated by a line of ---, each exactly:
 
@@ -419,11 +421,12 @@ def _do_archive(repo, items):
     return ids if moved else []
 
 
-def triage(repo, call=None, now=time.time, apply=None):
+def triage(repo, call=None, now=time.time, apply=None, judge=True):
     """Find the junk and the repeats in my private log. Exact repeats need no model. For the rest a cheap model judges what the code worked out about each entry
     (age, branch gone or merged, files still there), and Python accepts only a verdict about one of my own private, unpublished entries, with a reason, naming a
     real other entry for a repeat. With `apply` (tidy auto, and always before an automatic publish) the entries move to .git/logbook/archive/; otherwise the
-    proposals wait for the person (`tidy --proposals`, `--accept`). Nothing is deleted. Never raises for a model problem; shares the observer's budget and pause."""
+    proposals wait for the person (`tidy --proposals`, `--accept`). Nothing is deleted. Never raises for a model problem; shares the observer's budget and pause.
+    With `judge` off nothing is sent to the model (exact repeats are still archived): the junk judgment is the costly part, so it waits for a publish."""
     from . import tree
     cfg = repo.cfg()
     apply = (mode(cfg) == "auto") if apply is None else apply
@@ -433,7 +436,9 @@ def triage(repo, call=None, now=time.time, apply=None):
     res = {"archived": [], "proposed": 0, "rejected": 0}
     st = _state(repo)
     items = [{"entry": i, "verdict": "redundant", "redundant_of": k, "reason": "says exactly the same as an older entry"} for i, k in duplicates(pool)][:TRIAGE_ARCHIVE_MAX]
-    if not worker.enabled(repo):
+    if not judge:
+        res["skipped"] = "junk is judged before a publish"
+    elif not worker.enabled(repo):
         res["skipped"] = "the observer is off"
     else:
         call = call or (lambda p: worker.call_model(p, cfg.get("tidy_model", TIDY_MODEL)))
@@ -549,10 +554,10 @@ def queue_pass(repo):
     return {"queued": added, "removed": gone}
 
 
-def run(repo, call=None, now=time.time):
+def run(repo, call=None, now=time.time, judge=True):
     """The tidy worker's pass in manual mode: statuses for changed notes and triage, both kept as proposals for the person."""
     res = work(repo, call, now)
-    res["triage"] = triage(repo, call, now, apply=False)
+    res["triage"] = triage(repo, call, now, apply=False, judge=judge)
     res["queue"] = queue_pass(repo)
     return res
 
@@ -575,11 +580,12 @@ def gate(repo, call=None, now=time.time):
     return res
 
 
-def auto(repo, call=None, now=time.time):
-    """Everything the automatic mode does in one pass: judge changed notes, archive junk and repeats, archive old machine-made drafts."""
+def auto(repo, call=None, now=time.time, judge=True):
+    """Everything the automatic mode does in one pass: judge changed notes, archive junk and repeats, archive old machine-made drafts. With `judge` off the junk
+    judgment (a model call) is left for the next publish, which always does it; repeats are archived either way."""
     from . import tree
     res = work(repo, call, now)
-    res["triage"] = triage(repo, call, now, apply=True)
+    res["triage"] = triage(repo, call, now, apply=True, judge=judge)
     res["archived"] = archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
     res["queue"] = queue_pass(repo)
     return res
