@@ -24,9 +24,8 @@ OBS_TYPES = ("bugfix", "feature", "refactor", "change", "discovery", "decision")
 CONCEPTS = ("how-it-works", "why-it-exists", "what-changed", "problem-solution", "gotcha", "pattern", "trade-off")
 BATCH_EVENTS = 12  # tool uses per model call
 BATCH_CHARS = 24000  # characters of tool input and output per call
-MIN_BATCH = 4  # a pass that is not a flush waits until this many tool uses are queued
+MIN_BATCH = 12  # a pass that is not a flush waits until this many tool uses are queued (or about two thirds of a batch's characters): each call re-sends the same instructions
 MAX_PASS_CALLS = 3  # calls in one background pass; the rest waits for the next
-TRIGGER_BYTES = 9000  # queued bytes after which a tool use starts a pass
 WINDOW = 8  # earlier observations shown to the model
 
 SYSTEM = """You are the quiet note-taker for a coding session on the git branch `{branch}`. You are not doing the work and you cannot use tools. You read what the session did and write down what is worth remembering for later sessions on this repo.
@@ -63,7 +62,7 @@ def on_tool_use(repo, payload):
     if ev is None:
         return
     run = running.Running(repo, branch)
-    if run.push(ev) and run.pending_bytes() >= TRIGGER_BYTES:
+    if run.push(ev) and (run.pending_events() >= MIN_BATCH or run.pending_bytes() >= BATCH_CHARS * 2 // 3):
         spawn_pass(repo, branch)
 
 
@@ -142,7 +141,8 @@ def _drain(repo, branch, flush, call, now, wait=0.2):
                 why = "today's call cap is reached"
                 break
             events, new_off = run.take(batch, BATCH_CHARS)
-            if not events or (len(events) < MIN_BATCH and not flush):
+            full = len(events) >= MIN_BATCH or sum(len(e.get("input", "")) + len(e.get("output", "")) for e in events) >= BATCH_CHARS * 2 // 3
+            if not events or (not full and not flush):
                 break
             window = [o for o in run.observations()][-WINDOW:]
             sent, _ = redact(build_prompt(branch, window, events), cfg.get("deny", []))
@@ -161,7 +161,8 @@ def _drain(repo, branch, flush, call, now, wait=0.2):
                     continue
                 seen.add(h)
                 last = events[-1]
-                fresh.append({"id": new_id(), "branch": branch, "head": last.get("head", ""), "session": last.get("session", ""), "prompt": last.get("prompt", ""),
+                heads = list(dict.fromkeys(e.get("head", "") for e in events if e.get("head")))[:4]  # the commits HEAD was at while these tool uses ran, in order
+                fresh.append({"id": new_id(), "branch": branch, "head": last.get("head", ""), "heads": heads, "session": last.get("session", ""), "prompt": last.get("prompt", ""),
                               "t": last["t"], "hash": h, **o})
             run.add(fresh)
             run.advance(new_off)
