@@ -1058,6 +1058,11 @@ class TestPublishModes(CliRepo):
 class TestGrounding(CliRepo):
     """What can be checked about a note is checked; what cannot is not passed off as checked."""
 
+    def test_facts_are_matched_to_the_output_across_slashes_line_numbers_and_dotted_names(self):
+        tool = r"Read C:\Users\v\proj\docs\DESIGN.md  File \"C:\Python313\Lib\subprocess.py\", line 1599, in _readerthread  src/getlogbook/viewer.html"
+        facts = ["docs/DESIGN.md says X", "subprocess._readerthread failed", "src/getlogbook/viewer.html:12 has a placeholder", "retry_backoff() is new", "cli.py:112 calls replace"]
+        self.assertEqual(ground.unsupported(facts, tool), ["retry_backoff", "cli.py"])
+
     def test_a_source_id_that_is_not_a_note_id_is_rejected(self):
         with self.assertRaises(SystemExit):
             self.run_cli("note", "--json", stdin=json.dumps({"summary": "s", "sources": ["../x"]}))
@@ -2163,6 +2168,24 @@ class TestSavepoint(ObserverBase):
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 self.save()
             self.assertEqual(spawn.call_args.args[0][-3:], ["tidy", "--work", "--quiet"], mode)
+
+    def test_a_note_about_a_file_that_was_later_deleted_is_history_and_tidy_does_not_garbage_it(self):
+        self.observe()
+        self.save()
+        draft = capture.make_entry(self.r, "finding", "an old per-turn draft", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"], provenance="worker-written")
+        sh("git", "rm", "-q", "shop/revenue.py", cwd=self.d)
+        commit(self.d, "remove revenue", {})
+        listed = {c["id"]: c["reason"] for c in tidy.garbage(self.r, tree.all_views(self.r)[0])}
+        self.assertEqual(listed, {draft.id: "every file it is about is gone"}, "a draft with no obs record still goes; the savepoint note stays")
+        (note,) = self.notes()
+        self.assertTrue(note.obs, "it is the savepoint note that was kept")
+
+    def test_a_file_outside_the_repository_is_not_looked_up_in_git(self):
+        o = {"id": new_id(), "type": "change", "title": "scratch script", "subtitle": "", "narrative": "A script outside the repo did a thing.", "facts": ["ran the script"],
+             "files_read": ["C:/Users/someone/.claude/jobs/x/tmp/transfer.py", "/tmp/other.py", "shop/revenue.py"], "files_modified": [], "t": 0}
+        (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "1a1b0000000-00000000", "ran the script")
+        self.assertEqual((n.checks["missing"], n.checks["paths"]), ([], [1, 1]), "only the file inside the repository was checked")
+        self.assertEqual(n.obs["files_read"][:2], ["C:/Users/someone/.claude/jobs/x/tmp/transfer.py", "/tmp/other.py"], "but the note still says what was read")
 
     def test_tidy_leaves_logs_alone(self):
         from getlogbook import tidy

@@ -69,14 +69,26 @@ def unsupported(facts, corpus):
     """The identifier-like words in these facts that appear nowhere in the corpus (the tool output the facts were drawn from): file paths, dotted and snake_case names,
     CamelCase, `name()` calls and numbers of three digits or more. Plain prose cannot be looked up, so it is not checked; a name the output never showed is a sign
     the model supplied it from somewhere else. Returns up to eight."""
-    low, out = corpus.lower(), []
+    low, out = corpus.lower().replace("\\", "/"), []  # Windows paths in the output spell the same file with backslashes
     for fact in facts:
         for t in _TOKEN.findall(fact):
-            t = t.rstrip(".:/")
+            t = re.sub(r":\d+(?::\d+)?$", "", t.rstrip(".:/"))  # file.py:42 names file.py
             bare = t[:-2] if t.endswith("()") else t
-            if len(bare) >= 3 and bare.lower() not in low and bare not in out:
+            if len(bare) >= 3 and not _seen(bare, low) and bare not in out:
                 out.append(bare)
     return out[:8]
+
+
+def _seen(token, low):
+    """Whether the output shows the token: whole, or (a path) by its file name, or (a dotted name) by its last part when that is not an extension."""
+    t = token.lower()
+    if t in low:
+        return True
+    base = t.rsplit("/", 1)[-1]
+    if base in low:
+        return True
+    last = base.rsplit(".", 1)[-1]
+    return "/" not in t and "." in base and last not in _EXTS and len(last) >= 4 and last in low
 
 
 NO_EVIDENCE = "no evidence: add an `evidence:` line with what you ran or read (a command and its result, or file:line); naming a file is not enough"
