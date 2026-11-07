@@ -15,7 +15,7 @@ from .entry import BODY_FIELDS
 _TICKS = re.compile(r"`([^`\n]{2,80})`")
 _FILE = re.compile(r"^[\w./\\-]+\.[A-Za-z0-9]{1,6}$")
 _IDENT = re.compile(r"^[A-Za-z_][\w.:]*(?:\(\))?$")
-_SHA = re.compile(r"\b[0-9a-f]{7,40}\b")
+_SHA = re.compile(r"(?<![\w/\\.-])[0-9a-f]{7,40}(?![\w/\\-]|\.\w)")  # not inside a path, a URL or a longer word: a folder named like a hash is not a commit; a full stop after it is just a sentence ending
 _EXTS = frozenset("py js ts tsx jsx sql md json yml yaml toml txt sh go rs java rb c h cpp css html ini cfg lock".split())
 _PLAIN = frozenset("true false none null self cls args kwargs str int bool dict list set tuple".split())
 MAX_IDENT = 12  # names looked up per note: each is one `git grep`
@@ -39,17 +39,19 @@ def _refs(texts):
 
 
 def check(repo, body, topic, paths, sha=None):
-    """Look up what the note names, in the commit it is about (or HEAD). Returns the record that is saved with the note:
+    """Look up what the note names, in the commit it is about, or, for a note about no commit, in the working tree: a file the session just wrote and has not
+    committed yet exists, and so does a function in it. Returns the record that is saved with the note:
     {paths: [found, total], names: [found, total], commits: [found, total], files: [the files that exist], missing: [what was not found],
      evidence: bool (an evidence field was given), at: HEAD when checked}."""
     ref = sha or "HEAD"
     named_files, idents, shas = _refs([topic] + [body.get(k, "") for k in TEXT_FIELDS])
     files = list(dict.fromkeys([p.replace("\\", "/") for p in (paths or []) if p] + named_files))
-    found_f = [f for f in files if g.try_run(["cat-file", "-e", f"{ref}:{f}"], repo.root)[0] == 0]
+    live = sha is None  # no commit: what the person has in front of them is the working tree, committed or not
+    found_f = [f for f in files if (live and (repo.root / f).exists()) or g.try_run(["cat-file", "-e", f"{ref}:{f}"], repo.root)[0] == 0]
     miss_f = [f for f in files if f not in found_f]
     found_n, miss_n, looked = 0, [], 0
     for name in idents[:MAX_IDENT]:
-        rc = g.try_run(["grep", "-q", "-F", "-e", name, ref, "--"], repo.root)[0]  # 0 found, 1 not found, else git could not say
+        rc = g.try_run(["grep", "-q", "--untracked", "-F", "-e", name, "--"] if live else ["grep", "-q", "-F", "-e", name, ref, "--"], repo.root)[0]  # 0 found, 1 not found, else git could not say
         if rc in (0, 1):
             looked += 1
             found_n += rc == 0

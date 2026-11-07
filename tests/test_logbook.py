@@ -1058,6 +1058,20 @@ class TestPublishModes(CliRepo):
 class TestGrounding(CliRepo):
     """What can be checked about a note is checked; what cannot is not passed off as checked."""
 
+    def test_work_not_committed_yet_is_found_in_the_working_tree_but_not_in_a_commit(self):
+        (self.d / "shop" / "fresh.py").write_text("def fresh_helper():\n    return 1\n", encoding="utf-8")  # written this session, never committed
+        body = {"summary": "`fresh_helper` in `shop/fresh.py` returns 1", "why": "w", "evidence": "read it"}
+        live = ground.check(self.r, body, "t", ["shop/fresh.py"])
+        self.assertEqual((live["missing"], live["paths"], live["names"]), ([], [1, 1], [1, 1]))
+        head = ground.check(self.r, body, "t", ["shop/fresh.py"], sha=g.head_sha(self.d))
+        self.assertEqual(sorted(head["missing"]), ["fresh_helper", "shop/fresh.py"], "a note about a commit is checked in that commit")
+
+    def test_a_web_address_a_folder_named_like_a_hash_and_a_file_outside_the_repo_are_not_looked_up(self):
+        from getlogbook import savepoint
+        self.assertEqual(savepoint._inside(["https://github.com/x/y", "C:/a/b.py", "/tmp/c.py", "shop/revenue.py"]), ["shop/revenue.py"])
+        self.assertEqual(ground._refs([r"changed: C:/Users/v/.claude/jobs/37a530a1/tmp/transfer.py and https://x.io/a1b2c3d4/y"])[2], [])
+        self.assertEqual(ground._refs(["fixed in 3a9f21c8 and again by 3a9f21c8d"])[2], ["3a9f21c8", "3a9f21c8d"], "a real commit id still counts")
+
     def test_facts_are_matched_to_the_output_across_slashes_line_numbers_and_dotted_names(self):
         tool = r"Read C:\Users\v\proj\docs\DESIGN.md  File \"C:\Python313\Lib\subprocess.py\", line 1599, in _readerthread  src/getlogbook/viewer.html"
         facts = ["docs/DESIGN.md says X", "subprocess._readerthread failed", "src/getlogbook/viewer.html:12 has a placeholder", "retry_backoff() is new", "cli.py:112 calls replace"]
