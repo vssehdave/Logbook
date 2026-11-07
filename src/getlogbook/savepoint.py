@@ -142,7 +142,7 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
             run.rewrite(keep)
         running.atomic_write(_state_path(run), json.dumps({"id": e.id, "head": head, "t": int(now()), "qoff": qend, "toff": toff}))
     # a new log is a moment to tidy, in every mode: judge changed notes, archive junk, keep the publish queue, in the background
-    capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet"], repo.root)
+    capture.spawn_detached([repo.cfg().get("interpreter") or sys.executable, "-m", "getlogbook", "tidy", "--work", "--quiet", "--no-judge"], repo.root)
     return {"saved": e.id, "branch": branch, "commit": sha, "observations": len(covered), "notes": len(covered), "messages": len(talk), "title": e.topic, "by": how}
 
 

@@ -1560,11 +1560,25 @@ class TestTidyWorker(CliRepo):
     def test_the_pull_hook_starts_the_tidy_pass_in_ask_and_auto_mode_only(self):
         import unittest.mock
         from getlogbook import hookmain
-        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("ask", ["tidy", "--work", "--quiet"]), ("auto", ["tidy", "--work", "--quiet"])):
+        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("ask", ["tidy", "--work", "--quiet", "--no-judge"]), ("auto", ["tidy", "--work", "--quiet", "--no-judge"])):
             self.run_cli("config", "publish", mode)
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 hookmain.run(["post-merge"])
             self.assertEqual(spawn.call_args.args[0][-len(expect):], expect, mode)
+
+    def test_after_a_savepoint_tidy_spends_no_model_call_on_junk_and_a_publish_still_does(self):
+        import unittest.mock
+        probe = capture.make_entry(self.r, "finding", "Reply with only the word ok", {"what": "answered ok", "summary": "a one word reply"}, paths=["shop/revenue.py"], provenance="worker-written")
+        repeat = [capture.make_entry(self.r, "finding", "a repeated finding", {"summary": "the same finding said twice over", "why": "w"}, provenance="worker-written") for _ in range(2)]
+        seen = []
+        with unittest.mock.patch.object(self.worker, "call_model", lambda p, model="haiku": (seen.append(p) or "NONE", 0.0, "")):
+            res = self.tidy.auto(self.r, judge=False)
+            self.assertFalse([x for x in seen if "ENTRIES (newest first)" in x], "no junk judgment between publishes (the status check on changed notes is a different call)")
+            self.assertEqual(res["triage"]["skipped"], "junk is judged before a publish")
+            self.assertEqual(len(res["triage"]["archived"]), 1, "an exact repeat needs no model, so it is archived at once")
+            self.tidy.gate(self.r)
+            self.assertTrue(any("ENTRIES (newest first)" in p for p in seen), "the gate before a publish does the judging")
+        self.assertIn(probe.id, {e.id for e in self.r.load_private()})
 
     def test_the_commands_that_change_things_or_spend_the_allowance_ask(self):
         from getlogbook import permissions
@@ -2181,7 +2195,7 @@ class TestSavepoint(ObserverBase):
             self.observe(title=f"in {mode}")
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 self.save()
-            self.assertEqual(spawn.call_args.args[0][-3:], ["tidy", "--work", "--quiet"], mode)
+            self.assertEqual(spawn.call_args.args[0][-4:], ["tidy", "--work", "--quiet", "--no-judge"], mode)
 
     def test_a_note_about_a_file_that_was_later_deleted_is_history_and_tidy_does_not_garbage_it(self):
         self.observe()
@@ -2475,7 +2489,7 @@ class TestPublishByBranch(CliRepo):
             self.assertIn("getlogbook post-merge", (hooks / name).read_text(encoding="utf-8"), name)
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             self.assertEqual(hookmain.run(["post-merge"]), 0)
-        self.assertEqual(spawn.call_args.args[0][-2:], ["--work", "--quiet"], "in ask mode the tidy pass fetches first, then judges what the pull changed")
+        self.assertEqual(spawn.call_args.args[0][-3:], ["--work", "--quiet", "--no-judge"], "in ask mode the tidy pass fetches first, then judges what the pull changed")
         self.run_cli("config", "publish", "manual")
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             hookmain.run(["post-merge"])
@@ -2907,14 +2921,15 @@ class TestNewsAndTriggers(CliRepo):
         sh("git", "checkout", "-q", main, cwd=self.d)
         sh("git", "merge", "-q", "--no-ff", "-m", "Merge branch 'feat/m'", "feat/m", cwd=self.d)
         self.run_cli("config", "publish", "ask")
-        self.assertEqual(self.hook("post-merge")[-2:], ["--work", "--quiet"], "ask: tidy only; the agent is told at session start")
+        self.assertEqual(self.hook("post-merge")[-3:], ["--work", "--quiet", "--no-judge"], "ask: tidy only; the agent is told at session start")
         self.run_cli("config", "publish", "auto")
         import unittest.mock
         from getlogbook import hookmain
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             hookmain.run(["post-merge"])
         self.addCleanup(os.environ.pop, "LOGBOOK_PUBLISHING", None)
-        self.assertEqual([c.args[0][-3:] for c in spawn.call_args_list], [["tidy", "--work", "--quiet"], ["publish", "--merged", "--yes"]])
+        self.assertEqual([c.args[0][-4:] if c.args[0][-1] == "--no-judge" else c.args[0][-3:] for c in spawn.call_args_list],
+                         [["tidy", "--work", "--quiet", "--no-judge"], ["publish", "--merged", "--yes"]])
         self.assertIn(e.id, {x.id for x in self.r.unpublished()})
 
 
