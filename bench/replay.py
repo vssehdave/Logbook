@@ -1,6 +1,7 @@
 """Replay recorded Claude Code sessions through Logbook's real hooks, to see which logs and notes they would have produced.
 
     python bench/replay.py --source <repo> --sessions <folder of session .jsonl files> --work <empty scratch folder> [--fake] [--limit N] [--only id,id]
+    python bench/replay.py --source <repo> --sessions <folder> --work <the same folder> --resume     # carry on after a pause
 
 What it does, in a clone of <repo> so the real repository and its branches are never touched:
   * the clone's remote is a local bare repository, so nothing can be pushed anywhere;
@@ -11,6 +12,9 @@ What it does, in a clone of <repo> so the real repository and its branches are n
   * detached processes (the observer pass, savepoint, tidy, publish) run at once in this process, like tests/test_day.py;
   * the model is the real `claude` unless --fake (a stub that answers one observation per batch, to check the plumbing).
 It writes <work>/report.json and prints a summary. Dates in the result are replay time, not the recorded time.
+
+It stops at the first pause of the model (the usage guard: five-hour or seven-day usage at 95%), saves a checkpoint and says how far it got, because everything after a
+pause would only queue tool uses that nobody reads. `--resume` carries on from the checkpoint, in the same clone, once the pause is over.
 """
 from __future__ import annotations
 
@@ -94,16 +98,18 @@ def session_events(path):
 
 # ---- the clone and its branches -------------------------------------------------------------------------------------------------
 class Clone:
-    def __init__(self, source, work, email):
+    def __init__(self, source, work, email, existing=False):
         self.path = work / "clone"
+        self.lines = {}  # branch -> [(commit time, sha, subject)] oldest first
+        self.at = {}  # branch -> sha it is checked out at
+        if existing:
+            return
         sh("git", "clone", "-q", "--no-hardlinks", str(source), str(self.path), cwd=work)
         sh("git", "config", "user.email", email, cwd=self.path)
         sh("git", "config", "user.name", sh("git", "config", "user.name", cwd=source, check=False) or "replay", cwd=self.path)
         bare = work / "origin.git"
         sh("git", "init", "-q", "--bare", str(bare), cwd=work)
         sh("git", "remote", "set-url", "origin", str(bare), cwd=self.path)  # nothing can reach the real remote from here
-        self.lines = {}  # branch -> [(commit time, sha, subject)] oldest first
-        self.at = {}  # branch -> sha it is checked out at
 
     def history(self, branch):
         if branch not in self.lines:
@@ -148,10 +154,17 @@ def main(argv=None):
     ap.add_argument("--limit", type=int, default=0, help="stop after this many hook calls")
     ap.add_argument("--only", default="", help="comma-separated session id prefixes")
     ap.add_argument("--mode", default="auto", choices=["manual", "ask", "auto"])
+    ap.add_argument("--resume", action="store_true", help="carry on from <work>/checkpoint.json in the clone already there")
+    ap.add_argument("--model", default="", help="the model for every background call: a full model id pins it (the default, the alias `haiku`, is resolved by Claude Code)")
+    ap.add_argument("--no-preflight", action="store_true", help="skip the one tiny model call that checks the model works and the allowance is not spent")
     a = ap.parse_args(argv)
     a.source, a.sessions, a.work = a.source.resolve(), a.sessions.resolve(), a.work.resolve()
     a.work.mkdir(parents=True, exist_ok=True)
-    if any(a.work.iterdir()):
+    ck = a.work / "checkpoint.json"
+    if a.resume:
+        if not ck.exists():
+            raise SystemExit(f"{ck} does not exist: nothing to resume")
+    elif any(a.work.iterdir()):
         raise SystemExit(f"{a.work} is not empty")
     email = sh("git", "config", "user.email", cwd=a.source)
 
@@ -165,11 +178,27 @@ def main(argv=None):
         events = events[:a.limit]
     print(f"{len(events)} hook calls from {len({e[3]['session_id'] for e in events})} sessions", file=sys.stderr)
 
-    clone = Clone(a.source, a.work, email)
+    if a.model:
+        os.environ["LOGBOOK_WORKER_MODEL"] = a.model
+    code = {"commit": sh("git", "rev-parse", "HEAD", cwd=Path(__file__).resolve().parent.parent, check=False),
+            "uncommitted_changes": bool(sh("git", "status", "--porcelain", "--untracked-files=no", cwd=Path(__file__).resolve().parent.parent, check=False))}
+    print(f"logbook code: {code['commit'][:10]}{' (with uncommitted changes)' if code['uncommitted_changes'] else ''}", file=sys.stderr)
+    if not a.fake and not a.no_preflight:  # one tiny call, so a wrong model or a spent allowance fails now and not after an hour
+        text, cost, err = worker.call_model("Reply with only the word ok.", os.environ.get("LOGBOOK_WORKER_MODEL", worker.MODEL))
+        print(f"preflight: model {worker.last_models or 'not reported'}, {cost:.4f} USD" + (f", FAILED: {err[:200]}" if err else ""), file=sys.stderr)
+        if err:
+            raise SystemExit("the model could not be called, so nothing was started: " + err[:200])
+    clone = Clone(a.source, a.work, email, existing=a.resume)
     os.chdir(clone.path)
     repo = Repo(clone.path)
-    cfg = repo.init()
-    repo.save_cfg({**cfg, "publish": a.mode, "worker_calls": 100000, "display": sh("git", "config", "user.name", cwd=clone.path), "interpreter": sys.executable})
+    start = 0
+    if a.resume:
+        saved = json.loads(ck.read_text(encoding="utf-8"))
+        start, clone.at = saved["next"], {k: (tuple(v) if isinstance(v, list) else v) for k, v in saved["at"].items()}
+        print(f"resuming at hook call {start} of {len(events)}", file=sys.stderr)
+    else:
+        cfg = repo.init()
+        repo.save_cfg({**cfg, "publish": a.mode, "worker_calls": 100000, "display": sh("git", "config", "user.name", cwd=clone.path), "interpreter": sys.executable})
     spawned, errors = [], []
 
     def spawn(args, cwd):  # a detached process, run at once
@@ -188,8 +217,20 @@ def main(argv=None):
         worker.call_model = fake_model
         worker.available = lambda: True
 
-    t0, done = time.time(), 0
-    for ts, branch, event, payload in events:
+    def checkpoint(i):
+        ck.write_text(json.dumps({"next": i, "at": {k: list(v) if isinstance(v, tuple) else v for k, v in clone.at.items()}}), encoding="utf-8")
+
+    def pause():  # (reason, when it ends) while the model is paused, else None
+        led = worker.ledger(repo)
+        return (led.get("pause_reason") or "paused", led["cooldown_until"]) if led["cooldown_until"] > time.time() else None
+
+    t0, done, paused = time.time(), start, None
+    for i in range(start, len(events)):
+        ts, branch, event, payload = events[i]
+        if not a.fake and (paused := pause()):  # nothing after this would be observed: stop here, keep the place
+            checkpoint(i)
+            print(f"stopped at hook call {i} of {len(events)}: {paused[0]} (until {time.strftime('%a %d %b %H:%M', time.localtime(paused[1]))})", file=sys.stderr)
+            break
         if branch and branch != "HEAD":
             subject = clone.move(branch, ts)
             if subject is not None:  # the branch moved to a newer commit: the git hooks fire
@@ -198,17 +239,23 @@ def main(argv=None):
                     hookmain.run(["post-merge"])
         out = capture.handle_hook(event, "claude-code", json.dumps({**payload, "cwd": str(clone.path), "hook_event_name": event}))
         done += 1
+        if done % 50 == 0:
+            checkpoint(i + 1)
         if done % 100 == 0:
             print(f"  {done}/{len(events)} hook calls, {int(time.time() - t0)}s, {len(spawned)} background steps, {len(errors)} errors", file=sys.stderr, flush=True)
-    for _ in range(3):  # whatever is still queued
-        for br in {b for _, b, _, _ in events if b and b != "HEAD"}:
-            spawn(["", "", "", "worker", "--drain", "--branch", br, "--flush"], clone.path)
-    spawn(["", "", "", "publish", "--all", "--yes", "--no-push"], clone.path)
+    if not paused:
+        for _ in range(3):  # whatever is still queued
+            for br in {b for _, b, _, _ in events if b and b != "HEAD"}:
+                spawn(["", "", "", "worker", "--drain", "--branch", br, "--flush"], clone.path)
+        spawn(["", "", "", "publish", "--all", "--yes", "--no-push"], clone.path)
+        checkpoint(len(events))
 
     entries = repo.load_private()
     shared = repo.load_shared()[0]
     led = worker.ledger(repo)
-    report = {"hook_calls": done, "seconds": int(time.time() - t0), "background_steps": len(spawned), "errors": errors[:20],
+    report = {"completed": not paused, "next_hook_call": done if not paused else i, "of": len(events),
+              "paused": {"reason": paused[0], "until": int(paused[1])} if paused else None, "code": code,
+              "models": led.get("models"), "model_asked_for": os.environ.get("LOGBOOK_WORKER_MODEL", worker.MODEL), "hook_calls": done, "seconds": int(time.time() - t0), "background_steps": len(spawned), "errors": errors[:20],
               "private": {k: sum(1 for e in entries if e.kind == k) for k in ("log", "finding", "change", "summary")},
               "shared": {k: sum(1 for l in shared if l.entry.kind == k) for k in ("finding", "change", "summary", "log")}, "archived": len(list((repo.cdir / "archive").glob("*.json"))), "queue": len(repo.queued()),
               "model_calls": led["calls"], "cost_usd": round(led["cost"], 4), "branches": sorted({e.anchor.get("branch", "") for e in entries}),

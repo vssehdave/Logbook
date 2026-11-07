@@ -62,7 +62,7 @@ def candidates(repo, views):
                 seen.add(pair)
                 out.append({"id": v["id"], "topic": v["topic"], "mine": v["mine"], "reason": "may say the same as another note",
                             "detail": [f"{o['id']} ({'yours' if o['mine'] else 'a teammate'}): {o['topic'][:70]}"], "commits": []})
-    for v in sorted(notes, key=lambda x: x["created"] or "", reverse=True)[:MAX_CHECKED]:
+    for v in sorted(notes, key=lambda x: (x["created"] or "", x["id"]), reverse=True)[:MAX_CHECKED]:  # newest first; `created` is whole seconds, so notes made in the same second go by id
         later = later_commits(repo, v)
         if later and not (v.get("status") == "in-progress" and v["status_commits"] and later[0][0] in v["status_commits"]):  # already looked at up to the newest of these
             out.append({"id": v["id"], "topic": v["topic"], "mine": v["mine"], "reason": "files it is about changed in later commits",

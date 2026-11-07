@@ -29,6 +29,11 @@ def lb(cwd, *a, inp=None, env=None):
     return sh(LB, *a, cwd=cwd, inp=inp, env=env)
 
 
+def lbq(cwd, *a, inp=None):
+    """A logbook command that must not ask a model: publish tidies first in ask and auto mode, and on a machine with `claude` that would spend the person's allowance."""
+    return lb(cwd, *a, inp=inp, env={"LOGBOOK_WORKER": "1"})
+
+
 def ok(cond, msg, detail=""):
     print(("PASS  " if cond else "FAIL  ") + msg + ("" if cond else "\n      " + str(detail)[:500]))
     if not cond:
@@ -84,23 +89,25 @@ ok("refs/logbook/log" in git(alice, "config", "--get-all", "remote.origin.fetch"
 
 # --- note / publish / move --------------------------------------------------------------------------------------------
 n1 = note(alice, "refund rounding", ["shop/revenue.py"])
-rc, o = lb(alice, "publish")
+rc, o = lbq(alice, "publish")
 ok(n1 in o and ("pass ids" in o or "nothing to publish" in o) and "Traceback" not in o, "bare publish lists the queue and does not crash (closed input)", o)
-rc, o = lb(alice, "publish", n1, "--yes", "--keep")
+rc, o = lbq(alice, "publish", n1, "--yes", "--keep", "--no-push")
 ok(rc == 0 and (alice / ".git/logbook/private" / f"{n1}.json").exists(), "publish --keep leaves the private copy", o)
-ok("already shared" in lb(alice, "publish", n1, "--yes")[1], "an already shared id is skipped")
+ok("already shared" in lbq(alice, "publish", n1, "--yes", "--no-push")[1], "an already shared id is skipped")
 n2 = note(alice, "tax export", ["shop/revenue.py"])
-rc, o = lb(alice, "publish", n2, "--yes")
+rc, o = lbq(alice, "publish", n2, "--yes", "--no-push")
 ok(rc == 0 and not (alice / ".git/logbook/private" / f"{n2}.json").exists(), "publish moves the note", o)
 
-# --- git push does not send notes; logbook sync does -----------------------------------------------------------------
+# --- git push does not send notes; logbook publish does; sync never pushes ------------------------------------------------
 n3 = note(alice, "private idea", ["shop/revenue.py"])
 rc, o = sh("git", "push", "origin", "HEAD", cwd=alice)
 ok(rc == 0, "git push succeeds", o)
 ok("not pushed yet" in o, "git push reminds that published notes are not pushed", o)
 ok("refs/logbook/log/" not in git(alice, "ls-remote", "origin"), "git push did NOT send the notes")
 rc, o = lb(alice, "sync")
-ok(rc == 0 and "refs/logbook/log/" in git(alice, "ls-remote", "origin"), "logbook sync pushes the notes", o)
+ok(rc == 0 and "Nothing was pushed" in o and "refs/logbook/log/" not in git(alice, "ls-remote", "origin"), "logbook sync fetches and says it pushed nothing", o)
+rc, o = lbq(alice, "publish", "--branch", "no-such-branch", "--yes")
+ok(rc == 0 and "pushed what was already published" in o and "refs/logbook/log/" in git(alice, "ls-remote", "origin"), "publish with nothing new still pushes what is waiting", o)
 ref = git(alice, "for-each-ref", "--format=%(refname)", "refs/logbook")
 tree = git(alice, "ls-tree", "-r", "--name-only", ref.split()[0])
 ok(n3 not in tree and n1 in tree and n2 in tree, "the private note never left the machine", tree)
@@ -143,7 +150,7 @@ ok(lb(alice, "config", "publish")[1].strip() == "ask", "the 0.0.4 name claude re
 (alice / ".logbook").mkdir(exist_ok=True)
 (alice / ".logbook" / "policy.json").write_text('{"publish": false}')
 nn = note(alice, "policy-off note", ["shop/revenue.py"])
-rc, o = lb(alice, "publish", nn, "--yes")
+rc, o = lbq(alice, "publish", nn, "--yes")
 ok(rc != 0 and (alice / ".git/logbook/private" / f"{nn}.json").exists(), "a repo policy that turns publishing off refuses to publish", o)
 (alice / ".logbook" / "policy.json").unlink()
 lb(alice, "config", "publish", "auto")
@@ -172,9 +179,10 @@ ok(victim.read_text() == "precious\n", "reading the hostile note did not overwri
 lb(alice2, "setup", "--yes", "--agent", "agents-md")
 sh("git", "pull", "-q", cwd=alice2)
 n4 = note(alice2, "second machine", ["shop/revenue.py"])
-lb(alice2, "publish", n4, "--yes")
+rc, o = lbq(alice2, "publish", n4, "--yes")
+ok(rc == 0 and "pushed." in o, "publish from the second machine merges with the first machine's shelf and pushes (hooks installed)", o)
 rc, o = lb(alice2, "sync")
-ok(rc == 0, "sync from the second machine merges and pushes (hooks installed)", o)
+ok(rc == 0, "sync from the second machine fetches and merges", o)
 lb(alice, "sync")
 ok(n4 in lb(alice, "ask", "second", "machine")[1], "the first machine sees the second machine's note")
 lb(alice, "purge", n1, "--push")
@@ -235,7 +243,7 @@ ok(decision("logbook tidy --brief") == "allow" and decision("logbook tidy --appl
 rc, o = lb(bob, "tidy")
 ok(rc == 0 and "candidate" in o, "tidy lists candidates", o)
 rc, o = lb(bob, "worker", "--status")
-ok(rc == 0 and "worker on, tidy manual" in o, "the observer is on by default and says so", o)
+ok(rc == 0 and "worker on, tidy auto" in o, "the observer is on by default and says so", o)
 lb(bob, "config", "worker", "off")
 lb(bob, "config", "tidy", "auto")
 rc, o = lb(bob, "worker", "--status")

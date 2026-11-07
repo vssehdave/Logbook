@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -10,7 +11,7 @@ import time
 from . import capture, cites, convo, ground, nav, outbox, recall, sync, tidy, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
-from .safety import digest_hash, looks_tabular, redact
+from .safety import digest_hash, inside, looks_tabular, redact, scrub_paths
 from .safety import sanitize as safety_sanitize
 from .store import LEGACY_MODES, PUBLISH_MODES, Repo
 
@@ -208,16 +209,26 @@ def share_copy(r, e, include_evidence, allow_table):
         if e.body.get(k):
             body[k], f = redact(e.body[k], deny)
             found += f
+            scrubbed = scrub_paths(body[k])
+            found += ["home-path"] * (scrubbed != body[k])
+            body[k] = scrubbed
     if not allow_table and any(looks_tabular(v) for v in body.values()):
         raise SystemExit("logbook: a field looks like pasted table rows; refusing. Remove it, or pass --allow-table after checking it.")
     c = e.copy(body=body, redacted=True, display=r.cfg().get("display", "") if r.attribution() == "named" else "")
     c.topic, f = redact(e.topic, deny)
     found += f
+    c.topic = scrub_paths(c.topic)
     a = dict(e.anchor)
     for k in ("subject", "branch"):
         a[k], f = redact(a.get(k, ""), deny)
         found += f
+        a[k] = scrub_paths(a[k])
+    for k in ("paths", "old_paths"):  # only paths inside the repository: the rest would carry a user name and mean nothing to a teammate
+        a[k] = inside(a.get(k, []))
     c.anchor = a
+    if c.obs:  # the files a note read and changed, the same way; the session id of a private chat stays private
+        c.obs = {k: (inside(v) if k in ("files_read", "files_modified") else v) for k, v in c.obs.items() if k != "session"}
+    c.checks = dict(c.checks, missing=[scrub_paths(m) for m in c.checks.get("missing", []) if inside([m])])
     return c, found
 
 
@@ -230,6 +241,28 @@ def cmd_convo(a):
     for m in msgs:
         out(f"[{m.get('role', '?')}] {safety_sanitize(m['text'], 1500)}")
     return 0
+
+
+def _push(r):
+    """Push the shared ref. The git hooks that this push triggers must not start another publish (see hookmain.PUBLISHING)."""
+    from . import hookmain
+    old = os.environ.get(hookmain.PUBLISHING)
+    os.environ[hookmain.PUBLISHING] = "1"
+    try:
+        return sync.push(r)
+    finally:
+        if old is None:
+            os.environ.pop(hookmain.PUBLISHING, None)
+        else:
+            os.environ[hookmain.PUBLISHING] = old
+
+
+def _push_waiting(r, a):
+    """Publish is the step that pushes, so with nothing new to publish it still sends what an earlier `publish --no-push` (or a push that failed) left on this machine."""
+    if getattr(a, "no_push", False) or "origin" not in sync.remotes(r) or not sync.unpushed(r):
+        return
+    res = _push(r)
+    out("pushed what was already published." if res["ok"] else "not pushed: " + res.get("error", "")[:200] + " (publish again once the remote is reachable)")
 
 
 def cmd_publish(a):
@@ -265,6 +298,7 @@ def cmd_publish(a):
     ids = [e.id if hasattr(e, "id") else e for e in ids]
     if not ids:
         out("nothing to publish.")
+        _push_waiting(r, a)
         return 0
     for eid in ids:
         e = r.get_private(eid)
@@ -287,6 +321,7 @@ def cmd_publish(a):
         ready.append((c, digest_hash(text)))
     if not ready:
         out("nothing new to publish.")
+        _push_waiting(r, a)
         return 0
     remote = "origin" in sync.remotes(r)
     if remote:  # tidy -> sync -> move -> push: bring in what teammates shared before writing
@@ -314,7 +349,7 @@ def cmd_publish(a):
     out(f"published {len(ready)} entr{'y' if len(ready) == 1 else 'ies'} to {ref}"
         f"{'' if keep else ' (the private copy was removed, --keep leaves it)'}.")
     if remote and not a.no_push:
-        res = sync.push(r)
+        res = _push(r)
         out("pushed." if res["ok"] else "not pushed: " + res.get("error", "")[:200] + " (publish again once the remote is reachable)")
     elif not remote:
         out("no remote named origin: the entries stay on this machine until you add one.")
@@ -694,7 +729,7 @@ def cmd_queue(a):
         if waiting:
             said.append(f"{len(waiting)} private note(s) are not shared with your team yet (`logbook publish` shows what would be shared and asks first).")
         if "origin" in sync.remotes(r) and sync.unpushed(r):
-            said.append("your published notes are not pushed yet (`logbook sync` pushes them).")
+            said.append("your published notes are not pushed yet (`logbook publish` pushes them).")
         if said:
             print("logbook: " + " ".join(said), file=sys.stderr)
         return 0

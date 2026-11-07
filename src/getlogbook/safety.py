@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from pathlib import Path
 
 _SECRETS = [
     ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)")),
@@ -44,6 +45,55 @@ def redact(text, deny=()):
             text = re.sub(re.escape(d), "[REDACTED:deny-list]", text, flags=re.I)
             found.append("deny-list")
     return text, found
+
+
+_ABS = re.compile(r"(?<![\w./:-])(?:[A-Za-z]:[\\/]+|~[\\/]|/(?:Users|home|tmp|var|etc|opt|usr|mnt|private|srv|root|Volumes)/)[^\s\"'`)\]>,;]*")
+_OUTSIDE = re.compile(r"^(?:[A-Za-z]:|/|~|\.\./|[A-Za-z][A-Za-z0-9+.-]*://)")  # a drive, a root, the home folder, outside the folder, or a web address
+OUTSIDE = "[outside path]"
+
+
+def scrub_paths(text):
+    """Replace every absolute path in a text (a drive, the home folder, /tmp and the other system roots) with `[outside path]`: a note must not carry a user name or a place
+    on a disk that means nothing to a teammate. Paths inside the repository are made relative first (see `localize`), so they survive."""
+    return _ABS.sub(OUTSIDE, text) if isinstance(text, str) else text
+
+
+def repo_roots(repo):
+    """The ways the repository's own folder may be spelled in a path or a text: as git reports it and fully resolved (a symlinked temp folder, `/private/var` against
+    `/var` on macOS, a Windows short name like `RUNNER~1`), each with a trailing slash."""
+    return tuple(dict.fromkeys(p.as_posix().rstrip("/") + "/" for p in (repo.root, repo.root.resolve())))
+
+
+def repo_relative(roots, f):
+    """A file as the repo spells it: forward slashes, relative to the project root when it was given as an absolute path inside it, in any spelling of the root."""
+    roots = (roots,) if isinstance(roots, str) else roots
+    f = f.replace("\\", "/")
+    for root in roots:
+        if f.casefold().startswith(root.casefold()):
+            return f[len(root):]
+    if re.match(r"^(?:[A-Za-z]:|/)", f):
+        try:
+            return Path(f).resolve().relative_to(Path(roots[0]).resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
+    return f
+
+
+def localize(text, roots):
+    """A text with the repository's own folder taken off every path in it (`C:/Users/ann/proj/src/a.py` becomes `src/a.py`), then every other absolute path scrubbed."""
+    if not isinstance(text, str):
+        return text
+    for root in ((roots,) if isinstance(roots, str) else roots):
+        parts = [re.escape(p) for p in re.split(r"[\\/]+", str(root).replace("\\", "/").strip("/")) if p]
+        if parts:
+            text = re.sub(r"(?<![\w.])/?" + r"[\\/]+".join(parts) + r"[\\/]+", "", text, flags=re.I)
+    return scrub_paths(text)
+
+
+def inside(files):
+    """The paths that are inside the repository (relative ones). An absolute path, a path in the home folder and a web address are left out: they say nothing a teammate
+    can use, and the first two carry a user name."""
+    return [f for f in files if isinstance(f, str) and f and not _OUTSIDE.match(f)]
 
 
 def looks_tabular(text, run=3):
