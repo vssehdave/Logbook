@@ -8,8 +8,8 @@ The vectors are derived data. They live in the local SQLite file (notesdb.note_v
 at any time. They only add candidates to a search; every hit is still a stored note with its author, ref, git blob, commit, time and checks, and is
 shown with them.
 
-Starting the model takes about half a second once it is downloaded (the first run downloads 90 MB), so it is used by the commands a person or an agent runs on purpose (`logbook ask`, `logbook
-index`), not by the hook that runs on every prompt.
+Starting the model takes about a second once it is downloaded (the first run downloads 90 MB), so the hook that runs on every prompt starts it only for a prompt that
+names nothing the notes know and whose words found too little (recall.by_meaning); `logbook ask` starts it on every search.
 """
 from __future__ import annotations
 
@@ -40,6 +40,29 @@ def note_text(e):
     return " ".join(p for p in parts if p)[:MAX_TEXT]
 
 
+def semantic_on(cfg):
+    """Search by meaning is on unless `config semantic off` (stored as False) turned it off."""
+    return cfg.get("semantic", "on") not in (False, "off")
+
+
+def _cached(name, rev, filename):
+    """Path of a file of the pinned default model that is already in the Hugging Face cache, else None. Reading the cache directly skips importing
+    huggingface_hub (about 0.8 s), which is only needed to download."""
+    if rev is None:
+        return None
+    hub = os.environ.get("HF_HUB_CACHE") or os.path.join(os.environ.get("HF_HOME") or os.path.join(os.path.expanduser("~"), ".cache", "huggingface"), "hub")
+    path = os.path.join(hub, "models--" + name.replace("/", "--"), "snapshots", rev, *filename.split("/"))
+    return path if os.path.isfile(path) else None
+
+
+def _file(name, rev, filename):
+    path = _cached(name, rev, filename)
+    if path:
+        return path
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(name, filename, revision=rev)
+
+
 def load(cfg):
     """The configured embedder, or None when the packages are missing, the model cannot be loaded or LOGBOOK_OFFLINE is set (the caller then falls back to text search)."""
     if os.environ.get("LOGBOOK_OFFLINE") or not installed():
@@ -50,12 +73,11 @@ def load(cfg):
     try:
         import numpy as np
         import onnxruntime as ort
-        from huggingface_hub import hf_hub_download
         from tokenizers import Tokenizer
-        tok = Tokenizer.from_file(hf_hub_download(name, "tokenizer.json", revision=rev))
+        tok = Tokenizer.from_file(_file(name, rev, "tokenizer.json"))
         tok.enable_truncation(MAX_TOKENS)
         tok.enable_padding()
-        sess = ort.InferenceSession(hf_hub_download(name, "onnx/model.onnx", revision=rev), providers=["CPUExecutionProvider"])
+        sess = ort.InferenceSession(_file(name, rev, "onnx/model.onnx"), providers=["CPUExecutionProvider"])
         wants_types = "token_type_ids" in {i.name for i in sess.get_inputs()}
     except Exception:  # a missing download, a bad name, a broken install: text search still works
         return None
