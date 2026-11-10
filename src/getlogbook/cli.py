@@ -52,11 +52,34 @@ def detail(v):
     return "\n".join(rows)
 
 
+def _interactive():
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _first_run(r):
+    """A clone that is not set up (no id, or no git hooks) gets one offer of `setup` when a person is at the terminal. A hook or a script only gets the hint, because setup
+    edits files and must never run unasked. A no (or `uninstall`) is remembered, so nobody is asked twice. True when the offer was made."""
+    from . import install as ins
+    if (r.cfg().get("user") and ins.git_hook_installed(r, "post-commit")) or r.cfg().get("setup_declined") or not _interactive():
+        return False
+    out("Logbook is not set up in this clone (no id or no git hooks yet). `logbook setup` would make these changes:")
+    cmd_setup(argparse.Namespace(agent=None, yes=False, dry_run=False, no_pretool=False))
+    now = Repo(".")
+    if not (now.cfg().get("user") and ins.git_hook_installed(now, "post-commit")):
+        c = now.cfg()
+        c["setup_declined"] = True
+        now.save_cfg(c)
+        out("(not set up; `logbook setup` does it whenever you want, and you will not be asked again)")
+    return True
+
+
 def need_repo():
     try:
         r = Repo(".")
     except Exception:
         raise SystemExit("logbook: not inside a git repository")
+    if _first_run(r):
+        r = Repo(".")
     if not r.cfg().get("user"):
         raise SystemExit("logbook: run `logbook setup` first")
     return r
@@ -772,6 +795,9 @@ def cmd_uninstall(a):
     if not _confirm(a, None):
         return 0
     ins.apply(r, targets, remove=True)
+    c = r.cfg()
+    c["setup_declined"] = True  # you took it out on purpose: no more offers
+    r.save_cfg(c)
     out("done.")
     return 0
 
