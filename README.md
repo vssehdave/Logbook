@@ -53,7 +53,7 @@ on the right shows the number and `x/y` (this is the xth of y answers that cite 
 an earlier answer, down to a later one. Click the peek and the chat scrolls to that answer. The engine only lets a mod scroll the chat in
 answer to your own click. The band finds the answers by asking `logbook cites --where N`, which reads Claude Code's transcript of the chat, so
 it works for every answer and survives reloads; the jump uses the transcript row's id. Nothing can be typed into the finder. The band keeps the chat's sources until `/clear`, which starts the numbering again. Other agents get the same numbers in
-the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. The plugin also registers the GitHub MCP server (`https://api.githubcopilot.com/mcp/`) so the agent can read pull request and merge state when it saves or publishes logs; it needs a token in the environment variable `GITHUB_PERSONAL_ACCESS_TOKEN` (the repo never stores one), and without it that server just fails to connect. Checked with `claude plugin validate` and
+the answer and `logbook cites` for the list. It needs the `logbook` command on your PATH. The plugin registers no servers: for a pull request that was squash-merged the agent asks the `gh` command (`gh pr view <n>`). Checked with `claude plugin validate` and
 `claude plugin test` and, for the first version, in a live session; scrolling the chat to a citation and the finder are new and
 unproven at narrow widths.
 
@@ -122,8 +122,8 @@ after a log is saved: a note is queued when it names nothing that is missing and
 **Publishing is by branch.** `logbook publish --branch <name>` moves every queued note filed under that branch to the shared log (the usual redacted preview
 and checks run first; what they refuse stays private). `logbook publish --merged` does that for every branch that looks merged into the main line. Git alone can see two
 signs: a merge commit on the main line names the branch, or a commit one of the branch's own entries is anchored to is now in the main line's history. A squash merge
-leaves neither, so in `ask` and `auto` mode the agent is told at session start which branches look merged, and, if it has the GitHub tools, can confirm a squashed pull
-request there and run `logbook publish --branch` itself. Each record carries its own id and branch, so publishing at any moment is safe.
+leaves neither, so in `ask` and `auto` mode the agent is told at session start which branches look merged, and, with the `gh` command, can confirm a squashed pull
+request (`gh pr view <n>`) and run `logbook publish --branch` itself. Each record carries its own id and branch, so publishing at any moment is safe.
 
 **Pulling.** `logbook setup` also adds git `post-merge` and `post-rewrite` hooks, so a `git pull` fetches the shared logs in the background (a pull-only sync: it never
 pushes). `logbook tidy` does the same fetch first (`--no-sync` skips it). Nothing watches the remote between pulls.
