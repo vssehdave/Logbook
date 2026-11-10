@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **The prompt hook finds a note by meaning.** A prompt that names no file or name the notes know used to be matched on words alone, so a paraphrase found nothing and a common word ("looks", "notes") could put an unrelated note in front of the agent. Now, when the notes have vectors, meaning decides: notes closer than 0.55 (cosine) are injected, closest first, and shared words alone no longer count. Without vectors or the model it falls back to words, and a note must share two of the prompt's words. The two places such a prompt gets are given to notes that can be shown, not to drafts that are never injected. Cost: that kind of prompt now starts the model, about a second more.
+- **`ask` stops padding.** A note found only by meaning must be at least 0.35 close (it was 0.2; real matches measured 0.49 and up, unrelated questions 0.26 and down), and a note found by one common word only is dropped, so a question with no answer says "no match".
+- **The model starts in about a second, not two.** The cached model files are read from the Hugging Face cache directly; `huggingface_hub` (0.8 s to import) is loaded only to download.
 - **There is no `logbook index` command.** Embedding is part of the background tidy pass only (`ask` no longer embeds a batch itself): the pass the hooks start after every savepoint and every pull embeds the notes that have no vector yet. A search before that pass says how many notes are not in the meaning index yet.
 - **New notes are embedded by the background pass.** The `tidy --work` pass that the hooks start after every savepoint and every pull now also embeds the notes that have no vector yet, so `logbook ask` finds them by meaning without a manual `logbook index` or a slow first search. (`ask` still catches up to 300 itself, and `sync` stays a pure fetch.)
 ## 0.0.8 (2026-11-10)

@@ -417,8 +417,7 @@ def cmd_sync(a):
 
 
 def _semantic_on(r):
-    """Search by meaning is on unless `config semantic off` (stored as False) turned it off."""
-    return r.cfg().get("semantic", "on") not in (False, "off")
+    return embed.semantic_on(r.cfg())
 
 
 def _embed_new(r):
