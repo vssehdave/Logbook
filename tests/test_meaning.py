@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from array import array
 import unittest
 from unittest import mock
@@ -43,6 +44,21 @@ class TestMeaning(DbBase):
         self.money = self.note("refund rounding drops a cent")
         self.auth = self.note("session token expiry after logout", "shop/other.py")
         self.r.publish([self.money])
+
+    def test_the_tidy_pass_embeds_the_notes_that_have_no_vector_yet(self):
+        self.assertEqual(self.r.db.vector_count(EMB.name), 0)
+        env = {k: v for k, v in os.environ.items() if k != "LOGBOOK_OFFLINE"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(embed, "load", lambda cfg: EMB):
+            self.run_cli("tidy", "--work", "--quiet", "--no-sync")
+        self.assertEqual(self.r.db.vector_missing(EMB.name), 0)
+        self.assertGreaterEqual(self.r.db.vector_count(EMB.name), 2, "both notes have a vector without anyone running `logbook index`")
+        self.r.db.con.execute("delete from note_vec")
+        self.run_cli("tidy", "--work", "--quiet", "--no-sync")  # offline (the tests' default): nothing is embedded, nothing fails
+        self.assertEqual(self.r.db.vector_count(EMB.name), 0)
+        self.run_cli("config", "semantic", "off")
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(embed, "load", lambda cfg: EMB):
+            self.run_cli("tidy", "--work", "--quiet", "--no-sync")
+        self.assertEqual(self.r.db.vector_count(EMB.name), 0, "and not when search by meaning is off")
 
     def test_notes_are_embedded_once_and_a_status_record_is_skipped(self):
         rec = Entry(id="ffffffffff1-bbbbbbbb", topic="status", body={"summary": "done"}, status={"of": self.auth.id, "state": "resolved", "commits": []},

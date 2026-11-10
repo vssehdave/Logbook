@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 
@@ -418,6 +419,18 @@ def cmd_sync(a):
 def _semantic_on(r):
     """Search by meaning is on unless `config semantic off` (stored as False) turned it off."""
     return r.cfg().get("semantic", "on") not in (False, "off")
+
+
+def _embed_new(r):
+    """Embed the notes that have no vector yet, so `ask` finds them by meaning with no catch-up. 0 when meaning search is off, LOGBOOK_OFFLINE is set, or the model cannot
+    start; a failure here never stops the pass that called it."""
+    if not _semantic_on(r) or os.environ.get("LOGBOOK_OFFLINE"):
+        return 0
+    try:
+        emb = embed.load(r.cfg())
+        return r.db.index_vectors(emb) if emb else 0
+    except (sqlite3.Error, OSError, ValueError):
+        return 0
 
 
 def _embedder(r):
@@ -906,6 +919,8 @@ def cmd_tidy(a):
     if a.work:  # the tidy worker's pass: judge, archive junk (what the hooks start in `tidy auto`)
         r.db.archive_stale_chats()  # and the citations page of a chat nobody has cited in for 20 days
         res = tidy.auto(r, judge=not a.no_judge) if tidy.mode(r.cfg()) == "auto" else tidy.run(r, judge=not a.no_judge)
+        if isinstance(res, dict):
+            res["embedded"] = _embed_new(r)  # the new notes from the savepoint or the pull that started this pass
         if not a.quiet:
             out(json.dumps(res))
         return 0
