@@ -206,7 +206,7 @@ class Repo:
     # private log ---------------------------------------------------------
     @property
     def pdir(self):
-        """The folder older versions kept private notes in, one JSON file each. Notes live in notes.sqlite now (notesdb.py); the first open
+        """The folder older versions kept private notes in, one JSON file each. Notes live in library.sqlite now (notesdb.py); the first open
         imports what is here and moves it to private.imported/."""
         return self.cdir / "private"
 
@@ -217,8 +217,8 @@ class Repo:
             self._db = NoteDB(self)
         return self._db
 
-    def add_private(self, e):
-        self.db.add_private(e)
+    def add_private(self, e, shelf=None):
+        self.db.add_private(e, shelf=shelf)
 
     def get_private(self, eid):
         return self.db.get_private(eid)
@@ -293,9 +293,9 @@ class Repo:
         return None
 
     def publish(self, entries):
-        """Write notes to your shared ref. A log is refused here, whoever asks: logs and the conversations behind them stay on this machine."""
-        if any(e.kind == "log" for e in entries):
-            raise ValueError("a log stays on this machine; only notes are published")
+        """Write notes to your shared ref. A savepoint note is refused here, whoever asks: it and the log behind it stay on this machine."""
+        if any(e.kind == "savepoint" for e in entries):
+            raise ValueError("a savepoint note stays on this machine; only notes are published")
         self.adopt_legacy()
         ref = self.own_ref()
         tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
@@ -350,7 +350,7 @@ class Repo:
         """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered (or counted in the push reminder). A log is never one of them: logs stay on this machine."""
         shared, _ = self.load_shared()
         done = {l.entry.id for l in shared if l.user == self.user}
-        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied" and e.kind != "log"]
+        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied" and e.kind != "savepoint"]
 
     def queued(self):
         """The private entries in the publish queue (outbox.py) that are not shared yet: what `logbook publish` shares."""

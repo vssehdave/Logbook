@@ -35,7 +35,7 @@ def digest(repo, loaded, seen):
         by.setdefault(l.user, []).append(l)
     lines = []
     for user, items in sorted(by.items(), key=lambda kv: -len(kv[1])):
-        logs = sum(1 for l in items if l.entry.kind == "log")
+        logs = sum(1 for l in items if l.entry.kind == "savepoint")
         notes = len(items) - logs
         branches = sorted({l.entry.anchor.get("branch") or "" for l in items} - {""})
         newest = max(items, key=lambda l: l.entry.id).entry

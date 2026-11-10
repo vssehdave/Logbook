@@ -132,14 +132,15 @@ def save(repo, branch, call=worker.call_model, now=time.time, use_model=True, ob
         fields, how = summarize(repo, branch, obs, call, now) if use_model else (fallback(obs), "code")
         e = _entry(repo, branch, sha, obs, fields)
         prev = last(run).get("head") or (obs[0].get("head") if obs else "")
-        for n in notes_from(repo, branch, head, prev, obs, e.id, run.queue_text(last(run).get("qoff", 0), run.offset())):
+        talk, toff = convo.since(run, last(run).get("toff", 0))
+        convo.save(repo, e.id, talk, branch, e.created)  # the log: the conversation up to this savepoint, filed under its branch
+        repo.db.add_shelf(e.id, branch, sha, e.id, e.created)  # the shelf: the notes taken from it, filed under the branch and the commit that triggered it
+        for n in notes_from(repo, branch, head, prev, obs, run.queue_text(last(run).get("qoff", 0), run.offset())):
             if not repo.get_private(n.id):  # the same observation is never saved as a note twice
-                repo.add_private(n)
-        repo.add_private(e)
+                repo.add_private(n, shelf=e.id)
+        repo.add_private(e, shelf=e.id)
         qstart, qend = last(run).get("qoff", 0), run.offset()
         run.archive_queue(e.id, qstart, qend)
-        talk, toff = convo.since(run, last(run).get("toff", 0))
-        convo.save(repo, e.id, talk)
         covered = {o["id"] for o in obs}
         keep = [o for o in run.observations() if o["id"] not in covered]  # a pass may have appended since: only the covered ones leave
         if run.obs.exists():
@@ -158,7 +159,7 @@ def _entry(repo, branch, sha, obs, fields):
     body = {dest: fields.get(src, "") for src, dest in FIELDS}
     first = re.split(r"(?<=[.!?])\s", (fields.get("completed") or fields.get("learned") or "").strip(), maxsplit=1)[0]
     body["summary"] = (first or fields["title"])[:300]  # the first sentence: the full text is in what / why
-    e = Entry(id=new_id(), kind="log", topic=fields["title"][:200], body={k: v[:2000] for k, v in body.items() if v}, provenance="worker-written",
+    e = Entry(id=new_id(), kind="savepoint", topic=fields["title"][:200], body={k: v[:2000] for k, v in body.items() if v}, provenance="worker-written",
               captured_via="savepoint", created=capture.now(), v=2, level="commit" if sha else "branch",
               sources=[o["id"] for o in obs if ID_RE.match(o["id"])][-MAX_LIST:],
               display=repo.cfg().get("display", "") if repo.attribution() == "named" else "")
@@ -204,7 +205,7 @@ _inside = safety_inside  # the files git could know about: a path outside the re
 _rel = repo_relative  # a file as the repo spells it, whatever form the model gave it in
 
 
-def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
+def notes_from(repo, branch, end, prev, obs, tool_text=None):
     """One note per observation. A note is about the commit that holds its own work (see _commit_for; several commits can lie between two savepoints), else about the
     branch. `end` is the commit the savepoint stops at, `prev` the one the last savepoint stopped at. Its checks are worked out by code (see ground.py), so a draft that names a file or value that is not there is not shown to agents. With `tool_text` (what the
     tool uses behind the savepoint showed) the identifier-like words in its facts must also appear there, or in what the other observations of the savepoint say."""
@@ -235,7 +236,7 @@ def notes_from(repo, branch, end, prev, obs, log_id, tool_text=None):
             others = " ".join(f"{x['title']} {x['narrative']}" for x in obs if x is not o)
             checks["unsupported"] = ground.unsupported([localize(f, root) for f in facts], tool_text + "\n" + others)  # the facts as stored: a path outside the repo cannot be looked up and must not be named here
         out.append(Entry(id=o["id"] if ID_RE.match(str(o.get("id", ""))) else new_id(), kind="finding", topic=localize(o["title"][:200], root), body=body, anchor=a,
-                         provenance="worker-written", captured_via="savepoint", v=2, level="commit" if about else "branch", sources=[log_id],
+                         provenance="worker-written", captured_via="savepoint", v=2, level="commit" if about else "branch",
                          checks=checks,
                          created=time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(o.get("t") or time.time())),
                          obs={"type": o.get("type", ""), "concepts": o.get("concepts", []), "files_read": read, "files_modified": mod,

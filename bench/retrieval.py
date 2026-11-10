@@ -148,7 +148,7 @@ def run_size(work, n, nq, runs):
     has_db = hasattr(repo, "db")
     if has_db:  # the first open: older private files become rows, the shared shelves are mirrored
         res["first_open_s"] = round(timed(lambda: (repo.db, repo.db.refresh_shared()))[0], 2)
-        res["notes_sqlite_mb"] = round((repo.cdir / "notes.sqlite").stat().st_size / 1e6, 1)
+        res["notes_sqlite_mb"] = round((repo.cdir / "library.sqlite").stat().st_size / 1e6, 1)
         res["private_dir_mb"] = round(dirsize(repo.cdir / "private.imported") / 1e6, 1)
     else:
         res["private_dir_mb"] = round(dirsize(repo.pdir) / 1e6, 1)

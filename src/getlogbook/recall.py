@@ -137,8 +137,8 @@ def branch_memory(repo, views, cap=1400):
     from . import branches
     every = [v for v in views if v["trusted"] and v.get("status") != "resolved" and not v.get("is_status")]
     wanted = {branch, tree.default_branch(repo)} | branches.landed(repo, [v for v in every if v["branch"] not in {branch}])  # a merged branch's work is the main line's history now
-    logs = sorted((v for v in every if v["kind"] == "log" and v["branch"] in wanted), key=lambda v: v["id"], reverse=True)
-    theirs = sorted((v for v in every if v["kind"] != "log" and not v["mine"] and v["scope"] == "shared" and v["branch"] in wanted and injectable(v)),
+    logs = sorted((v for v in every if v["kind"] == "savepoint" and v["branch"] in wanted), key=lambda v: v["id"], reverse=True)
+    theirs = sorted((v for v in every if v["kind"] != "savepoint" and not v["mine"] and v["scope"] == "shared" and v["branch"] in wanted and injectable(v)),
                     key=lambda v: v["id"], reverse=True)
     lines = []
     for v in theirs[:3]:
@@ -174,7 +174,8 @@ def views_of(repo, loaded):
     anch = tree.Anchorer(repo)
     with repo.snapshot():
         anch.prime([l.entry.anchor.get("sha", "") for l in loaded])
-        views = [tree.view(repo, l, anch) for l in loaded]
+        logs = repo.db.logs_of_notes()
+        views = [tree.view(repo, l, anch, logs) for l in loaded]
     return tree.apply_statuses(views), anch
 
 

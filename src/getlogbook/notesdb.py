@@ -1,25 +1,24 @@
-"""The local SQLite store for notes (`.git/logbook/notes.sqlite`).
+"""The library: one SQLite file (`.git/logbook/library.sqlite`) that holds everything Logbook knows on this machine, private and shared.
 
-Two kinds of rows live in it, and they are not equal:
-  * private notes (scope `private`) are STORED here; this file is their only copy. Older versions kept one JSON file per note in
-    `.git/logbook/private/`; the first open imports those files and moves them to `.git/logbook/private.imported/`.
-  * a log is a private note of kind `log`, so it is stored here with the rest, and the conversation a log was saved with (`convo`) is stored here too.
-    The raw queue of tool uses an observer reads (`.git/logbook/running/`) and archived notes stay plain files.
+  * a LOG is a saved conversation: what was typed and answered up to a savepoint, with the branch it was on. It never leaves this machine.
+  * a SHELF is a collection of notes. A private shelf is what the note-taker extracted from one log (it carries the branch, the commit that triggered it,
+    and the log). On the shared side every author's ref in git is one shelf (it has no log here); together they make the one big shelf of a team.
+  * a NOTE sits on a shelf, so its log is found through the shelf, and it gets the shelf's branch and commit when its own anchor has none.
+    Private notes are STORED here (this file is their only copy); shared notes are a MIRROR of git, which stays the authority: every shared row carries its
+    ref and the git blob it was read from, `refresh_shared()` brings the mirror up to date from the ref tips (only blobs it has not seen are read), and the
+    mirror can be dropped and rebuilt from git at any time. Publishing still writes git objects (store.Repo.publish) from the stored note.
   * vectors for search by meaning (`note_vec`) are derived from the notes, never published, and rebuilt on demand (embed.py).
-  * shared notes (scope `shared`) are a MIRROR of the git refs `refs/logbook/log/<author>/000000` (and what a fetch brought in). Git stays
-    the authority: every shared row carries its ref and the git blob it was read from, `refresh_shared()` brings the mirror up to date from the
-    ref tips (only blobs it has not seen are read), and the whole mirror can be dropped and rebuilt from git at any time. Publishing still writes
-    git objects (store.Repo.publish) from the stored note; the row is not trusted to be the source of what is shared.
+  * the raw queue of tool uses an observer reads (`.git/logbook/running/`) and archived notes stay plain files.
 
-Why: reading every note on every prompt (one file per private note, every shared blob parsed, a view built for each) cost about 1 s at 1,000
-notes and grows linearly (bench/retrieval.py). Here a prompt asks the index for the few notes it could be about and builds views for those only.
-Full-text search needs FTS5 (in nearly every Python build); without it `usable()` is False and callers scan everything, as before.
-Nothing here keeps a note from being read back with its author, ref, blob, commit, time and checks exactly as stored.
+Why: reading every note on every prompt cost about 1 s at 1,000 notes and grows linearly (bench/retrieval.py). Here a prompt asks the index for the few notes it
+could be about and builds views for those only. Full-text search needs FTS5 (in nearly every Python build); without it `usable()` is False and callers scan
+everything, as before. Nothing here keeps a note from being read back with its author, ref, blob, commit, time and checks exactly as stored.
 """
 from __future__ import annotations
 
 import contextlib
 import functools
+import json
 import shutil
 import sqlite3
 
@@ -30,9 +29,10 @@ SCHEMA = """
 create table if not exists note(
   pk integer primary key autoincrement, id text not null, scope text not null, author text not null default '', device text not null default '',
   ref text not null default '', blob text not null default '', kind text, topic text, created text, branch text, sha text,
-  provenance text, status_of text not null default '', published_ref text not null default '', json text not null,
+  provenance text, status_of text not null default '', published_ref text not null default '', shelf_id text references shelf(id), json text not null,
   unique(scope, ref, id));
 create index if not exists note_id on note(id);
+create index if not exists note_shelf on note(shelf_id);
 create index if not exists note_status_of on note(status_of) where status_of != '';
 create table if not exists note_name(pk integer not null, name text not null, kind text not null);
 create index if not exists note_name_name on note_name(name);
@@ -40,14 +40,17 @@ create index if not exists note_name_pk on note_name(pk);
 create table if not exists note_path(pk integer not null, path text not null);
 create index if not exists note_path_path on note_path(path);
 create index if not exists note_path_pk on note_path(pk);
-create table if not exists shelf(ref text primary key, tip text not null);
+create table if not exists log(
+  id text primary key, branch text not null default '', created text not null default '', n integer not null default 0, body text not null default '');
+create table if not exists shelf(
+  id text primary key, scope text not null, author text not null default '', ref text not null default '', tip text not null default '',
+  branch text not null default '', commit_id text not null default '', created text not null default '', log_id text references log(id));
 create table if not exists tomb(ref text not null, author text not null, id text not null);
 create index if not exists tomb_ref on tomb(ref);
 create table if not exists supersedes(hidden text not null, author text not null, by_id text not null);
 create index if not exists supersedes_hidden on supersedes(hidden);
 create table if not exists meta(k text primary key, v text);
 create table if not exists note_vec(pk integer primary key, model text not null, vec blob not null);
-create table if not exists convo(log_id text primary key, n integer not null, body text not null);
 """
 FTS = "create virtual table if not exists note_fts using fts5(topic, body, paths, names, tokenize=\"unicode61 tokenchars '_'\")"
 CANDIDATES = 200  # the most full-text hits taken for one prompt before the usual ranking runs over them
@@ -77,19 +80,22 @@ def _closing(f):
 class NoteDB:
     def __init__(self, repo):
         self.repo = repo
-        self.path = repo.cdir / "notes.sqlite"
+        self.path = repo.cdir / "library.sqlite"
         self._con, self._depth, self._ready, self.fts = None, 0, False, None
 
     @property
     def con(self):
         if self._con is None:
             self.repo.cdir.mkdir(parents=True, exist_ok=True)
+            self._rename_old_file()
             self._con = sqlite3.connect(str(self.path), timeout=15, isolation_level=None)
             self._con.execute("pragma busy_timeout=15000")
             if not self._ready:
                 self._ready = True
                 self._con.execute("pragma journal_mode=wal")
+                self._prepare()
                 self._con.executescript(SCHEMA)
+                self._con.execute("pragma foreign_keys=on")
                 try:
                     self._con.execute(FTS)
                     self.fts = True
@@ -97,7 +103,34 @@ class NoteDB:
                     self.fts = False
                 self._import_private()
                 self._import_convo()
+                self._adopt()
+            else:
+                self._con.execute("pragma foreign_keys=on")
         return self._con
+
+    def _rename_old_file(self):
+        """0.0.8rc1-rc3 called this file notes.sqlite: it becomes the library, with its write-ahead files."""
+        old = self.repo.cdir / "notes.sqlite"
+        if old.exists() and not self.path.exists():
+            for suffix in ("", "-wal", "-shm"):
+                with contextlib.suppress(OSError):
+                    (self.repo.cdir / f"notes.sqlite{suffix}").replace(self.repo.cdir / f"library.sqlite{suffix}")
+
+    def _prepare(self):
+        """Before the schema runs, bring a file from before the library to the current shape: its `shelf` table was a cache of git ref tips (the shared mirror is read from
+        git again, so it is emptied) and its notes had no shelf."""
+        c = self._con
+        have = {r[0] for r in c.execute("select name from sqlite_master where type='table'")}
+        if "shelf" in have and "id" not in {r[1] for r in c.execute("pragma table_info(shelf)")}:
+            self.fts = "note_fts" in have
+            with self._tx():
+                for ref, eid in c.execute("select ref, id from note where scope='shared'").fetchall():
+                    self._del("shared", ref, eid)
+                c.execute("delete from tomb")
+                c.execute("drop table shelf")
+            self.fts = None
+        if "note" in have and "shelf_id" not in {r[1] for r in c.execute("pragma table_info(note)")}:
+            c.execute("alter table note add column shelf_id text references shelf(id)")
 
     @_closing
     def usable(self):
@@ -133,15 +166,21 @@ class NoteDB:
         self.con.execute("delete from note where pk=?", (pk,))
         return True
 
-    def _put(self, e, scope, author, device="", ref="", blob=""):
+    def _put(self, e, scope, author, device="", ref="", blob="", shelf=None):
         from . import tree
+        if shelf is None:  # saving a note again keeps it on its shelf
+            old = self.con.execute("select shelf_id from note where scope=? and ref=? and id=?", (scope, ref, e.id)).fetchone()
+            shelf = old[0] if old else None
         self._del(scope, ref, e.id)
         a = e.anchor
+        sb = self.con.execute("select branch, commit_id from shelf where id=?", (shelf,)).fetchone() if shelf else None
+        branch = a.get("branch") or (sb[0] if sb else "")
+        sha = a.get("sha") or (sb[1] if sb and e.level != "branch" else "")  # a note filed under its branch (work not committed yet) keeps no commit
         paths = [p.replace("\\", "/") for p in a.get("paths", [])]
         cur = self.con.execute(
-            "insert into note(id, scope, author, device, ref, blob, kind, topic, created, branch, sha, provenance, status_of, json) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (e.id, scope, author, device, ref, blob, e.kind, e.topic, e.created, a.get("branch", ""), a.get("sha", ""), e.provenance,
-             (e.status or {}).get("of", ""), e.to_json()))
+            "insert into note(id, scope, author, device, ref, blob, kind, topic, created, branch, sha, provenance, status_of, shelf_id, json) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (e.id, scope, author, device, ref, blob, e.kind, e.topic, e.created, branch, sha, e.provenance,
+             (e.status or {}).get("of", ""), shelf, e.to_json()))
         pk = cur.lastrowid
         names = {n.lower() for n in a.get("names", [])}
         stems = {n.lower() for n in tree.names_of(paths)}
@@ -155,9 +194,9 @@ class NoteDB:
 
     # private notes: stored here -----------------------------------------------------------------------------------------------
     @_closing
-    def add_private(self, e):
+    def add_private(self, e, shelf=None):
         with self._tx():
-            self._put(e, "private", self.repo.user, self.repo.device)
+            self._put(e, "private", self.repo.user, self.repo.device, shelf=shelf)
 
     @_closing
     def get_private(self, eid):
@@ -193,8 +232,11 @@ class NoteDB:
                 return
             for p in files:
                 try:
-                    e = from_json(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                    if d.get("kind") == "log":  # what the library calls a savepoint note; "log" now means the conversation
+                        d["kind"] = "savepoint"
+                    e = from_json(json.dumps(d))
+                except (OSError, ValueError, AttributeError):
                     continue
                 self._put(e, "private", self.repo.user, self.repo.device)
             self.con.execute("insert or replace into meta values('private_imported', ?)", (str(len(files)),))
@@ -220,7 +262,7 @@ class NoteDB:
         from .store import _REF_RE, MAX_PER_REF
         repo = self.repo
         tips = {r: o for o, r in repo.ref_tips()}
-        have = dict(self.con.execute("select ref, tip from shelf"))
+        have = dict(self.con.execute("select ref, tip from shelf where scope='shared'"))
         if tips == have:
             return False
         with self._tx():
@@ -232,6 +274,8 @@ class NoteDB:
                 m = _REF_RE.search(ref)
                 if not m:
                     continue
+                self.con.execute("insert into shelf(id, scope, author, ref, tip) values (?,?,?,?,?) on conflict(id) do update set tip=excluded.tip",
+                                 (ref, "shared", m.group(1), ref, tip))
                 files = repo._tree_files(ref)
                 ents = dict(list({p: o for p, o in files.items() if p.startswith("entries/") and p.endswith(".json")}.items())[:MAX_PER_REF])
                 known = {b: i for b, i in self.con.execute("select blob, id from note where scope='shared' and ref=?", (ref,))}
@@ -250,25 +294,24 @@ class NoteDB:
                         continue
                     if path != f"entries/{e.id}.json":
                         continue
-                    self._put(e, "shared", m.group(1), m.group(2), ref, oid)
+                    self._put(e, "shared", m.group(1), m.group(2), ref, oid, shelf=ref)
                 self.con.execute("delete from tomb where ref=?", (ref,))
                 self.con.executemany("insert into tomb(ref, author, id) values (?,?,?)",
                                      [(ref, m.group(1), p[len("tombstones/"):-len(".json")]) for p in files if p.startswith("tombstones/")])
-                self.con.execute("insert or replace into shelf values (?,?)", (ref, tip))
         return True
 
     @_closing
     def drop_mirror(self):
         """Forget every shared note held here; the next `refresh_shared()` reads the shelves from git again. Private notes are not touched."""
         with self._tx():
-            for ref in [r for (r,) in self.con.execute("select ref from shelf").fetchall()] + [r for (r,) in self.con.execute("select distinct ref from note where scope='shared'").fetchall()]:
+            for ref in [r for (r,) in self.con.execute("select id from shelf where scope='shared'").fetchall()] + [r for (r,) in self.con.execute("select distinct ref from note where scope='shared'").fetchall()]:
                 self._drop_shelf(ref)
 
     def _drop_shelf(self, ref):
         for (eid,) in self.con.execute("select id from note where scope='shared' and ref=?", (ref,)).fetchall():
             self._del("shared", ref, eid)
         self.con.execute("delete from tomb where ref=?", (ref,))
-        self.con.execute("delete from shelf where ref=?", (ref,))
+        self.con.execute("delete from shelf where id=? and scope='shared'", (ref,))
 
     @_closing
     def shared(self):
@@ -345,23 +388,37 @@ class NoteDB:
                 continue
         return out
 
-    # conversations: what was typed behind a log (private, like the log) -----------------------------------------------------------------
+    # logs and shelves: the conversation behind a savepoint and the notes taken from it (private to this machine) ---------------------------------
     @_closing
-    def save_convo(self, log_id, lines):
+    def add_log(self, log_id, lines, branch="", created=""):
         with self._tx():
-            self.con.execute("insert or replace into convo values (?,?,?)", (log_id, len(lines), "\n".join(lines) + "\n"))
+            self.con.execute("insert into log(id, branch, created, n, body) values (?,?,?,?,?) on conflict(id) do update set n=excluded.n, body=excluded.body",
+                             (log_id, branch, created, len(lines), "\n".join(lines) + "\n"))
 
     @_closing
-    def load_convo(self, log_id):
-        r = self.con.execute("select body from convo where log_id=?", (log_id,)).fetchone()
+    def add_shelf(self, shelf_id, branch="", commit_id="", log_id=None, created=""):
+        """A private shelf: the notes taken from one log, filed under the branch and (when a commit triggered it) the commit."""
+        with self._tx():
+            self.con.execute("insert into shelf(id, scope, author, branch, commit_id, created, log_id) values (?,?,?,?,?,?,?) "
+                             "on conflict(id) do update set branch=excluded.branch, commit_id=excluded.commit_id, log_id=excluded.log_id",
+                             (shelf_id, "private", self.repo.user, branch, commit_id, created, log_id))
+
+    @_closing
+    def load_log(self, log_id):
+        r = self.con.execute("select body from log where id=?", (log_id,)).fetchone()
         return r[0] if r else ""
 
     @_closing
-    def has_convo(self, log_id):
-        return self.con.execute("select 1 from convo where log_id=?", (log_id,)).fetchone() is not None
+    def has_log(self, log_id):
+        return self.con.execute("select 1 from log where id=? and n > 0", (log_id,)).fetchone() is not None
+
+    @_closing
+    def logs_of_notes(self):
+        """{note id: log id} for your own notes that were taken from a log kept here: the log is found through the note's shelf."""
+        return dict(self.con.execute("select n.id, s.log_id from note n join shelf s on s.id=n.shelf_id where n.scope='private' and s.log_id is not null"))
 
     def _import_convo(self):
-        """One time: the conversation files an older version kept become rows, and the folder is set aside (not deleted)."""
+        """One time: the conversation files an older version kept become logs, and the folder is set aside (not deleted)."""
         if self._meta("convo_imported"):
             return
         cdir = self.repo.cdir / "convo"
@@ -374,7 +431,7 @@ class NoteDB:
                     body = p.read_text(encoding="utf-8")
                 except OSError:
                     continue
-                self.con.execute("insert or replace into convo values (?,?,?)", (p.stem, len(body.splitlines()), body))
+                self.con.execute("insert or replace into log(id, n, body) values (?,?,?)", (p.stem, len(body.splitlines()), body))
             self.con.execute("insert or replace into meta values('convo_imported', ?)", (str(len(files)),))
         if files:
             dest = self.repo.cdir / "convo.imported"
@@ -384,6 +441,41 @@ class NoteDB:
                     shutil.move(str(p), str(dest / p.name))
                 except OSError:
                     pass
+
+    def _adopt(self):
+        """One time, for a file from before the library: a saved log was a note of kind `log` and its conversation sat in `convo`. The note becomes a `savepoint` note, the
+        conversation a row of `log`, both get a shelf, and the notes made at that savepoint (they named it in `sources`) go on the shelf."""
+        if self._meta("shelved"):
+            return
+        c = self.con
+        with self._tx():
+            if self._meta("shelved"):
+                return
+            if c.execute("select 1 from sqlite_master where type='table' and name='convo'").fetchone():
+                c.execute("insert or ignore into log(id, n, body) select log_id, n, body from convo")
+                c.execute("drop table convo")
+            for pk, js in c.execute("select pk, json from note where kind='log' and scope='private'").fetchall():
+                try:
+                    d = json.loads(js)
+                except ValueError:
+                    continue
+                d["kind"] = "savepoint"
+                c.execute("update note set kind='savepoint', json=? where pk=?", (json.dumps(d, ensure_ascii=False), pk))
+            for pk, eid, branch, sha, created in c.execute("select pk, id, branch, sha, created from note where kind='savepoint' and scope='private' and shelf_id is null").fetchall():
+                c.execute("insert or ignore into log(id, branch, created) values (?,?,?)", (eid, branch or "", created or ""))
+                c.execute("update log set branch=?, created=? where id=? and branch=''", (branch or "", created or "", eid))
+                c.execute("insert or ignore into shelf(id, scope, author, branch, commit_id, created, log_id) values (?,?,?,?,?,?,?)",
+                          (eid, "private", self.repo.user, branch or "", sha or "", created or "", eid))
+                c.execute("update note set shelf_id=? where pk=?", (eid, pk))
+            shelves = {r[0] for r in c.execute("select id from shelf where scope='private'")}
+            for pk, js in c.execute("select pk, json from note where scope='private' and shelf_id is null").fetchall():
+                try:
+                    home = next((x for x in json.loads(js).get("sources") or [] if x in shelves), None)
+                except (ValueError, AttributeError):
+                    continue
+                if home:
+                    c.execute("update note set shelf_id=? where pk=?", (home, pk))
+            c.execute("insert or replace into meta values('shelved', '1')")
 
     # vectors: search by meaning ---------------------------------------------------------------------------------------------------
     @_closing
@@ -476,7 +568,7 @@ class NoteDB:
         out = {}
         for i in range(0, len(ids), CHUNK):
             part = list(ids[i:i + CHUNK])
-            q = ("select n.id, n.scope, n.author, n.ref, n.blob, coalesce(s.tip, ''), n.published_ref from note n left join shelf s on s.ref=n.ref "
+            q = ("select n.id, n.scope, n.author, n.ref, n.blob, case when n.scope='shared' then coalesce(s.tip, '') else '' end, n.published_ref from note n left join shelf s on s.id=n.shelf_id "
                  f"where n.id in ({_marks(len(part))}) order by n.scope != 'shared', n.ref")
             for eid, scope, author, ref, blob, tip, pub in self.con.execute(q, part):
                 out.setdefault(eid, {"scope": scope, "author": author, "ref": ref, "blob": blob, "tip": tip, "published_ref": pub})

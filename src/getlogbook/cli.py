@@ -304,8 +304,8 @@ def cmd_publish(a):
         e = r.get_private(eid)
         if not e:
             raise SystemExit(f"logbook: no private entry {eid}")
-        if e.kind == "log":
-            out(f"skipped {eid}: a log stays on this machine; only notes are published.")
+        if e.kind == "savepoint":
+            out(f"skipped {eid}: a savepoint note and its log stay on this machine; only notes are published.")
             continue
         c, found = share_copy(r, e, a.include_evidence, a.allow_table)
         dup = r.duplicate_of(c)
@@ -1075,7 +1075,7 @@ def build_parser():
     s.add_argument("what", nargs="+")
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--exact", action="store_true", help="match on words only, even when search by meaning is on")
-    s = add("log", cmd_log, "save a log: summarize this branch's session since the last one (private until you publish)")
+    s = add("log", cmd_log, "save a savepoint: keep the conversation as a log and take a shelf of notes from it (private until you publish)")
     s.add_argument("--no-model", action="store_true", help="put the summary together by code, without asking a model")
     s.add_argument("--no-observe", action="store_true", help="do not first observe the tool uses still queued")
     s.add_argument("--commit", help="the commit this savepoint is about (the git post-commit hook passes it)")
@@ -1106,8 +1106,8 @@ def build_parser():
     s = add("publish", cmd_publish, "share private entries (preview + redaction, per entry)")
     s.add_argument("ids", nargs="*")
     s.add_argument("--all", action="store_true", help="every private note not shared yet (same preview and one confirmation)")
-    s.add_argument("--branch", help="every private log and note filed under this branch (once it has been merged)")
-    s.add_argument("--merged", action="store_true", help="the logs and notes of every branch that looks merged into the main line")
+    s.add_argument("--branch", help="every private note filed under this branch (once it has been merged)")
+    s.add_argument("--merged", action="store_true", help="the notes of every branch that looks merged into the main line")
     s.add_argument("--yes", action="store_true")
     s.add_argument("--push", action="store_true")
     s.add_argument("--include-evidence", action="store_true")

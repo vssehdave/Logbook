@@ -172,7 +172,7 @@ def garbage(repo, views, days=None):
     days = int(days or repo.cfg().get("worker_days", RETENTION_DAYS))
     out = []
     for v in views:
-        if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "log":
+        if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "savepoint":
             continue  # a saved log is the person's record of a session: it is kept, never dropped as junk
         if v.get("obs"):
             continue  # a note made at a savepoint records what was learned or built: a file renamed or deleted later does not make it junk, and age alone does not either (statuses handle staleness)
@@ -281,7 +281,7 @@ def work(repo, call=None, now=time.time):
         views = tree.all_views(repo)[0]
         st = _state(repo)
         kinds = {v["id"]: v["kind"] for v in views}
-        cands = [c for c in candidates(repo, views) if c["mine"] and c["commits"] and kinds.get(c["id"]) != "log"  # a saved log is history, not a claim to keep true
+        cands = [c for c in candidates(repo, views) if c["mine"] and c["commits"] and kinds.get(c["id"]) != "savepoint"  # a savepoint note is history, not a claim to keep true
                  and st["judged"].get(c["id"]) != _fingerprint(c)][:MAX_JUDGED]
         if not cands:
             return {"skipped": "nothing new to judge"}
@@ -541,8 +541,8 @@ def queue_pass(repo):
     def wants(e):
         if e.status:
             return False  # decided below, once the notes are
-        if e.kind == "log":
-            return False  # logs and their conversations stay on this machine
+        if e.kind == "savepoint":
+            return False  # a savepoint note and its log stay on this machine
         if (views.get(e.id) or {}).get("status") == "resolved":
             return False
         if e.provenance == "user-written":

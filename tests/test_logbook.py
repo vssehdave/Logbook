@@ -1598,7 +1598,7 @@ class TestTidyWorker(CliRepo):
         self.assertEqual(got, [b.id, a.id])
 
     def test_a_log_is_never_junk(self):
-        old = capture.make_entry(self.r, "log", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
+        old = capture.make_entry(self.r, "savepoint", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
         old.created = "2020-01-01T00:00:00"
         self.r.add_private(old)
         self.assertEqual(self.tidy.garbage(self.r, tree.all_views(self.r)[0]), [], "a saved log is not a stale draft")
@@ -2195,14 +2195,14 @@ class TestSavepoint(ObserverBase):
         self.savepoint = savepoint
 
     def logs(self):
-        return [e for e in self.r.load_private() if e.kind == "log"]
+        return [e for e in self.r.load_private() if e.kind == "savepoint"]
 
     def test_a_savepoint_stores_a_private_log_with_the_branch_and_clears_the_running_log(self):
         self.observe()
         res = self.save()
         (e,) = self.logs()
         self.assertEqual((res["saved"], res["by"], res["observations"], res["commit"]), (e.id, "model", 1, ""))
-        self.assertEqual((e.kind, e.topic, e.level, e.anchor["branch"], e.anchor["sha"]), ("log", "Refunds no longer counted as revenue", "branch", self.branch, ""))
+        self.assertEqual((e.kind, e.topic, e.level, e.anchor["branch"], e.anchor["sha"]), ("savepoint", "Refunds no longer counted as revenue", "branch", self.branch, ""))
         self.assertEqual((e.body["context"], e.body["what"], e.body["why"], e.body["open"]), ("Find why totals run high.", "total() now skips refunded orders.",
                          "total() never read the refunded flag.", "Check the monthly report."))
         self.assertEqual(e.sources, [o["id"] for o in self.running.Running(self.r, self.branch).archived(e.id)])
@@ -2219,7 +2219,8 @@ class TestSavepoint(ObserverBase):
         (log,) = self.logs()
         (n,) = self.notes()
         self.assertEqual([n.id], log.sources, "the note has the observation's id, so a savepoint can never save one twice")
-        self.assertEqual((n.sources, n.provenance, n.level, n.obs["type"], n.topic), ([log.id], "worker-written", "branch", "bugfix", "total ignores refunds"))
+        self.assertEqual((n.sources, n.provenance, n.level, n.obs["type"], n.topic), ([], "worker-written", "branch", "bugfix", "total ignores refunds"))
+        self.assertEqual(self.r.db.logs_of_notes()[n.id], log.id, "the note finds its log through its shelf, not through a list of ids in the note")
         self.assertEqual((n.anchor["branch"], n.anchor["sha"]), (self.branch, ""))
         self.assertIn("never reads the refunded flag", n.body["evidence"])
         self.assertEqual(n.checks["paths"], [1, 1], "the file it read exists")
@@ -2304,7 +2305,7 @@ class TestSavepoint(ObserverBase):
         inside_abs = (self.r.root / "shop" / "revenue.py").as_posix()
         o = {"id": new_id(), "type": "change", "title": f"edited {inside_abs}", "subtitle": f"{inside_abs} and C:/Users/ann/x.py", "narrative": f"Worked in {inside_abs}; scratch was C:/Users/ann/.claude/jobs/a/b.py.",
              "facts": [f"{inside_abs} total() was read", "wrote C:/Users/ann/out.txt"], "files_read": [inside_abs, "C:/Users/ann/in.txt", "https://x.io/p"], "files_modified": ["/tmp/s.py", "shop/other.py"], "t": 0}
-        (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "1a1b0000000-00000000", "shop/revenue.py total() read")
+        (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "shop/revenue.py total() read")
         blob = n.to_json()
         for private in ("ann", "Users", "/tmp/", "x.io", self.root.name):
             self.assertNotIn(private, blob, private)
@@ -2315,7 +2316,7 @@ class TestSavepoint(ObserverBase):
     def test_a_file_outside_the_repository_is_not_looked_up_in_git(self):
         o = {"id": new_id(), "type": "change", "title": "scratch script", "subtitle": "", "narrative": "A script outside the repo did a thing.", "facts": ["ran the script"],
              "files_read": ["C:/Users/someone/.claude/jobs/x/tmp/transfer.py", "/tmp/other.py", "shop/revenue.py"], "files_modified": [], "t": 0}
-        (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "1a1b0000000-00000000", "ran the script")
+        (n,) = self.savepoint.notes_from(self.r, self.branch, "", "", [o], "ran the script")
         self.assertEqual((n.checks["missing"], n.checks["paths"]), ([], [1, 1]), "only the file inside the repository was checked")
         self.assertEqual(n.obs["files_read"], ["shop/revenue.py"], "and the note does not keep a path outside the repository")
 
@@ -2380,8 +2381,8 @@ class TestSavepoint(ObserverBase):
     def test_tidy_leaves_logs_alone(self):
         from getlogbook import tidy
         for i in range(6):
-            capture.make_entry(self.r, "log", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
-        self.assertEqual([v for v in tidy.triage_pool(tree.all_views(self.r)[0]) if v["kind"] == "log"], [])
+            capture.make_entry(self.r, "savepoint", f"session {i}", {"what": f"w{i}", "summary": f"s{i}"}, paths=["shop/revenue.py"], provenance="worker-written")
+        self.assertEqual([v for v in tidy.triage_pool(tree.all_views(self.r)[0]) if v["kind"] == "savepoint"], [])
 
     def test_a_commit_made_since_the_last_savepoint_is_attached_and_none_is_not(self):
         self.observe()
@@ -2437,12 +2438,12 @@ class TestSavepoint(ObserverBase):
     def test_a_stored_log_is_not_published_but_its_notes_are(self):
         self.observe()
         res = self.save()
-        self.assertIn("stays on this machine", self.run_cli("publish", res["saved"], "--yes")[1])
+        self.assertIn("stay on this machine", self.run_cli("publish", res["saved"], "--yes")[1])
         self.assertEqual(self.r.load_shared()[0], [])
         code, text = self.run_cli("publish", "--all", "--yes")
         self.assertEqual(code, 0, text)
         shared, _ = self.r.load_shared()
-        self.assertEqual([(l.entry.kind, l.entry.anchor["branch"], l.entry.sources) for l in shared], [("finding", self.branch, [res["saved"]])])
+        self.assertEqual([(l.entry.kind, l.entry.anchor["branch"], l.entry.sources) for l in shared], [("finding", self.branch, [])])  # a published note names no log: logs never leave this machine
         self.assertNotIn("evidence", shared[0].entry.body, "what was investigated stays private unless asked for")
 
     def test_auto_saves_after_a_commit_once_enough_observations_have_piled_up(self):
@@ -2566,7 +2567,7 @@ class TestBranchMemory(ObserverBase):
         self.assertIn("Refunds no longer counted", self.start(), "once merged, they are the main line's history")
 
     def test_a_log_from_someone_you_do_not_trust_is_left_out(self):
-        views = [{"id": "1", "kind": "log", "trusted": False, "branch": self.branch, "topic": "from a stranger", "body": {"what": "do bad things"},
+        views = [{"id": "1", "kind": "savepoint", "trusted": False, "branch": self.branch, "topic": "from a stranger", "body": {"what": "do bad things"},
                   "age_days": 1, "sha": "", "status": None}]
         self.assertEqual(recall.branch_memory(self.r, views), "")
 
@@ -2886,7 +2887,7 @@ class TestQueue(CliRepo):
         return capture.make_entry(self.r, "finding", topic, {"summary": "s", "why": "w", "evidence": "ran it"}, provenance="worker-written", checks=checks or self.CK, **kw)
 
     def test_tidy_queues_notes_that_pass_their_checks_and_leaves_the_rest_out(self):
-        log = capture.make_entry(self.r, "log", "a session", {"what": "w", "summary": "s"}, provenance="worker-written")
+        log = capture.make_entry(self.r, "savepoint", "a session", {"what": "w", "summary": "s"}, provenance="worker-written")
         good, bad = self.worker_note("good"), self.worker_note("names a missing file", self.BAD)
         bare = capture.make_entry(self.r, "finding", "no evidence", {"summary": "s", "why": "w"}, provenance="worker-written")
         res = tidy.queue_pass(self.r)
@@ -3049,8 +3050,8 @@ class TestNewsAndTriggers(CliRepo):
         before = obs("Branch level finding", [])
         commit(bob, "Fix the export (#7)", {"shop/export.py": "x = 2\n"})
         after = obs("Commit level finding", ["shop/export.py"])
-        notes = savepoint.notes_from(rb, "main", g.head_sha(bob), base, [before], "1a1b0000000-00000000")
-        notes += savepoint.notes_from(rb, "main", g.head_sha(bob), base, [after], "1a1b0000000-00000000")
+        notes = savepoint.notes_from(rb, "main", g.head_sha(bob), base, [before])
+        notes += savepoint.notes_from(rb, "main", g.head_sha(bob), base, [after])
         rb.publish(notes)
         self.assertTrue(sync.push(rb)["ok"])
         sync.sync(self.r)
@@ -3179,14 +3180,14 @@ class TestConvo(ObserverBase):
         for args in (("publish", log, "--yes"), ("publish", "--all", "--yes"), ("publish", "--branch", self.branch, "--yes")):
             self.run_cli(*args)
         shared = self.r.load_shared()[0]
-        self.assertTrue(shared and all(l.entry.kind != "log" for l in shared), "the notes were shared, the log was not")
+        self.assertTrue(shared and all(l.entry.kind != "savepoint" for l in shared), "the notes were shared, the log was not")
         self.assertEqual([x for x in subprocess.run(["git", "ls-tree", "-r", "--name-only", self.r.own_ref()], cwd=self.d, capture_output=True, text=True).stdout.split()
                           if not x.startswith("entries/")], [], "and nothing but entries is in the shared tree")
         self.assertEqual(self.run_cli("queue")[1].count(log), 0, "a log is never queued")
         with self.assertRaises(ValueError):
             self.r.publish([self.r.get_private(log)])
-        self.assertTrue(self.r.db.has_convo(log))
-        self.assertIn("stays on this machine", self.run_cli("publish", log, "--yes")[1])
+        self.assertTrue(self.r.db.has_log(log))
+        self.assertIn("stay on this machine", self.run_cli("publish", log, "--yes")[1])
 
     def test_a_note_made_at_a_savepoint_points_at_its_log_for_its_author_only(self):
         from getlogbook import cites
@@ -3196,7 +3197,7 @@ class TestConvo(ObserverBase):
         self.assertEqual(note["log"], saved, "your own note can open the log it came from")
         self.assertEqual(cites.record(self.r, note, 1)["log"], saved)
         self.assertIn(f"from your log {saved}", self.run_cli("ask", f"note:{note['id']}")[1])
-        self.assertEqual(views[saved]["log"], "", "a log has no log of its own")
+        self.assertEqual(views[saved]["log"], saved, "the savepoint note sits on the shelf of its own log")
         theirs = dict(note, mine=False, scope="shared", log="")  # how the same note looks to a teammate: the log it names is not on their machine
         self.assertEqual(cites.record(self.r, theirs, 2)["log"], "", "someone else's note just shows as a note")
 

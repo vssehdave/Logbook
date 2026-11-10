@@ -5,7 +5,7 @@ Two hooks feed it, with no model and no git process: the prompt hook (the person
 (a task notice, a system reminder) is skipped. Everything is redacted before it is written, so a secret pasted into a prompt is not stored at all.
 
     .git/logbook/running/<branch>/talk.jsonl   one line per message, only ever appended
-    notes.sqlite, table `convo`                the messages one savepoint covers, trimmed to fit (older versions: .git/logbook/convo/<log id>.jsonl)
+    library.sqlite, table `log`                the messages one savepoint covers, trimmed to fit (older versions: .git/logbook/convo/<log id>.jsonl)
 
 All of it stays on this machine, like the log it belongs to: logs and conversations are never published, so nobody else's repository carries them. A conversation too
 long for the cap keeps its beginning and its end and says how many messages were left out.
@@ -106,12 +106,10 @@ def fit(messages, cap=MAX_CONVO):
     return head + [gap] + tail[::-1]
 
 
-def save(repo, log_id, messages):
-    """Keep the conversation a savepoint covers, privately. Returns the number of messages stored (0 when there were none)."""
-    if not messages:
-        return 0
-    lines = fit(messages)
-    repo.db.save_convo(log_id, lines)
+def save(repo, log_id, messages, branch="", created=""):
+    """Keep the conversation a savepoint covers as a log, privately, filed under its branch. A log with no messages is still kept: its shelf points at it. Returns the number of messages stored."""
+    lines = fit(messages) if messages else []
+    repo.db.add_log(log_id, lines, branch, created)
     return len(lines)
 
 
@@ -129,4 +127,4 @@ def parse(data):
 
 def load(repo, log_id):
     """The messages of a log's conversation. [] when there is none (a log you did not save here has none)."""
-    return parse(repo.db.load_convo(log_id))
+    return parse(repo.db.load_log(log_id))

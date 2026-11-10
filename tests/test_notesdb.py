@@ -32,13 +32,13 @@ class TestPrivateStore(DbBase):
 
     def test_files_an_older_version_wrote_are_imported_once_and_set_aside(self):
         e = Entry(id="18bcfe5917f-873b8d63", topic="old note", body={"summary": "s", "why": "w"}, provenance="user-written", v=2)
-        log = Entry(id="18bcfe5917f-873b8d64", kind="log", topic="a savepoint", body={"summary": "what the session did"}, v=2)
+        log = Entry(id="18bcfe5917f-873b8d64", kind="savepoint", topic="a savepoint", body={"summary": "what the session did"}, v=2)
         self.r.pdir.mkdir(parents=True, exist_ok=True)
         for x in (e, log):
             (self.r.pdir / f"{x.id}.json").write_text(x.to_json(), encoding="utf-8")
         fresh = Repo(self.d)  # a new process: nothing has opened the database yet
         self.assertEqual(fresh.get_private(e.id).topic, "old note")
-        self.assertEqual((fresh.get_private(log.id).kind, fresh.get_private(log.id).body["summary"]), ("log", "what the session did"), "a log is kept like any private entry")
+        self.assertEqual((fresh.get_private(log.id).kind, fresh.get_private(log.id).body["summary"]), ("savepoint", "what the session did"), "a log is kept like any private entry")
         self.assertFalse((self.r.pdir / f"{e.id}.json").exists())
         self.assertTrue((self.r.cdir / "private.imported" / f"{e.id}.json").exists(), "nothing is deleted")
         self.assertEqual(len(Repo(self.d).load_private()), 2, "a second open does not import again")
