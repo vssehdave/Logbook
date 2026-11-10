@@ -275,13 +275,14 @@ def digest(repo, event, prompt="", files=(), session="", cap=DEFAULT_CAP):
         sum_blocks, used_sum, mem = [], [], ""
     foot_extra = ""
     out, used = [], list(used_sum)
+    branch_now = g.branch(repo.root) if session else ""  # a chat is filed under the branch it was on when it first cited something
     for v in cands[:5]:
         n = cites.peek(repo, session, v["id"]) if session else len(out) + 1  # a number is kept for the whole chat
         block = _fmt(n, v, cites.source_line(repo, v), commit_message(repo, v))
         if len(head) + sum(len(b) + 1 for b in out) + len(block) + 200 > cap:
             break
         if session:
-            cites.number(repo, session, v["id"])
+            cites.number(repo, session, v["id"], branch_now)
         out.append(block)
         used.append(v["id"])
     not_shown = len(cands) - len(out)

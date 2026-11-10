@@ -3216,5 +3216,35 @@ class TestConvo(ObserverBase):
         self.assertEqual(self.r.cfg()["display"], "after", "outside the block every call reads the file")
 
 
+class TestChatCitations(CliRepo):
+    def test_a_chat_has_its_own_page_that_opens_with_its_first_citation_and_is_archived_when_it_ends(self):
+        import sqlite3
+        from getlogbook import cites
+        self.assertEqual(cites.latest_session(self.r), "", "no chat yet")
+        self.assertEqual(cites.number(self.r, "chat-a", "n1", "feat/x"), 1)
+        self.assertEqual([cites.number(self.r, "chat-a", x) for x in ("n2", "n1")], [2, 1], "a note keeps its number for the whole chat")
+        self.assertEqual(cites.number(self.r, "chat-b", "n2"), 1, "another chat starts again at one")
+        self.assertEqual((cites.status(self.r, "chat-a"), cites.latest_session(self.r)), ("open", "chat-b"))
+        row = self.r.db.con.execute("select branch, status from chat where id='chat-a'").fetchone()
+        self.assertEqual(row, ("feat/x", "open"), "the chat is filed under the branch it was on")
+        cites.archive(self.r, "chat-a")
+        self.assertEqual(cites.status(self.r, "chat-a"), "archived")
+        self.assertEqual(self.r.db.cite_items("chat-a"), {"n1": 1, "n2": 2}, "archiving keeps the page")
+        cites.number(self.r, "chat-a", "n3")
+        self.assertEqual((cites.status(self.r, "chat-a"), cites.latest_session(self.r)), ("open", "chat-a"), "a resumed chat opens again")
+
+    def test_a_citation_names_a_chat_that_exists_and_cites_json_says_whether_it_is_over(self):
+        import sqlite3
+        from getlogbook import cites
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.r.db.con.execute("insert into cite(chat_id, n, note_id) values ('no-chat', 1, 'x')")
+        self.r.add_private(capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"], provenance="user-written"))
+        note = self.r.load_private()[0].id
+        cites.number(self.r, "chat-j", note)
+        cites.archive(self.r, "chat-j")
+        data = json.loads(self.run_cli("cites", "--session", "chat-j", "--json")[1])
+        self.assertEqual((data["session"], data["status"], [s["n"] for s in data["sources"]]), ("chat-j", "archived", [1]))
+
+
 if __name__ == "__main__":
     unittest.main()
