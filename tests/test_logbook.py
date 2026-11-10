@@ -14,10 +14,12 @@ SRC = os.environ.get("LOGBOOK_SRC") or str(Path(__file__).resolve().parents[1] /
 sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
+os.environ["LOGBOOK_OFFLINE"] = "1"  # no test downloads the model or installs a plugin
+os.environ["LOGBOOK_GITHUB_LOGIN"] = ""  # no test asks `gh` who you are
 for _k in [k for k in os.environ if k.startswith("CLAUDE")]:  # run from inside Claude Code, these would make every note look agent-written
     del os.environ[_k]
 
-from getlogbook import capture, cli, ground, recall, safety, sync, tidy, tree  # noqa: E402
+from getlogbook import capture, cli, ground, recall, safety, store, sync, tidy, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
 from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
@@ -477,7 +479,7 @@ class TestInstaller(Base):
         self.assertIn("logbook:start", real.read_text())
 
     def test_doctor_reports_install_state(self):
-        self.run_cli("setup", "--dry-run")  # creates your id and installs nothing
+        Repo(self.d).init()  # your id, and nothing installed
         _, before = self.run_cli("status", "--check")
         self.assertRegex(before, r"claude-code\s*: missing")
         self.run_cli("setup", "--yes")
@@ -3244,6 +3246,92 @@ class TestChatCitations(CliRepo):
         cites.archive(self.r, "chat-j")
         data = json.loads(self.run_cli("cites", "--session", "chat-j", "--json")[1])
         self.assertEqual((data["session"], data["status"], [s["n"] for s in data["sources"]]), ("chat-j", "archived", [1]))
+
+
+class TestPluginAndModelAtSetup(CliRepo):
+    def run_setup(self, installed_after, listed_before, present=True):
+        """Run `setup --yes` for Claude Code with a fake `claude` command and a fake model; returns the exit code, the text, the commands it was given and the model loader."""
+        from getlogbook import embed
+        calls, state = [], {"list": listed_before}
+
+        def fake_claude(*args, timeout=0):
+            calls.append(args)
+            if args[:2] == ("plugin", "list"):
+                return 0, state["list"]
+            if args[:2] == ("plugin", "install"):
+                state["list"] = installed_after
+            return 0, ""
+
+        env = {k: v for k, v in os.environ.items() if k != "LOGBOOK_OFFLINE"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True), unittest.mock.patch("getlogbook.install._claude", fake_claude), \
+                unittest.mock.patch("shutil.which", lambda name: "claude" if present else None), unittest.mock.patch.object(embed, "load", return_value=object()) as load:
+            code, text = self.run_cli("setup", "--yes", "--agent", "claude-code")
+        return code, text, calls, load
+
+    def test_setup_installs_the_plugin_when_it_is_missing_and_fetches_the_model(self):
+        code, text, calls, load = self.run_setup(installed_after='[{"id": "logbook@logbook"}]', listed_before="[]")
+        self.assertEqual(code, 0, text)
+        self.assertIn("Claude Code plugin logbook@logbook", text)
+        self.assertIn(("plugin", "marketplace", "add", "vssehdave/Logbook"), calls)
+        self.assertIn(("plugin", "install", "logbook@logbook"), calls)
+        self.assertIn("installed the Claude Code plugin", text)
+        self.assertTrue(load.called)
+        self.assertIn("search by meaning is ready", text)
+
+    def test_setup_leaves_an_installed_plugin_alone_and_does_nothing_without_claude(self):
+        _, text, calls, _ = self.run_setup(installed_after="", listed_before='[{"id": "logbook@logbook"}]')
+        self.assertNotIn(("plugin", "install", "logbook@logbook"), calls)
+        _, text, calls, _ = self.run_setup(installed_after="", listed_before="[]", present=False)
+        self.assertEqual(calls, [])
+
+
+class TestSyncWithoutARemote(CliRepo):
+    def test_a_repo_with_no_remote_has_nothing_to_sync_and_that_is_fine(self):
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn("no remote named 'origin'", text)
+        self.assertIn("stay on this machine", text)
+        code, text = self.run_cli("sync", "--json")
+        self.assertEqual((code, json.loads(text)["fetch"]["ok"]), (0, True))
+
+
+class TestGithubIdentity(Base):
+    def fresh(self, email="f@x.io"):
+        d = make_repo(self.root, "fresh", email)
+        self.cd(d)
+        return d
+
+    def test_your_github_login_is_what_teammates_see_and_your_id_stays_a_stable_hash(self):
+        d = self.fresh()
+        with unittest.mock.patch.dict(os.environ, {"LOGBOOK_GITHUB_LOGIN": "Alice-Dev"}):
+            c = Repo(d).init()
+        self.assertEqual((c["github"], c["display"]), ("Alice-Dev", "Alice-Dev"))
+        self.assertEqual(c["user"], store.user_id("f@x.io"), "the id is still the hash: refs and the committer trust rule depend on it")
+
+    def test_the_login_is_found_without_the_network_from_git_config_or_a_noreply_email(self):
+        d = self.fresh("12345+bobby@users.noreply.github.com")
+        with unittest.mock.patch.dict(os.environ):
+            del os.environ["LOGBOOK_GITHUB_LOGIN"]
+            self.assertEqual(store.github_login(d), "bobby")
+            sh("git", "config", "github.user", "robert", cwd=d)
+            self.assertEqual(store.github_login(d), "robert", "an explicit git setting wins")
+            sh("git", "config", "github.user", "not a login!", cwd=d)
+            self.assertEqual(store.github_login(d), "bobby", "a value that is not a GitHub login is ignored")
+
+    def test_with_no_login_anywhere_you_are_shown_by_your_git_name(self):
+        d = self.fresh()
+        c = Repo(d).init()
+        self.assertNotIn("github", c)
+        self.assertEqual(c["display"], g.config_get(d, "user.name"))
+
+    def test_a_dry_run_of_setup_writes_nothing_not_even_your_id(self):
+        d = self.fresh()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(cli.main(["setup", "--dry-run", "--agent", "agents-md"]), 0)
+        self.assertIn("(dry run) setup would create your id", buf.getvalue())
+        self.assertFalse((Repo(d).cdir / "config.json").exists())
+        self.assertEqual(Repo(d).cfg().get("user", ""), "")
 
 
 if __name__ == "__main__":

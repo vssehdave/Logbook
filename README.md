@@ -236,13 +236,12 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
 New teammate: clone, then `logbook setup`. A plain `git clone`/`git fetch` does not download logbook refs.
 CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/log/*'` (opt in; off by default).
 
-## Search by meaning (optional)
+## Search by meaning
 
-`logbook ask "why do totals lose a cent"` matches words. With the extra installed it can also match meaning, so it finds "refund rounding drops a cent" without sharing a word:
-
-    pip install "getlogbook[semantic]"      # all-MiniLM-L6-v2 on the CPU (a 90 MB download, once)
-    logbook index                           # embeds your notes and logs (a few hundred per second); `--rebuild` starts over
-    logbook config semantic on              # `logbook ask` now ranks by words and meaning together; `--exact` is words only
+`logbook ask "why do totals lose a cent"` matches words. It also matches meaning, so it finds "refund rounding drops a cent" without sharing a word. Everything it needs comes with
+`pip install getlogbook` (onnxruntime, tokenizers, huggingface_hub, numpy), and `logbook setup` fetches the model once (all-MiniLM-L6-v2 on the CPU, a 90 MB download). If that
+download fails (no network), `ask` still matches words and `logbook index` tries again. `logbook index` embeds notes written since the last time (`--rebuild` starts over);
+`logbook config semantic off` turns meaning off, and `ask --exact` is words only for one search.
 
 The vectors live in the local database only (`library.sqlite`), are never published, and can be rebuilt from the notes at any time. They only choose which notes are looked at: every hit
 is a stored note and is shown with its author, whether you trust them, whether it carries evidence, and where it is held (`shelf <author>/000000, blob <id>, the same note is in git`, or
