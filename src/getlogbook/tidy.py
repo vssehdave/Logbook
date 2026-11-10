@@ -571,7 +571,7 @@ def gate(repo, call=None, now=time.time):
     from . import sync
     if "origin" in sync.remotes(repo):
         try:
-            sync.sync(repo, "origin", fetch_only=True)
+            sync.sync(repo, "origin")
         except (SystemExit, OSError, ValueError):
             pass
     res = {"triage": triage(repo, call, now, apply=True)}

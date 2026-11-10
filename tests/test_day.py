@@ -353,7 +353,7 @@ class TestADay(unittest.TestCase):
 
         # 4. the second person pulls and starts a session on main
         T.sh("git", "pull", "-q", "origin", "main", cwd=B)
-        self.assertEqual(self.run_cli(B, "sync", "--fetch-only")[0], 0)
+        self.assertEqual(self.run_cli(B, "sync")[0], 0)
         start = self.hook(B, "SessionStart", "b1")
         self.assertNotIn("saved log", start, "alice's logs never reach bob")
         alice_private = {e.id for e in ra.load_private()}
@@ -398,7 +398,7 @@ class TestADay(unittest.TestCase):
         self.assertEqual(running.Running(ra, "feat/b").pending_bytes(), 0)
         before = (len(ra.all_entries()), self.model_calls())
         self.run_cli(A, "tidy", "--work", "--quiet")
-        self.run_cli(A, "sync", "--fetch-only")
+        self.run_cli(A, "sync")
         self.assertEqual((len(ra.all_entries()),), before[:1], "tidy and sync twice more change nothing")
         self.invariants("end of day")
         led = worker.ledger(ra)

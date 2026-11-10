@@ -28,7 +28,6 @@ _REF_RE = re.compile(r"/(?:branch)?log/([0-9a-f]{6,16})/([0-9a-f]{2,16})$")
 # 0.0.2 readers match it, and git refuses `log/<user>` next to `log/<user>/<device>`, so the path shape cannot change.
 SHELF = "000000"
 PUBLISH_MODES = ("manual", "ask", "auto")  # least to most hands-off
-LEGACY_MODES = {"never": "manual", "claude": "ask"}  # the 0.0.4 names, read as their nearest new mode
 MAX_BLOB = 65536
 MAX_PER_REF = 5000
 DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "named",
@@ -175,11 +174,10 @@ class Repo:
 
     def publish_mode(self):
         """How logs and notes are saved and shared: manual (you run `logbook log` and `logbook publish`), ask (the agent asks you, then runs them; the
-        default), auto (it saves and publishes by itself). A repo policy that turns publishing off wins and reads as "never"; 0.0.4's names still read."""
+        default), auto (it saves and publishes by itself). A repo policy that turns publishing off wins and reads as "never"."""
         if not self.policy().get("publish", True):
             return "never"
         mode = self.cfg().get("publish", "ask")
-        mode = LEGACY_MODES.get(mode, mode)
         return mode if mode in PUBLISH_MODES else "ask"
 
     def committers(self):

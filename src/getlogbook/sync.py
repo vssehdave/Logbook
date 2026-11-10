@@ -121,8 +121,8 @@ def push(repo, remote="origin", force=False):
     return {"ok": False, "error": err.strip(), "ref": ref}
 
 
-def sync(repo, remote="origin", fetch_only=True, depth=None):
-    """Fetch what teammates shared and merge your own shelf's two copies. It never pushes (`publish` does); `fetch_only` is kept for older callers.
+def sync(repo, remote="origin", depth=None):
+    """Fetch what teammates shared and merge your own shelf's two copies. It never pushes (`publish` does).
     The result has "news": what is new from teammates since the last look (also kept for the next prompt, see news.py)."""
     from . import news
     out = {"fetch": fetch(repo, remote, depth)}

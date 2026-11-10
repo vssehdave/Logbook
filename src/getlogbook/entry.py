@@ -123,15 +123,14 @@ def from_dict(d):
     a = d.get("anchor") if isinstance(d.get("anchor"), dict) else {}
     anchor = {k: _s(a.get(k), 300) for k in ("sha", "tree", "parent", "patch_id", "range_pid", "branch", "merge_base", "base", "subject",
                                               "date", "pr")}
-    # "models" is the 0.0.1 spelling of "names"; those files are already on people's refs
-    anchor.update(paths=_strs(a.get("paths")), names=_strs(a.get("names") or a.get("models")),
+    anchor.update(paths=_strs(a.get("paths")), names=_strs(a.get("names")),
                   old_paths=_strs(a.get("old_paths")), dirty=bool(a.get("dirty")))
     for k in ("sha", "tree", "parent", "merge_base"):  # these reach git as arguments: a value like "--output=<file>" would make it write one
         if anchor.get(k) and not HEX_RE.match(anchor[k]):
             anchor[k] = ""
     kind = d.get("kind") if d.get("kind") in KINDS else "finding"
     prov = d.get("provenance")
-    prov = "auto-copied" if prov == "inferred" or prov not in PROVENANCE else prov  # "inferred" was the 0.0.1 spelling
+    prov = "auto-copied" if prov not in PROVENANCE else prov
     version = d.get("v") if d.get("v") in (1, 2) else 1  # 2: the provenance says who really wrote it; 1 claimed "agent-written" for everyone
     return Entry(id=d["id"], kind=kind, topic=_s(d.get("topic"), 200),
                  body={k: _s(body.get(k), field_cap(k)) for k in BODY_FIELDS if body.get(k)},

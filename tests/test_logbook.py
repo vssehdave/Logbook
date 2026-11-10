@@ -119,17 +119,6 @@ class TestEntry(unittest.TestCase):
         self.assertNotIn("obs", from_dict({"id": new_id()}).to_dict(), "an ordinary note's file stays as it was")
         self.assertEqual(from_dict(json.loads(e.to_json())).obs, e.obs)
 
-    def test_0_0_1_entry_still_loads(self):
-        """Files written by 0.0.1 carry anchor.models; they must load with the same names under the new key."""
-        old = {"id": new_id(), "kind": "finding", "topic": "late payments", "body": {"summary": "s", "why": "w"},
-               "anchor": {"sha": "a" * 40, "paths": ["models/marts/fct_x.sql"], "models": ["fct_x"], "layers": ["mart"]},
-               "provenance": "agent-written"}
-        e = from_dict(old)
-        self.assertEqual(e.anchor["names"], ["fct_x"])
-        self.assertNotIn("models", e.anchor)
-        self.assertNotIn("layers", e.anchor)
-
-
 class TestSync(Base):
     def setup_alice(self):
         self.remote = self.bare()
@@ -152,11 +141,11 @@ class TestSync(Base):
         rb = Repo(bob)
         rb.init()
         self.assertTrue(g.is_shallow(bob))
-        self.assertEqual(sync.sync(rb, fetch_only=True, depth=1)["entries"], 1)
+        self.assertEqual(sync.sync(rb, depth=1)["entries"], 1)
         self.ra.purge(e.id)
         # the rewritten shelf diverges from the remote: push fetches, merges (the tombstone wins) and pushes with a lease
         self.assertTrue(sync.push(self.ra)["ok"])
-        sync.sync(rb, fetch_only=True, depth=1)
+        sync.sync(rb, depth=1)
         self.assertEqual(rb.all_entries(), [])
 
     def test_committers_are_trusted_other_writers_are_not(self):
@@ -200,7 +189,7 @@ class TestSync(Base):
         carol = make_repo(self.root, "carol", "c@x.io", self.remote)
         rc = Repo(carol)
         rc.init()
-        sync.sync(rc, fetch_only=True)
+        sync.sync(rc)
         self.assertEqual(len(rc.all_entries()), 1)
 
 
@@ -767,7 +756,7 @@ class TestCliSanitises(Base):
         b = make_repo(self.root, "b", "b@x.io", remote)
         rb = Repo(b)
         rb.init()
-        sync.sync(rb, fetch_only=True)
+        sync.sync(rb)
         self.cd(b)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1070,15 +1059,6 @@ class TestPublishModes(CliRepo):
             self.run_cli("config", "publish", "sometimes")
         self.assertEqual(json.loads(self.run_cli("cites", "--json")[1])["mode"], "manual")
 
-    def test_the_0_0_4_names_are_read_as_their_nearest_mode(self):
-        c = self.r.cfg()
-        for old, new in (("never", "manual"), ("claude", "ask"), ("ask", "ask"), ("auto", "auto")):
-            c["publish"] = old
-            self.r.save_cfg(c)
-            self.assertEqual(self.r.publish_mode(), new, old)
-        self.mode("claude")
-        self.assertEqual(self.r.cfg()["publish"], "ask", "a name typed the old way is stored the new way")
-
     def test_manual_lets_you_publish_by_hand_and_a_policy_that_turns_publishing_off_refuses(self):
         e = capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
         self.mode("manual")
@@ -1152,11 +1132,11 @@ class TestGrounding(CliRepo):
         """Claude Code refuses a shell command holding a brace and a quote (it looks like obfuscation) until a person approves it, so an agent
         cannot save a JSON note unattended. Key: value lines have neither."""
         text = ("kind: finding\ntopic: refund sum\nsummary: `total()` sums rows,\n  and nothing filters refunds\nwhy: no filter\n"
-                "paths: shop/revenue.py, shop/other.py\nevidence: ran total() on a refunded order\nsupersedes:\nbefore_commit: no\n")
+                "paths: shop/revenue.py, shop/other.py\nevidence: ran total() on a refunded order\nsupersedes:\n")
         self.assertNotIn("{", text)
         obj = cli._parse_fields(text)
         self.assertEqual(obj["summary"], "`total()` sums rows,\n  and nothing filters refunds")
-        self.assertEqual((obj["paths"], obj["supersedes"], "before_commit" in obj), (["shop/revenue.py", "shop/other.py"], [], False), "a stale before_commit line is accepted and ignored")
+        self.assertEqual((obj["paths"], obj["supersedes"]), (["shop/revenue.py", "shop/other.py"], []))
         code, out = self.run_cli("note", "--fields", stdin=text)
         self.assertIn("recorded", out)
         (e,) = self.r.load_private()
@@ -1626,7 +1606,7 @@ class TestTidyWorker(CliRepo):
     def test_the_pull_hook_starts_the_tidy_pass_in_ask_and_auto_mode_only(self):
         import unittest.mock
         from getlogbook import hookmain
-        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("ask", ["tidy", "--work", "--quiet", "--no-judge"]), ("auto", ["tidy", "--work", "--quiet", "--no-judge"])):
+        for mode, expect in (("manual", ["sync"]), ("ask", ["tidy", "--work", "--quiet", "--no-judge"]), ("auto", ["tidy", "--work", "--quiet", "--no-judge"])):
             self.run_cli("config", "publish", mode)
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 hookmain.run(["post-merge"])
@@ -2661,7 +2641,7 @@ class TestPublishByBranch(CliRepo):
         self.run_cli("config", "publish", "manual")
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             hookmain.run(["post-merge"])
-        self.assertEqual(spawn.call_args.args[0][-2:], ["sync", "--fetch-only"], "a pull never pushes")
+        self.assertEqual(spawn.call_args.args[0][-1:], ["sync"], "a pull never pushes")
         self.run_cli("uninstall", "--yes", "--agent", "claude-code")
         self.assertFalse((hooks / "post-merge").exists() or (hooks / "post-rewrite").exists())
 
@@ -2669,7 +2649,7 @@ class TestPublishByBranch(CliRepo):
         import unittest.mock
         with unittest.mock.patch.object(sync, "remotes", lambda r: ["origin"]), unittest.mock.patch.object(sync, "sync") as run:
             self.run_cli("tidy")
-            self.assertEqual(run.call_args.kwargs, {"fetch_only": True}, "pull-only")
+            self.assertEqual(run.call_args.args[1:], ("origin",), "tidy fetches first; a sync never pushes")
             run.reset_mock()
             self.run_cli("tidy", "--no-sync")
             self.assertEqual(run.call_count, 0)
@@ -2731,7 +2711,7 @@ class TestShelf(Base):
     def reader(self):
         r = Repo(make_repo(self.root, "carol", "c@x.io", self.remote))
         r.init()
-        sync.sync(r, fetch_only=True)
+        sync.sync(r)
         return {l.entry.id for l in r.all_entries()}
 
     def test_two_machines_of_one_person_share_one_shelf_and_merge(self):
