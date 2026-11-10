@@ -1,7 +1,7 @@
 """Citations: the numbered sources behind an answer.
 
 When notes are put in front of an agent they get a number that stays the same for the rest of that chat (¹, ², ³ ...), kept in
-the library (tables `chat` and `cite`: a chat is open while it goes and archived when its session ends). The agent cites a note by writing its number after the claim. This module turns a number back
+the library (tables `chat` and `cite`; the page of a chat with no citation for 20 days is archived, see NoteDB.archive_stale_chats). The agent cites a note by writing its number after the claim. This module turns a number back
 into what a reader needs: the header, a link to the commit or pull request, who wrote it and when.
 
 A link and an author are shown only for notes a teammate shared. Your own notes and private notes need no source line. A shared note
@@ -39,17 +39,6 @@ def peek(repo, session, note_id):
 def number(repo, session, note_id, branch=""):
     """The number of a note in this chat, giving it the next one the first time it is shown (and opening the chat, with the branch it is on)."""
     return repo.db.cite_number(_chat(session), note_id, branch)
-
-
-def archive(repo, session):
-    """The session ended: its citations page is kept, marked archived (it opens again if the chat is resumed and cites something)."""
-    if session:
-        repo.db.end_chat(_chat(session))
-
-
-def status(repo, session):
-    """'open', 'archived', or '' for a chat with no citations."""
-    return repo.db.chat_status(_chat(session))
 
 
 def latest_session(repo):
