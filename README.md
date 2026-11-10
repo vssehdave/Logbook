@@ -8,7 +8,7 @@ particular stack.
 - Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, and no key: the optional observer uses your own `claude -p`.
   The agent writes the notes; the observer and `logbook log` ask a cheap model to condense them.
 - One local file, `.git/logbook/library.sqlite` (never tracked), holds everything on this machine: **logs** (the conversation up to a savepoint), **shelves** (the notes taken
-  from a log) and **notes**. The shared side is git: `refs/logbook/log/<user>/000000` is one shelf per person (two machines of the same person are merged on sync), mirrored
+  from a log) and **notes**. The shared side is git: `refs/logbook/log/<user>/000000` is one shelf per person (two machines of the same person are merged when `publish` pushes), mirrored
   into the library, so a team's notes read as one big shelf. Sharing is opt-in per note.
 
 **Status: alpha.** The engine, git-ref storage, sharing and the Claude Code integration work and are tested on Linux,
@@ -145,9 +145,8 @@ your machine, so it just shows as a note. `logbook config worker off` stops the 
 
 ## Sync, publish and the news
 
-`logbook sync` only brings things in: it fetches what teammates shared, merges your own shelf's two copies if you work from two machines, and prints a short **news** digest of
-what is new since you last looked (who shared how many notes and logs, on which branches, the newest topic). A fetch a git hook started has no terminal to print to, so its news is
-shown to the agent once, at the next prompt or session start. Sync never pushes and never asks. `logbook publish` is the step that sends: it tidies (in `ask` and `auto` mode), fetches,
+`logbook sync` is a fetch of git refs and objects: it brings in what teammates shared and does nothing else (it never pushes and never asks). The **news** is worked out when a Claude Code session starts: a short digest of
+what is new since you last looked (who shared how many notes and logs, on which branches, the newest topic), shown to the agent once. If you work from two machines, `publish` merges your shelf's two copies when it pushes. `logbook publish` is the step that sends: it tidies (in `ask` and `auto` mode), fetches,
 moves the queued notes into your shared ref, and pushes it (`--no-push` stops before the push). In `auto` mode a **branch merged** (seen by the
 pull hook) or a **`git push`** starts a publish by itself, in the background; the push it makes does not start another. In `ask` mode a `git push` leaves a marker and the agent is
 told once per session to show you the queue and ask. In `manual` mode you run `logbook publish`.
@@ -227,7 +226,7 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
     logbook publish                           # lists your private notes that are not shared yet and asks which
     logbook publish --all                     # preview every one of them with redaction, confirm once
     logbook summarize                         # the notes under the repo or branch, for an agent to write a summary
-    logbook sync                              # fetch teammates' entries and merge them in; says what is new; never pushes
+    logbook sync                              # fetch what teammates shared (git refs and objects); never pushes
     logbook queue                             # what publish will share; --add / --remove ids; `logbook note -q` queues a note
     logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match
     logbook ask repo | branch:<name> | commit:<sha> | note:<id>   # walk the tree from the top

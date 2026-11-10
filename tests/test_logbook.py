@@ -144,7 +144,8 @@ class TestSync(Base):
         rb = Repo(bob)
         rb.init()
         self.assertTrue(g.is_shallow(bob))
-        self.assertEqual(sync.sync(rb, depth=1)["entries"], 1)
+        sync.sync(rb, depth=1)
+        self.assertEqual(len(rb.load_shared()[0]), 1)
         self.ra.purge(e.id)
         # the rewritten shelf diverges from the remote: push fetches, merges (the tombstone wins) and pushes with a lease
         self.assertTrue(sync.push(self.ra)["ok"])
@@ -2849,7 +2850,7 @@ class TestQueue(CliRepo):
 
 
 class TestNewsAndTriggers(CliRepo):
-    """sync only brings things in and says what is new; publish tidies, fetches, moves and pushes; a git push or a merged branch starts a publish by itself."""
+    """sync only fetches; the news is worked out at a session start; publish tidies, fetches, moves and pushes; a git push or a merged branch starts a publish by itself."""
 
     CK = {"paths": [0, 0], "names": [0, 0], "commits": [0, 0], "files": [], "missing": [], "evidence": True, "at": ""}
 
@@ -2874,30 +2875,29 @@ class TestNewsAndTriggers(CliRepo):
         rb.publish([e])
         self.assertTrue(sync.push(rb)["ok"])
 
-    def test_sync_fetches_says_what_is_new_once_and_never_pushes(self):
+    def test_sync_only_fetches_and_never_pushes(self):
         rb, _ = self.two_people()
-        self.assertIn("no news", self.run_cli("sync")[1], "the first look only learns what is already there")
-        mine = capture.make_entry(self.r, "finding", "mine", {"summary": "s", "why": "w"})
-        self.r.publish([mine])
         self.bob_shares(rb, "Bob found the refund bug")
         code, text = self.run_cli("sync")
         self.assertEqual(code, 0, text)
-        self.assertIn("Bob shared 1 note", text)
-        self.assertIn("Bob found the refund bug", text)
-        self.assertIn("Nothing was pushed", text)
+        self.assertIn("fetched the shared shelves from origin", text)
+        self.assertNotIn("news", text.lower())
+        self.assertIn("Bob found the refund bug", [l.entry.topic for l in self.r.load_shared()[0]])
+        mine = capture.make_entry(self.r, "finding", "mine", {"summary": "s", "why": "w"})
+        self.r.publish([mine])
+        self.run_cli("sync")
         self.assertNotIn(self.r.own_ref(), sh("git", "ls-remote", "origin", cwd=self.d), "sync never pushes")
-        self.assertIn("no news", self.run_cli("sync")[1], "and says it once")
 
-    def test_news_nobody_saw_is_shown_to_the_agent_at_the_next_prompt_once(self):
+    def test_news_is_worked_out_when_a_session_starts_and_shown_once(self):
         rb, _ = self.two_people()
-        sync.sync(self.r)
-        self.bob_shares(rb, "Bob changed the export")
-        sync.sync(self.r)  # a fetch started by a git hook: no terminal saw it
         payload = json.dumps({"cwd": str(self.d), "session_id": "s1", "prompt": "hello"})
-        said = capture.handle_hook("UserPromptSubmit", "claude-code", payload)
+        capture.handle_hook("SessionStart", "claude-code", payload)  # the first look only learns what is already there
+        self.bob_shares(rb, "Bob changed the export")
+        sync.sync(self.r)  # a fetch, from a terminal or a git hook: it says nothing about what is new
+        said = capture.handle_hook("SessionStart", "claude-code", payload)
         self.assertIn("News from the shared log", said)
         self.assertIn("Bob changed the export", said)
-        self.assertNotIn("News from the shared log", capture.handle_hook("UserPromptSubmit", "claude-code", payload))
+        self.assertNotIn("News from the shared log", capture.handle_hook("SessionStart", "claude-code", payload), "and only once")
 
     def test_publish_tidies_fetches_moves_and_pushes_and_no_push_stops_before_the_last_step(self):
         self.two_people()

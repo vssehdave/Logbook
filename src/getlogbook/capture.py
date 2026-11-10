@@ -153,6 +153,8 @@ def handle_hook(event, agent, raw):
                 text = "\n".join(x for x in (text, branches.reminder(repo, repo.publish_mode())) if x)
             if event in ("SessionStart", "UserPromptSubmit"):  # what teammates shared while you were away, and a publish a git hook left waiting for your yes
                 from . import news, outbox
+                if event == "SessionStart":
+                    news.update(repo)  # work out what teammates shared since the last look (the first look only learns what is there); a fetch only brought it in
                 text = "\n".join(x for x in (news.take(repo), outbox.pending_notice(repo, sid) if repo.publish_mode() == "ask" else "", text) if x)
             note = worker_mod.pause_notice(repo) if event in ("SessionStart", "UserPromptSubmit") and worker_mod.enabled(repo) else None
             out = recall.hook_json(event, "\n".join(x for x in (text, note[1] if note else "") if x), note[0] if note else "")
