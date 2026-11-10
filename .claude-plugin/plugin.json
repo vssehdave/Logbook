@@ -9,12 +9,5 @@
   "hooks": [
     "./hooks/claude-band.json"
   ],
-  "types": "./hooks/band/types.d.ts",
-  "mcpServers": {
-    "github": {
-      "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "headers": { "Authorization": "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}" }
-    }
-  }
+  "types": "./hooks/band/types.d.ts"
 }
