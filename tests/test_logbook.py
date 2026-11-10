@@ -14,6 +14,8 @@ SRC = os.environ.get("LOGBOOK_SRC") or str(Path(__file__).resolve().parents[1] /
 sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
+for _k in [k for k in os.environ if k.startswith("CLAUDE")]:  # run from inside Claude Code, these would make every note look agent-written
+    del os.environ[_k]
 
 from getlogbook import capture, cli, ground, recall, safety, sync, tidy, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
@@ -1368,11 +1370,11 @@ class TestTidy(CliRepo):
         self.assertEqual((c["id"], c["reason"]), (e.id, "files it is about changed in later commits"))
         self.assertEqual(len(c["detail"]), 1)
         self.assertIn("rework revenue", c["detail"][0])
-        before = sorted(p.name for p in (self.r.cdir / "private").glob("*.json"))
+        before = sorted(x.id for x in self.r.load_private())
         code, text = self.run_cli("tidy")
         self.assertIn("1 candidate (nothing was changed", text)
         self.assertIn(e.id, text)
-        self.assertEqual(sorted(p.name for p in (self.r.cdir / "private").glob("*.json")), before, "listing changes no note")
+        self.assertEqual(sorted(x.id for x in self.r.load_private()), before, "listing changes no note")
 
     def test_a_note_without_a_commit_is_checked_from_where_it_was_written(self):
         e = capture.make_entry(self.r, "finding", "export stalls", {"summary": "s", "why": "w", "evidence": "e"}, paths=["shop/other.py"])
@@ -1450,9 +1452,9 @@ class TestStatus(CliRepo):
         self.assertIn("chunked in the fix", text)
 
     def test_the_record_is_a_note_with_evidence_and_the_original_is_untouched(self):
-        before = (self.r.pdir / f"{self.note.id}.json").read_text(encoding="utf-8")
+        before = self.r.get_private(self.note.id).to_json()
         self.apply(self.block("resolved"))
-        self.assertEqual((self.r.pdir / f"{self.note.id}.json").read_text(encoding="utf-8"), before)
+        self.assertEqual(self.r.get_private(self.note.id).to_json(), before)
         (rec,) = [e for e in self.r.load_private() if e.status]
         self.assertEqual((rec.status["of"], rec.status["state"], rec.captured_via), (self.note.id, "resolved", "tidy"))
         self.assertIn("chunk the export", rec.body["evidence"])
@@ -3197,6 +3199,17 @@ class TestConvo(ObserverBase):
         self.assertEqual(views[saved]["log"], "", "a log has no log of its own")
         theirs = dict(note, mine=False, scope="shared", log="")  # how the same note looks to a teammate: the log it names is not on their machine
         self.assertEqual(cites.record(self.r, theirs, 2)["log"], "", "someone else's note just shows as a note")
+
+    def test_inside_a_snapshot_the_config_is_read_once_and_a_save_still_shows(self):
+        path = self.r.cdir / "config.json"
+        with self.r.snapshot():
+            first = self.r.cfg()
+            path.write_text(json.dumps({**first, "display": "changed behind our back"}), encoding="utf-8")
+            self.assertEqual(self.r.cfg(), first, "read once inside the block")
+            self.r.save_cfg({**first, "display": "saved"})
+            self.assertEqual(self.r.cfg()["display"], "saved")
+        path.write_text(json.dumps({**first, "display": "after"}), encoding="utf-8")
+        self.assertEqual(self.r.cfg()["display"], "after", "outside the block every call reads the file")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Notes are kept in a local SQLite file, and a prompt no longer reads every note.** `bench/retrieval.py` measured the old way: every prompt rebuilt a view of every note, about 2.5 s at 1,000 notes and about 5 s at 10,000 (33 s just to build the views of 100,000), partly because the config file was read from disk seven times per note (fixed on its own: it is now read once per pass). Private notes now live in `.git/logbook/notes.sqlite`; the first open imports the old `private/*.json` files and moves them to `private.imported/` (nothing is deleted). Shared notes are mirrored from the git shelves into the same file: each row keeps its author, its ref and the git blob it was read from, a refresh reads only the blobs it has not seen, and the mirror can be dropped and rebuilt from git at any time. Git stays the authority for what is shared: publishing still writes git objects from the stored note. A prompt asks the file (names, paths, full text) for the notes it could be about and ranks only those with the same rules as before. Measured per prompt on synthetic notes, warm: 0.9 s at 1,000 notes, 0.9 s at 10,000, 4.1 s at 100,000 (the full-text step over very common words). What is left is about eight `git` calls per prompt (about 55 ms each on Windows). Session start, `logbook log`, tidy and the listings still read every note. It needs SQLite with FTS5 (nearly every Python build); without it a prompt scans everything as before. Archived notes stay plain files in `.git/logbook/archive/`.
+- `bench/retrieval.py` measures retrieval speed, disk size and tokens injected at 1,000, 10,000 and 100,000 synthetic notes.
+- The tests ignore the `CLAUDE*` environment variables, so they pass when run from inside a Claude Code session (before, its variables made every note look agent-written and seven publish tests failed).
+
 ## 0.0.7 (2026-11-09)
 
 A savepoint now turns every observation it covers into a note of its own, logs and conversations stay on your machine while notes are shared, tidy checks and keeps what is true, and `sync` (fetch and merge) is split from `publish` (push). Read the bullets from the bottom of this section up for the order they were built in.

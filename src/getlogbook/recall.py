@@ -160,19 +160,42 @@ def branch_memory(repo, views, cap=1400):
     return text[:cap]
 
 
+def candidate_views(repo, names, files, qtokens):
+    """(views, Anchorer) of the notes a prompt could be about: those that name a name it mentions (or an alias of one), sit on a file it touches,
+    or match its words in full text (the best 200 by bm25). rank() then scores only these, with the same rules as over every note."""
+    want = {m.lower() for m in names}
+    for m in list(want):
+        want |= {a.lower() for a in tree.aliases_for(repo, m)}
+    loaded = repo.db.candidates(want, {f.replace("\\", "/") for f in files}, qtokens)
+    anch = tree.Anchorer(repo)
+    with repo.snapshot():
+        anch.prime([l.entry.anchor.get("sha", "") for l in loaded])
+        views = [tree.view(repo, l, anch) for l in loaded]
+    return tree.apply_statuses(views), anch
+
+
 def digest(repo, event, prompt="", files=(), session="", cap=DEFAULT_CAP):
     """Return the text to inject ('' means: inject nothing)."""
-    views, anch = tree.all_views(repo)
     names = set()
-    if event != "SessionStart":
+    if event != "SessionStart" and repo.db.usable():
+        # the prompt path: ask the local index for the notes this prompt could be about, and build views for those only
         pt = tokens(prompt)
-        names = {m for m in known_names(views) if m in pt}
-        names |= {m for f in files for m in tree.names_of([f])}
+        repo.db.refresh_shared()
+        names = repo.db.names_in(pt) | {m for f in files for m in tree.names_of([f])}
         if not names and not files and not (pt - _STOP):
             return ""  # nothing to match on: stay silent
-    elif not files:
-        files = list(g.try_run(["diff", "--name-only", "HEAD"], repo.root)[1].split())
-        names = {m for f in files for m in tree.names_of([f])}
+        views, anch = candidate_views(repo, names, files, pt - _STOP)
+    else:
+        views, anch = tree.all_views(repo)
+        if event != "SessionStart":
+            pt = tokens(prompt)
+            names = {m for m in known_names(views) if m in pt}
+            names |= {m for f in files for m in tree.names_of([f])}
+            if not names and not files and not (pt - _STOP):
+                return ""  # nothing to match on: stay silent
+        elif not files:
+            files = list(g.try_run(["diff", "--name-only", "HEAD"], repo.root)[1].split())
+            names = {m for f in files for m in tree.names_of([f])}
     free_text = event != "SessionStart" and not names and not files
     ranked = rank(repo, query=prompt if event != "SessionStart" else "", files=files, names=names, views=views, anch=anch)
     if free_text:  # no file or name matched: only a clearly related note is worth the tokens
