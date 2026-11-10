@@ -81,7 +81,7 @@ bob = clone("bob", "bob@x.io", "Bob B.", remote)
 print("version:", lb(root, "--help")[1].splitlines()[0][:60])
 
 # --- setup ------------------------------------------------------------------------------------------------------------
-rc, o = lb(alice, "setup", "--yes", "--agent", "agents-md")
+rc, o = lb(alice, "setup", "--yes")
 ok(rc == 0, "setup runs", o)
 ok((alice / ".git/hooks/pre-push").exists(), "pre-push hook installed")
 hook = (alice / ".git/hooks/pre-push").read_text()
@@ -116,7 +116,7 @@ rc, o = sh("git", "push", "origin", "HEAD", cwd=alice)
 ok("not pushed yet" not in o, "after sync there is nothing left to remind about", o)
 
 # --- Bob reads: names, tree, citations ---------------------------------------------------------------------------------
-rc, o = lb(bob, "setup", "--yes", "--agent", "agents-md")
+rc, o = lb(bob, "setup", "--yes")
 sh("git", "pull", "-q", cwd=bob)
 rc, o = lb(bob, "ask", "refund", "rounding")
 ok(rc == 0 and "Alice A." in o, "Bob finds Alice's note with her name", o)
@@ -177,7 +177,7 @@ lb(bob, "history")
 ok(victim.read_text() == "precious\n", "reading the hostile note did not overwrite a file", victim.read_text())
 
 # --- same person, two machines; purge beats merge ---------------------------------------------------------------------------
-lb(alice2, "setup", "--yes", "--agent", "agents-md")
+lb(alice2, "setup", "--yes")
 sh("git", "pull", "-q", cwd=alice2)
 n4 = note(alice2, "second machine", ["shop/revenue.py"])
 rc, o = lbq(alice2, "publish", n4, "--yes")
@@ -206,7 +206,7 @@ ok("fail" not in o.lower().replace("failures", ""), "status --check reports no f
 rc, o = lb(root, "demo")
 ok(rc == 0 and "ALL CHECKS PASSED" in o, "the built-in demo passes", o[-300:])
 ok(lb(alice, "queue")[0] == 0, "`queue` runs")
-for gone in ("query", "explain", "doctor", "stats", "install", "init", "join", "path"):
+for gone in ("query", "explain", "doctor", "stats", "init", "join", "path", "snippet"):
     ok(lb(alice, gone)[0] == 2, f"the older name `{gone}` is gone")
 
 # --- 0.0.4: notes as key: value lines, plain notes, who wrote it, the allow rules --------------------------------------------------
@@ -223,13 +223,14 @@ rc, o = lb(bob, "note", "--fields", inp="kind: finding\ntitle: agent note\nsumma
 newest = max((bob / ".git/logbook/private").glob("*.json"), key=lambda p: p.stat().st_mtime)
 d = json.loads(newest.read_text(encoding="utf-8"))
 ok(rc == 0 and d["provenance"] == "agent-written" and d["topic"] == "agent note" and d["checks"]["evidence"], "an agent's note is labelled agent-written, title: is the topic, and it is grounded", d)
-rc, o = lb(bob, "setup", "--yes", "--agent", "claude-code")
-cfg = json.loads((bob / ".claude/settings.local.json").read_text())
+home = root / "claude-home"  # `install` wires Claude Code once per machine, into the Claude folder and never into a repository
+rc, o = lb(bob, "install", "--yes", env={"CLAUDE_CONFIG_DIR": str(home), "LOGBOOK_OFFLINE": "1"})
+cfg = json.loads((home / "settings.json").read_text())
 ok("permissions" not in cfg and any(e.get("matcher") == "Bash" and "--event Permission" in json.dumps(e) for e in cfg["hooks"]["PreToolUse"]),
-   "setup adds the permission hook on Bash and writes no allow rules", cfg)
-ok(not (bob / ".claude/agents").exists(), "setup installs no agent any more")
+   "install adds the permission hook on Bash and writes no allow rules", cfg)
+ok(not (bob / ".claude").exists() and not (bob / "CLAUDE.md").exists(), "install touches no repository")
 post = [h for e in cfg["hooks"].get("PostToolUse", []) for h in e["hooks"]]
-ok(post and all(h.get("async") for h in post), "setup registers an async PostToolUse hook for the observer", cfg["hooks"].get("PostToolUse"))
+ok(post and all(h.get("async") for h in post), "install registers an async PostToolUse hook for the observer", cfg["hooks"].get("PostToolUse"))
 
 
 def decision(command):
@@ -257,9 +258,9 @@ ok(decision("logbook worker --status") == "allow" and decision("logbook worker -
 lb(bob, "config", "tidy", "manual")
 rc, o = lb(bob, "tidy", "--apply", inp="status_of: 1a1a5684310-5ba7d17c\nstatus: resolved\ncommits: abc1234\nreason: r\n")
 ok(rc != 0 and "nothing was changed" in o, "tidy --apply with a note that does not exist stores nothing", o)
-rc, o = lb(bob, "uninstall", "--yes", "--agent", "claude-code")
-left = json.loads((bob / ".claude/settings.local.json").read_text()) if (bob / ".claude/settings.local.json").exists() else {}
-ok("PreToolUse" not in left.get("hooks", {}) and not (bob / ".claude/agents").exists(), "uninstall removes the hooks", o)
+rc, o = lb(bob, "uninstall", "--yes", env={"CLAUDE_CONFIG_DIR": str(home), "LOGBOOK_OFFLINE": "1"})
+left = json.loads((home / "settings.json").read_text()) if (home / "settings.json").exists() else {}
+ok("PreToolUse" not in left.get("hooks", {}), "uninstall removes the hooks", o)
 
 print(f"\n{len(fails)} failed" if fails else "\nALL PASSED")
 print("workdir:", root)

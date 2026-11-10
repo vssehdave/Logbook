@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -17,9 +18,7 @@ from . import capture, sync
 from . import git as g
 from .store import atomic_write
 
-TARGETS = ("claude-code", "agents-md", "copilot", "gemini", "cursor")
 BEGIN, END = "<!-- logbook:start -->", "<!-- logbook:end -->"
-CURSOR_HEAD = "---\ndescription: Logbook shared repo memory\nalwaysApply: true\n---\n"
 SKILL_MARK = "managed-by: logbook"
 
 
@@ -27,24 +26,6 @@ def asset(name):
     return resources.files("getlogbook").joinpath("agent", name).read_text(encoding="utf-8")
 
 
-def detect(root):
-    """Agents this repo already shows signs of; Claude Code if there is no sign of any."""
-    root = Path(root)
-    found = []
-    if (root / ".claude").exists() or (root / "CLAUDE.md").exists():
-        found.append("claude-code")
-    if (root / "AGENTS.md").exists():
-        found.append("agents-md")
-    if (root / ".github" / "copilot-instructions.md").exists():
-        found.append("copilot")
-    if (root / "GEMINI.md").exists():
-        found.append("gemini")
-    if (root / ".cursor").exists():
-        found.append("cursor")
-    return found or ["claude-code"]
-
-
-# ---- text helpers -------------------------------------------------------------------------------------------
 def with_block(text, block):
     wrapped = f"{BEGIN}\n{block.strip()}\n{END}"
     if BEGIN in text and END in text[text.index(BEGIN):]:
@@ -72,18 +53,18 @@ def read_text(path):
     return raw.replace("\r\n", "\n"), ("\r\n" if "\r\n" in raw else "\n")
 
 
-def backup(repo, path):
+def backup(folder, path):
     path = Path(path)
     if path.exists():
-        d = repo.cdir / "backups"
+        d = Path(folder)
         d.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, d / f"{time.strftime('%Y%m%d-%H%M%S')}-{path.name}.bak")
 
 
-def write_through(repo, path, text, newline="\n"):
-    """Back up, then atomically write. A symlinked file is written at its target, so the link survives."""
+def write_through(backups, path, text, newline="\n"):
+    """Back up (into the folder `backups`), then atomically write. A symlinked file is written at its target, so the link survives."""
     real = Path(os.path.realpath(path))
-    backup(repo, real)
+    backup(backups, real)
     if not text:
         real.unlink(missing_ok=True)
         return
@@ -101,14 +82,14 @@ class Step:
             return "unchanged"
         return "remove" if not self.new else "create" if not self.old else "update"
 
-    def apply(self, repo):
+    def apply(self, backups):
         if self.verb != "unchanged":
-            write_through(repo, self.path, self.new, self.newline)
+            write_through(backups, self.path, self.new, self.newline)
             if self.skill and self.new:
                 (self.path.parent / ".logbook-version").write_text(_version(), encoding="utf-8")
             if self.skill and not self.new:
                 (self.path.parent / ".logbook-version").unlink(missing_ok=True)
-                for folder in (self.path.parent, self.path.parent.parent, self.path.parent.parent.parent):
+                for folder in (self.path.parent, self.path.parent.parent):
                     if folder.exists() and not any(folder.iterdir()):  # only folders we made and left empty
                         folder.rmdir()
                     else:
@@ -126,20 +107,51 @@ def _claude(*args, timeout=120):
     return p.returncode, p.stdout
 
 
+def claude_version():
+    """The installed Claude Code's version line; '' when there is no `claude` command (or LOGBOOK_OFFLINE is set)."""
+    if os.environ.get("LOGBOOK_OFFLINE") or not shutil.which("claude"):
+        return ""
+    rc, out = _claude("--version", timeout=15)
+    lines = out.strip().splitlines()
+    return lines[0][:40] if rc == 0 and lines else "version unknown"
+
+
+def git_version():
+    """(major, minor) of the installed git, or None when there is none."""
+    try:
+        p = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"(\d+)\.(\d+)", p.stdout)
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
 def plugin_state():
-    """'installed' or 'missing' for the Claude Code plugin; 'unavailable' when there is no `claude` command, it is too old to have plugins, or LOGBOOK_OFFLINE is set."""
+    """'installed'; 'outdated' (a different version than this package); 'missing'; or 'unavailable' (no `claude` command, one too old to have plugins, or LOGBOOK_OFFLINE)."""
     if os.environ.get("LOGBOOK_OFFLINE") or not shutil.which("claude"):
         return "unavailable"
     rc, listed = _claude("plugin", "list", "--json", timeout=30)
     if rc != 0:
         return "unavailable"
-    return "installed" if PLUGIN in listed else "missing"
+    try:
+        mine = [p for p in json.loads(listed) if isinstance(p, dict) and p.get("id") == PLUGIN]
+    except ValueError:
+        mine = [{}] if PLUGIN in listed else []
+    if not mine:
+        return "missing"
+    have, want = str(mine[0].get("version") or ""), _version()
+    return "outdated" if have and want != "unknown" and have != want else "installed"
 
 
 def plugin_install():
-    """Add the marketplace (a repeat is harmless) and install the plugin for the person's whole Claude Code. True when it is installed afterwards."""
+    """Add the marketplace (a repeat is harmless), then install the plugin, or update it when it is another version. True when it is current afterwards."""
+    state = plugin_state()
     _claude("plugin", "marketplace", "add", MARKETPLACE)
-    _claude("plugin", "install", PLUGIN)
+    if state == "outdated":
+        _claude("plugin", "marketplace", "update", "logbook")
+        _claude("plugin", "update", PLUGIN)
+    else:
+        _claude("plugin", "install", PLUGIN)
     return plugin_state() == "installed"
 
 
@@ -158,38 +170,45 @@ def _block_step(root, rel, remove, label):
     return Step(label, path, old, new, nl)
 
 
-def plan(repo, targets, remove=False, pretool=True):
-    """Steps in the order they are applied; the skill is last so a half-finished install never leaves a dangling skill."""
-    root = repo.root
-    steps = []
-    for t in targets:
-        if t == "claude-code":
-            sp = root / ".claude" / "settings.local.json"
-            old, nl = read_text(sp)
-            _, cur = capture.install_claude(repo, sp, pretool=pretool, write=False, remove=remove)
-            new = json.dumps(cur, indent=2) + "\n" if cur else ""
-            steps.append(Step("agent hooks (SessionStart, UserPromptSubmit, Stop, ...)", sp, old, new, nl))
-            steps.append(_block_step(root, "CLAUDE.md", remove, "always-on rules in CLAUDE.md"))
-            kp = root / ".claude" / "skills" / "logbook" / "SKILL.md"
-            kold, knl = read_text(kp)
-            knew = "" if remove else asset("skill.md")
-            if kold and SKILL_MARK not in kold:  # someone else's file of the same name: never overwrite or delete it
-                if not remove:
-                    raise SystemExit(f"logbook: {kp} exists and is not managed by logbook; move it aside first")
-                knew = kold
-            steps.append(Step("the logbook skill", kp, kold, knew, knl, skill=True))
-        elif t == "agents-md":
-            steps.append(_block_step(root, "AGENTS.md", remove, "always-on rules in AGENTS.md"))
-        elif t == "copilot":
-            steps.append(_block_step(root, ".github/copilot-instructions.md", remove, "always-on rules in copilot-instructions.md"))
-        elif t == "gemini":
-            steps.append(_block_step(root, "GEMINI.md", remove, "always-on rules in GEMINI.md"))
-        elif t == "cursor":
-            cp = root / ".cursor" / "rules" / "logbook.mdc"
-            old, nl = read_text(cp)
-            new = "" if remove else CURSOR_HEAD + BEGIN + "\n" + asset("rules.md").strip() + "\n" + END + "\n"
-            steps.append(Step("Cursor rule", cp, old, new, nl))
+def claude_home():
+    """The folder Claude Code reads the person's own settings from: CLAUDE_CONFIG_DIR, else ~/.claude."""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def wiring(remove=False, pretool=True):
+    """The Claude Code side, written once into the person's Claude folder so it holds for every repository: the hooks, the always-on rules and the skill. The hooks do
+    nothing in a repository that has not been set up. The skill is last so a half-finished install never leaves a dangling skill."""
+    home = claude_home()
+    sp = home / "settings.json"
+    old, nl = read_text(sp)
+    _, cur = capture.install_claude(sp, pretool=pretool, write=False, remove=remove)
+    new = json.dumps(cur, indent=2) + "\n" if cur else ""
+    steps = [Step("agent hooks (SessionStart, UserPromptSubmit, Stop, ...)", sp, old, new, nl),
+             _block_step(home, "CLAUDE.md", remove, "always-on rules in CLAUDE.md")]
+    kp = home / "skills" / "logbook" / "SKILL.md"
+    kold, knl = read_text(kp)
+    knew = "" if remove else asset("skill.md")
+    if kold and SKILL_MARK not in kold:  # someone else's file of the same name: never overwrite or delete it
+        if not remove:
+            raise SystemExit(f"logbook: {kp} exists and is not managed by logbook; move it aside first")
+        knew = kold
+    steps.append(Step("the logbook skill", kp, kold, knew, knl, skill=True))
     return steps
+
+
+def apply_wiring(steps):
+    backups = claude_home() / "logbook-backups"
+    for s in steps:
+        s.apply(backups)
+
+
+def wiring_state():
+    """'installed', 'partial', 'missing' (or 'conflict' when a skill of someone else's is in the way) for the Claude wiring."""
+    try:
+        done = [s.verb == "unchanged" for s in wiring()]
+    except SystemExit:
+        return "conflict"
+    return "installed" if all(done) else "partial" if any(done) else "missing"
 
 
 def git_hook_installed(repo, name="post-commit"):
@@ -200,46 +219,29 @@ def git_hook_installed(repo, name="post-commit"):
         return False
 
 
-def describe(repo, targets, remove=False, pretool=True):
-    """Lines that say what would change."""
+GIT_HOOKS = (("post-commit", "git post-commit hook (saves a log after each commit in ask and auto mode)"),
+             ("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)"),
+             ("post-merge", "git post-merge hook (a pull also fetches shared logs; never pushes)"))
+
+
+def describe_repo(repo, remove=False):
+    """Lines that say what `setup` (or `uninstall --repo`) changes in this repository: its git hooks."""
     lines = []
-    for name, what in (("post-commit", "git post-commit hook (saves a log after each commit in ask and auto mode)"),
-                       ("pre-push", "git pre-push hook (a reminder of unshared notes; never blocks)"),
-                       ("post-merge", "git post-merge hook (a pull also fetches shared logs; never pushes)")):
+    for name, what in GIT_HOOKS:
         hook = git_hook_installed(repo, name)
         verb = ("remove" if hook else "unchanged") if remove else ("unchanged" if hook else "create")
         lines.append(f"  {verb:<10} {what}")
-    for s in plan(repo, targets, remove, pretool):
-        rel = os.path.relpath(s.path, repo.root)
-        lines.append(f"  {s.verb:<10} {rel}  ({s.label})")
     return lines
 
 
-def apply(repo, targets, remove=False, pretool=True):
-    steps = plan(repo, targets, remove, pretool)
+def apply_repo(repo, remove=False):
     if remove:
         capture.uninstall_git_hook(repo)
         capture.uninstall_pre_push_hook(repo)
         capture.uninstall_pull_hooks(repo)
     else:
-        capture.install_commit_hook(repo)  # replaces the block 0.0.5 and earlier left, which recorded every commit
+        capture.install_commit_hook(repo)
         capture.install_pre_push_hook(repo)
         capture.install_pull_hooks(repo)
         if "origin" in sync.remotes(repo):  # so a plain `git pull` also brings teammates' notes
             sync.ensure_fetch_config(repo)
-    for s in steps:
-        s.apply(repo)
-    return steps
-
-
-def status(repo):
-    """{target: 'installed' | 'partial' | 'missing'} for the doctor."""
-    out = {}
-    for t in TARGETS:
-        try:
-            done = [s.verb == "unchanged" for s in plan(repo, [t], remove=False)]
-        except SystemExit:
-            out[t] = "conflict"
-            continue
-        out[t] = "installed" if all(done) else "partial" if any(done) else "missing"
-    return out
