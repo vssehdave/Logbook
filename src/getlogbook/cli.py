@@ -665,7 +665,7 @@ def cmd_doctor(a):
         out(f"[{level:<4}] {msg}")
         bad |= level == "fail"
     from . import install as ins
-    out("what is installed here (`logbook install` sets it up, `logbook uninstall` removes it):")
+    out("what is installed here (`logbook setup` sets it up, `logbook uninstall` removes it):")
     out(f"  git hooks   : pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}, "
         f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}, "
         f"post-commit {'installed' if ins.git_hook_installed(r, 'post-commit') else 'missing'}")
@@ -734,7 +734,7 @@ def cmd_install(a):
     if not r.cfg().get("user"):
         r.init()
     ins.apply(r, targets, pretool=not a.no_pretool)
-    out("done. `logbook doctor` shows what is installed; `logbook uninstall` reverses it.")
+    out("done. `logbook status --check` shows what is installed; `logbook uninstall` reverses it.")
     if "claude-code" in targets:
         out("Claude Code sessions are now observed per branch (private; `logbook worker --status`). `logbook log` saves a log of the session so far.")
     return 0
@@ -1042,16 +1042,13 @@ def cmd_demo(a):
     return demo.run(a.dir)
 
 
-HIDDEN = {"init", "join", "query", "explain", "path", "doctor", "queue", "stats", "install", "capture", "post-commit",
+HIDDEN = {"queue", "capture", "post-commit",
           "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
           "cites", "tidy", "worker", "history"}
 HELP_MORE = """more (run `logbook <name> -h`):
-  trust purge gc config uninstall snippet demo
+  trust purge gc config uninstall snippet demo queue history tidy
 agents and hooks call these; you rarely need to:
-  summarize inject cites capture
-older names that still work:
-  init join query explain path doctor queue stats install
-the old `log` view of notes next to commits is now `history`"""
+  summarize inject cites capture"""
 
 
 def build_parser():
@@ -1083,11 +1080,7 @@ def build_parser():
     s = add("history", cmd_history, "the notes next to your commits, newest first")
     s.add_argument("-n", type=int, default=20, help="how many commits")
     s.add_argument("-v", "--verbose", action="store_true", help="show each note's text and trivial commits")
-    s = add("init", cmd_init, "create your id and config")
-    s.add_argument("--attribution", choices=["none", "pseudonym", "named"])
-    s = add("join", cmd_join, "init + fetch teammates' entries (run this after cloning)")
-    s.add_argument("--remote", default="origin")
-    s = add("note", cmd_note, "record a finding or change in your private log")
+    s = add("note", cmd_note, "record a finding or change as a private note")
     s.add_argument("text", nargs="*", help="the note, in plain words, then the files it is about: logbook note \"late export dips revenue\" shop/revenue.py")
     s.add_argument("--kind", choices=["finding", "change", "summary"], default="finding")
     s.add_argument("--topic")
@@ -1121,32 +1114,15 @@ def build_parser():
     s.add_argument("--fetch-only", action="store_true", help="kept for older scripts: sync never pushes now")
     s.add_argument("--json", action="store_true")
     s.add_argument("--depth", type=int)
-    s = add("query", cmd_query, "search entries")
-    s.add_argument("q")
-    s.add_argument("--limit", type=int, default=10)
-    s.add_argument("--exact", action="store_true", help="match on words only, even when search by meaning is on")
     s = add("index", cmd_index, "embed the notes that have no vector yet (search by meaning; needs getlogbook[semantic])")
     s.add_argument("--rebuild", action="store_true", help="drop every vector and embed all notes again")
-    s = add("explain", cmd_explain, "everything known about an entry id, a model, or a path")
-    s.add_argument("target")
-    s = add("path", cmd_path, "commits (with their entries) between two revisions")
-    s.add_argument("a")
-    s.add_argument("b")
     s = add("status", cmd_status, "what is recorded, what is waiting to be shared (--check for problems)")
     s.add_argument("--check", action="store_true", help="also run the setup and coverage checks")
     s.add_argument("--stats", action="store_true", help="also show injection and cost counters")
-    s = add("doctor", cmd_doctor, "check setup and capture coverage")
-    s.add_argument("--remote", default="origin")
     s = add("capture", cmd_capture, "hook entry point (reads JSON on stdin; never fails)")
     s.add_argument("--event", required=True)
     s.add_argument("--agent", default="")
     add("post-commit", cmd_post_commit, "git hook entry point")
-    s = add("install", cmd_install, "set everything up: git hook, agent hooks, skill and rules (asks first)")
-    s.add_argument("--agent", nargs="+", metavar="AGENT", help="claude-code agents-md copilot gemini cursor, or auto (default)")
-    s.add_argument("--yes", action="store_true", help="apply without asking")
-    s.add_argument("--write", action="store_true", help="same as --yes")
-    s.add_argument("--dry-run", action="store_true")
-    s.add_argument("--no-pretool", action="store_true", help="do not add the before-read/edit note lookup")
     s = add("uninstall", cmd_uninstall, "remove what install added (notes are kept)")
     s.add_argument("--agent", nargs="+", metavar="AGENT")
     s.add_argument("--yes", action="store_true")
@@ -1194,7 +1170,6 @@ def build_parser():
     s.add_argument("--prompt")
     s.add_argument("--file", action="append")
     s.add_argument("--session")
-    add("stats", cmd_stats, "injection and cost counters")
     s = add("convo", cmd_convo, "the conversation behind a log: what was typed and the agent's final replies")
     s.add_argument("id")
     s = add("cites", cmd_cites, "the numbered sources behind an answer in a chat")

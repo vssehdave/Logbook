@@ -157,7 +157,7 @@ def doctor(repo, remote="origin"):
     warn = lambda m: r.append(("warn", m))
     c = repo.cfg()
     if not c.get("user"):
-        r.append(("fail", "not initialised: run `logbook init`"))
+        r.append(("fail", "not initialised: run `logbook setup`"))
         return r
     ok(g.run(["version"], repo.root).strip())
     ok(f"interpreter pinned: {c.get('interpreter')}")
@@ -169,7 +169,7 @@ def doctor(repo, remote="origin"):
         if fetch_specs(remote)[0] in have:
             ok("fetch refspec present")
         else:
-            warn(f"fetch refspec missing: run `logbook join` (plain `git fetch` will skip logbook refs)")
+            warn(f"fetch refspec missing: run `logbook setup` (plain `git fetch` will skip logbook refs)")
     else:
         warn(f"no remote named {remote!r}: entries stay local until you add one")
     hp = g.try_run(["config", "--get", "core.hooksPath"], repo.root)[1].strip()

@@ -205,8 +205,9 @@ rc, o = lb(alice, "status", "--check")
 ok("fail" not in o.lower().replace("failures", ""), "status --check reports no failures", o)
 rc, o = lb(root, "demo")
 ok(rc == 0 and "ALL CHECKS PASSED" in o, "the built-in demo passes", o[-300:])
-for old in (("query", "refund"), ("explain", "shop/revenue.py"), ("doctor",), ("queue",), ("stats",)):
-    ok(lb(alice, *old)[0] in (0, 4), f"old name `{old[0]}` still runs")
+ok(lb(alice, "queue")[0] == 0, "`queue` runs")
+for gone in ("query", "explain", "doctor", "stats", "install", "init", "join", "path"):
+    ok(lb(alice, gone)[0] == 2, f"the older name `{gone}` is gone")
 
 # --- 0.0.4: notes as key: value lines, plain notes, who wrote it, the allow rules --------------------------------------------------
 rc, o = lb(bob, "note", "--fields", "--check", inp="title: t\nsummary: see `shop/gone.py` and `total()`\npaths: shop/revenue.py\n")

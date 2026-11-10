@@ -401,7 +401,7 @@ class TestInstaller(Base):
         (self.d / "CLAUDE.md").write_bytes(b"# Mine\r\n\r\nKeep this.\r\n")
         (self.d / ".claude").mkdir()
         (self.d / ".claude" / "settings.local.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}))
-        code, text = self.run_cli("install", "--yes")
+        code, text = self.run_cli("setup", "--yes")
         self.assertEqual(code, 0, text)
         md = (self.d / "CLAUDE.md").read_bytes().decode()
         self.assertIn("# Mine\r\n\r\nKeep this.", md)
@@ -417,7 +417,7 @@ class TestInstaller(Base):
         self.assertIn("Read|Edit", json.dumps(hooks["PreToolUse"]))
         self.assertTrue(list((self.d / ".git" / "logbook" / "backups").glob("*CLAUDE.md.bak")), "originals are backed up")
         self.assertTrue(Repo(self.d).cfg().get("user"), "install runs init")
-        _, again = self.run_cli("install", "--yes")
+        _, again = self.run_cli("setup", "--yes")
         self.assertNotIn("create", again)
         self.assertNotIn("update", again)
         self.run_cli("uninstall", "--yes")
@@ -429,14 +429,14 @@ class TestInstaller(Base):
         self.assertIn("mine", json.dumps(left))
 
     def test_dry_run_and_non_interactive_write_nothing(self):
-        code, text = self.run_cli("install", "--dry-run")
+        code, text = self.run_cli("setup", "--dry-run")
         self.assertIn("create", text)
         self.assertFalse((self.d / "CLAUDE.md").exists())
-        self.run_cli("install")
+        self.run_cli("setup")
         self.assertFalse((self.d / "CLAUDE.md").exists(), "without --yes and without a terminal nothing is applied")
 
     def test_other_agents_get_a_rules_block_and_a_foreign_skill_is_never_touched(self):
-        code, _ = self.run_cli("install", "--yes", "--agent", "agents-md", "copilot", "gemini", "cursor")
+        code, _ = self.run_cli("setup", "--yes", "--agent", "agents-md", "copilot", "gemini", "cursor")
         self.assertEqual(code, 0)
         for rel in ("AGENTS.md", ".github/copilot-instructions.md", "GEMINI.md", ".cursor/rules/logbook.mdc"):
             self.assertIn("logbook:start", (self.d / rel).read_text(encoding="utf-8"), rel)
@@ -445,7 +445,7 @@ class TestInstaller(Base):
         sk.mkdir(parents=True)
         (sk / "SKILL.md").write_text("someone else's skill")
         with self.assertRaises(SystemExit):
-            self.run_cli("install", "--yes", "--agent", "claude-code")
+            self.run_cli("setup", "--yes", "--agent", "claude-code")
         self.run_cli("uninstall", "--yes")
         self.assertEqual((sk / "SKILL.md").read_text(), "someone else's skill")
 
@@ -453,7 +453,7 @@ class TestInstaller(Base):
         ag = self.d / ".claude" / "agents"
         ag.mkdir(parents=True)
         (ag / "logbook-scribe.md").write_text("someone else's agent")
-        self.assertEqual(self.run_cli("install", "--yes", "--agent", "claude-code")[0], 0)
+        self.assertEqual(self.run_cli("setup", "--yes", "--agent", "claude-code")[0], 0)
         self.run_cli("uninstall", "--yes")
         self.assertEqual((ag / "logbook-scribe.md").read_text(), "someone else's agent")
 
@@ -461,7 +461,7 @@ class TestInstaller(Base):
         ag = self.d / ".claude" / "agents"
         ag.mkdir(parents=True)
         (ag / "logbook-scribe.md").write_text("---\nname: logbook-scribe\nmetadata:\n  managed-by: logbook\n---\nbody\n")
-        self.assertEqual(self.run_cli("install", "--yes", "--agent", "claude-code")[0], 0)
+        self.assertEqual(self.run_cli("setup", "--yes", "--agent", "claude-code")[0], 0)
         self.assertFalse((ag / "logbook-scribe.md").exists())
 
     def test_symlinked_rules_file_is_written_through(self):
@@ -472,30 +472,30 @@ class TestInstaller(Base):
             os.symlink(real, link)
         except (OSError, NotImplementedError):
             self.skipTest("cannot create symlinks here")
-        self.run_cli("install", "--yes", "--agent", "claude-code")
+        self.run_cli("setup", "--yes", "--agent", "claude-code")
         self.assertTrue(link.is_symlink())
         self.assertIn("logbook:start", real.read_text())
 
     def test_doctor_reports_install_state(self):
-        self.run_cli("init")
-        _, before = self.run_cli("doctor")
+        self.run_cli("setup", "--dry-run")  # creates your id and installs nothing
+        _, before = self.run_cli("status", "--check")
         self.assertRegex(before, r"claude-code\s*: missing")
-        self.run_cli("install", "--yes")
-        _, after = self.run_cli("doctor")
+        self.run_cli("setup", "--yes")
+        _, after = self.run_cli("status", "--check")
         self.assertRegex(after, r"claude-code\s*: installed")
         self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed, post-commit installed")
 
 
     def test_setup_replaces_the_old_per_commit_block_and_keeps_the_persons_own(self):
-        self.run_cli("init")
+        self.run_cli("setup", "--yes", "--agent", "agents-md")
         hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], self.d).strip())
         hooks.mkdir(exist_ok=True)
         old = "#!/bin/sh\necho mine\n" + capture.MARK_BEGIN + "\n\"python\" -m getlogbook post-commit\n" + capture.MARK_END + "\n"
         (hooks / "post-commit").write_text(old, newline="\n")
-        _, text = self.run_cli("install", "--dry-run")
+        _, text = self.run_cli("setup", "--dry-run")
         self.assertRegex(text, r"update\s+git post-commit hook")
         for _ in range(2):
-            self.run_cli("install", "--yes")
+            self.run_cli("setup", "--yes")
         left = (hooks / "post-commit").read_text()
         self.assertIn("echo mine", left)
         self.assertEqual(left.count("getlogbook post-commit >/dev/null"), 1, "one block, however often setup runs")
@@ -592,7 +592,7 @@ class TestSharingQueue(CliRepo):
         self.assertEqual(safety.localize(f"{(real / 'src' / 'a.py').as_posix()} and {(self.root / 'elsewhere' / 'b.py').as_posix()}", roots), "src/a.py and [outside path]")
 
     def test_pre_push_hook_reminds_and_never_blocks(self):
-        self.run_cli("install", "--yes", "--agent", "agents-md")
+        self.run_cli("setup", "--yes", "--agent", "agents-md")
         remote = self.root / "remote.git"
         sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
         sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
@@ -740,14 +740,14 @@ class TestCli(Base):
         capture.make_entry(r, "finding", "alpha topic", {"summary": "s", "why": "w"}, paths=["models/marts/fct_a.sql"])
         self.cd(d)
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(cli.main(["query", "alpha"]), 0)
-            self.assertEqual(cli.main(["query", "zzzzqq"]), 4)
-            self.assertEqual(cli.main(["explain", "fct_a"]), 0)
-            self.assertEqual(cli.main(["explain", "fct"]), 0)  # only one recorded model matches, so not ambiguous
+            self.assertEqual(cli.main(["ask", "alpha"]), 0)
+            self.assertEqual(cli.main(["ask", "zzzzqq"]), 4)
+            self.assertEqual(cli.main(["ask", "fct_a"]), 0)
+            self.assertEqual(cli.main(["ask", "fct"]), 0)  # only one recorded model matches, so not ambiguous
         capture.make_entry(r, "finding", "beta", {"summary": "s", "why": "w"}, paths=["models/marts/fct_ab.sql"])
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(cli.main(["explain", "fct"]), 3)
-            self.assertEqual(cli.main(["explain", "nothing_here"]), 4)
+            self.assertEqual(cli.main(["ask", "fct"]), 3)
+            self.assertEqual(cli.main(["ask", "nothing_here"]), 4)
 
 
 class TestCliSanitises(Base):
@@ -769,8 +769,8 @@ class TestCliSanitises(Base):
         self.cd(b)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            cli.main(["explain", "fct_a"])
-            cli.main(["query", "fct_a"])
+            cli.main(["ask", "fct_a"])
+            cli.main(["ask", "fct_a"])
         self.assertNotIn("evil.example", buf.getvalue())
         self.assertNotIn("curl", buf.getvalue())
         self.assertIn("real reason", buf.getvalue())
@@ -821,13 +821,16 @@ class TestCommands(CliRepo):
         self.assertIn("second", self.run_cli("ask", "HEAD~1..HEAD")[1])
         self.assertEqual(self.run_cli("ask", "zzzzqq")[0], 4)
 
-    def test_help_lists_the_main_commands_and_old_names_still_run(self):
+    def test_help_lists_the_main_commands_and_the_older_names_are_gone(self):
         h = cli.build_parser().format_help()
         for name in ("setup", "note", "publish", "sync", "ask", "log", "status"):
             self.assertIn(f"  {name}  ", h)
-        for name in ("capture", "post-commit", "query", "install"):
-            self.assertNotIn(f"\n    {name}", h, "hook-only and older names are not listed")
-        self.assertEqual(self.run_cli("query", "zzzzqq")[0], 4, "the old name still works")
+        for name in ("capture", "post-commit"):
+            self.assertNotIn(f"\n    {name}", h, "hook-only names are not listed")
+        for old in ("init", "join", "query", "explain", "path", "doctor", "stats", "install"):
+            with self.assertRaises(SystemExit, msg=f"`{old}` is gone"):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.run_cli(old)
 
 
 class TestTreeNav(CliRepo):
@@ -2646,7 +2649,7 @@ class TestPublishByBranch(CliRepo):
     def test_setup_installs_a_pull_hook_that_only_fetches_and_uninstall_removes_it(self):
         import unittest.mock
         from getlogbook import hookmain
-        self.run_cli("install", "--yes", "--agent", "claude-code")
+        self.run_cli("setup", "--yes", "--agent", "claude-code")
         hooks = Path(sh("git", "rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=self.d))
         for name in ("post-merge", "post-rewrite"):
             self.assertIn("getlogbook post-merge", (hooks / name).read_text(encoding="utf-8"), name)
@@ -2788,7 +2791,7 @@ class TestPublishMoves(CliRepo):
         self.assertIn("would publish", self.run_cli("publish", mine.id, "--yes", "--force")[1])
 
     def remote_with_hooks(self):
-        self.run_cli("install", "--yes", "--agent", "agents-md")
+        self.run_cli("setup", "--yes", "--agent", "agents-md")
         remote = self.root / "remote.git"
         sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
         sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)

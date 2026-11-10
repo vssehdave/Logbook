@@ -127,7 +127,7 @@ class TestADay(unittest.TestCase):
         self.A = self.clone("alice", "alice@example.com", origin, seed=True)
         self.B = self.clone("bob", "bob@example.com", origin)
         for d in (self.A, self.B):
-            self.assertEqual(self.run_cli(d, "install", "--yes", "--agent", "claude-code")[0], 0)
+            self.assertEqual(self.run_cli(d, "setup", "--yes", "--agent", "claude-code")[0], 0)
         for d in (self.A, self.B):  # what setup writes is the person's local setup, not part of the shared work
             (d / ".git" / "info").mkdir(exist_ok=True)
             (d / ".git" / "info" / "exclude").write_text(".claude/\nCLAUDE.md\n", encoding="utf-8")
