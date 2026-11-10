@@ -381,9 +381,9 @@ class TestADay(unittest.TestCase):
         logs = [v for v in tree.all_views(ra)[0] if v["kind"] == "log" and v["branch"] == "feat/b"]
         self.assertGreaterEqual(len(logs), 5, "every log is kept: nothing folds or archives a log")
         for v in logs:
-            self.assertTrue((ra.cdir / "private" / f"{v['id']}.json").exists())
+            self.assertIsNotNone(ra.get_private(v["id"]))
             for oid in v["sources"]:
-                self.assertTrue((ra.cdir / "private" / f"{oid}.json").exists() or (ra.cdir / "archive" / f"{oid}.json").exists(),
+                self.assertTrue(ra.get_private(oid) is not None or (ra.cdir / "archive" / f"{oid}.json").exists(),
                                 "each covered observation is a note, or tidy archived it")
         _, said = self.run_cli(A, "note", "revenue module reads the value", "src/mod_1.py", "--evidence", "x")
         note_id = re.search(r"recorded (\S+)", said).group(1)

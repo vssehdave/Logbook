@@ -17,7 +17,7 @@ import time
 from . import capture, ground, worker
 from .safety import redact
 from . import git as g
-from .entry import HEX_RE, ID_RE, STATES
+from .entry import HEX_RE, ID_RE, STATES, from_json
 from .safety import sanitize
 
 OLD_DRAFT_DAYS = 30  # an auto-copied draft this old and never turned into a real note is junk until shown otherwise
@@ -195,9 +195,9 @@ def archive(repo, ids):
     d.mkdir(parents=True, exist_ok=True)
     moved = 0
     for i in ids:
-        src = repo.pdir / f"{i}.json"
-        if src.exists():
-            shutil.copy2(src, d / src.name)
+        e = repo.get_private(i)
+        if e:
+            (d / f"{i}.json").write_text(e.to_json(), encoding="utf-8")  # the archive stays a plain file, readable without the database
             moved += repo.drop_private(i)
     return moved
 
@@ -517,8 +517,11 @@ def restore(repo, ids):
     n = 0
     for i in ids:
         src = repo.cdir / "archive" / f"{i}.json"
-        if ID_RE.match(i) and src.exists() and not (repo.pdir / f"{i}.json").exists():
-            shutil.copy2(src, repo.pdir / f"{i}.json")
+        if ID_RE.match(i) and src.exists() and not repo.get_private(i):
+            try:
+                repo.add_private(from_json(src.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                continue
             src.unlink()
             n += 1
     return n

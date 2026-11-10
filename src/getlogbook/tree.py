@@ -412,9 +412,11 @@ def apply_statuses(views):
 def all_views(repo):
     """(views of every visible entry, the Anchorer used). Primed so placing N entries costs O(1) subprocesses."""
     anch = Anchorer(repo)
-    loaded = repo.all_entries()
-    anch.prime([l.entry.anchor.get("sha", "") for l in loaded])
-    return apply_statuses([view(repo, l, anch) for l in loaded]), anch
+    with repo.snapshot():
+        loaded = repo.all_entries()
+        anch.prime([l.entry.anchor.get("sha", "") for l in loaded])
+        views = [view(repo, l, anch) for l in loaded]
+    return apply_statuses(views), anch
 
 
 def build(repo):

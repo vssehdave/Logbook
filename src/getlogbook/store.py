@@ -7,6 +7,7 @@ Each ref's tip tree holds every entry as entries/<id>.json (state lives in the t
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -72,16 +73,42 @@ class Repo:
     def __init__(self, cwd="."):
         self.root, self.common = g.repo_paths(cwd)
         self.cdir = self.common / "logbook"  # shared by all worktrees of this clone
+        self._memo = None  # set inside `snapshot()`: the config and policy files read once
+        self._db = None
 
     # config ---------------------------------------------------------------
-    def cfg(self):
+    def _json(self, path):
+        """A small JSON file ({} when missing or not JSON). Inside `snapshot()` it is read once."""
+        if self._memo is not None and path in self._memo:
+            return self._memo[path]
         try:
-            return json.loads((self.cdir / "config.json").read_text(encoding="utf-8"))
+            val = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return {}
+            val = {}
+        if self._memo is not None:
+            self._memo[path] = val
+        return val
+
+    @contextlib.contextmanager
+    def snapshot(self):
+        """Inside this block the config and the policy are read from disk once, not once per note: placing thousands of notes asked for the
+        config seven times each (measured: 2 s of a 2.5 s prompt at 1,000 notes). Nothing else changes; save_cfg drops what it saved."""
+        outer = self._memo
+        if outer is None:
+            self._memo = {}
+        try:
+            yield
+        finally:
+            if outer is None:
+                self._memo = None
+
+    def cfg(self):
+        return dict(self._json(self.cdir / "config.json"))
 
     def save_cfg(self, c):
         atomic_write(self.cdir / "config.json", json.dumps(c, indent=2, sort_keys=True))
+        if self._memo is not None:
+            self._memo.pop(self.cdir / "config.json", None)
 
     def init(self):
         c = self.cfg()
@@ -111,10 +138,7 @@ class Repo:
     def policy(self):
         """Repo policy (tracked file, owner-controlled). Only ever *restricts* the client."""
         p = dict(DEFAULT_POLICY)
-        try:
-            p.update(json.loads((self.root / ".logbook" / "policy.json").read_text(encoding="utf-8")))
-        except (OSError, ValueError):
-            pass
+        p.update(self._json(self.root / ".logbook" / "policy.json"))
         return p
 
     def attribution(self):
@@ -182,32 +206,28 @@ class Repo:
     # private log ---------------------------------------------------------
     @property
     def pdir(self):
+        """The folder older versions kept private notes in, one JSON file each. Notes live in notes.sqlite now (notesdb.py); the first open
+        imports what is here and moves it to private.imported/."""
         return self.cdir / "private"
 
+    @property
+    def db(self):
+        if self._db is None:
+            from .notesdb import NoteDB
+            self._db = NoteDB(self)
+        return self._db
+
     def add_private(self, e):
-        atomic_write(self.pdir / f"{e.id}.json", e.to_json())
+        self.db.add_private(e)
 
     def get_private(self, eid):
-        try:
-            return from_json((self.pdir / f"{eid}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
+        return self.db.get_private(eid)
 
     def drop_private(self, eid):
-        try:
-            (self.pdir / f"{eid}.json").unlink()
-            return True
-        except OSError:
-            return False
+        return self.db.drop_private(eid)
 
     def load_private(self):
-        out = []
-        for p in sorted(self.pdir.glob("*.json")) if self.pdir.exists() else []:
-            try:
-                out.append(from_json(p.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                continue
-        return out
+        return self.db.load_private()
 
     def audit(self, line):
         with open(self.cdir / "audit.log", "a", encoding="utf-8") as f:
@@ -286,6 +306,7 @@ class Repo:
                 raise ValueError(f"entry {e.id} is {len(data)} bytes; policy max is {self.policy()['max_entry_bytes']}")
             files[f"entries/{e.id}.json"] = data
         self._write_ref(ref, files, f"logbook: +{len(entries)} entries", tip)
+        self.db.mark_published([e.id for e in entries], ref)
         for e in entries:
             self.audit(f"publish {e.id} -> {ref}")
         return ref
@@ -322,43 +343,8 @@ class Repo:
         return [tuple(l.split(" ", 1)) for l in out.splitlines() if " " in l and _REF_RE.search(l)]
 
     def load_shared(self):
-        """Parsed shared entries, cached on disk keyed by every ref tip (a hook should not re-read every blob)."""
-        tips = self.ref_tips()
-        key = hashlib.sha1("\n".join(f"{o} {r}" for o, r in tips).encode()).hexdigest()
-        cache = self.cdir / "shared-cache.json"
-        try:
-            c = json.loads(cache.read_text(encoding="utf-8"))
-            if c.get("key") == key and c.get("v") == 1:
-                return [Loaded(from_dict(d), "shared", u, dev, ref) for d, u, dev, ref in c["entries"]], {tuple(t) for t in c["tombs"]}
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        loaded, tombs = self._load_shared_uncached([r for _, r in tips])
-        try:
-            atomic_write(cache, json.dumps({"v": 1, "key": key, "entries": [[l.entry.to_dict(), l.user, l.device, l.ref] for l in loaded],
-                                            "tombs": sorted(tombs)}))
-        except OSError:
-            pass
-        return loaded, tombs
-
-    def _load_shared_uncached(self, refs):
-        loaded, tombs = [], set()
-        for ref in refs:
-            m = _REF_RE.search(ref)
-            files = self._tree_files(ref)
-            ents = {p: o for p, o in files.items() if p.startswith("entries/") and p.endswith(".json")}
-            blobs = g.cat_blobs(self.root, list(ents.values())[:MAX_PER_REF])
-            for path, oid in list(ents.items())[:MAX_PER_REF]:
-                try:
-                    e = from_json(blobs[oid].decode("utf-8"))
-                except (KeyError, ValueError, UnicodeDecodeError):
-                    continue
-                if path != f"entries/{e.id}.json":
-                    continue
-                loaded.append(Loaded(e, "shared", m.group(1), m.group(2), ref))
-            for path, oid in files.items():
-                if path.startswith("tombstones/"):
-                    tombs.add((m.group(1), path[len("tombstones/"):-len(".json")]))
-        return loaded, tombs
+        """Every shared note and the tombstones, from the local mirror of the shelves in git (notesdb.py), brought up to date first."""
+        return self.db.shared()
 
     def unpublished(self):
         """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered (or counted in the push reminder). A log is never one of them: logs stay on this machine."""

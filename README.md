@@ -7,7 +7,7 @@ particular stack.
 
 - Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, and no key: the optional observer uses your own `claude -p`.
   The agent writes the notes; the observer and `logbook log` ask a cheap model to condense them.
-- Two logs: a **private** one under `.git/logbook/` (never tracked), and a **shared** one on git refs
+- Two logs: a **private** one under `.git/logbook/` (a SQLite file, `notes.sqlite`; never tracked), and a **shared** one on git refs
   (`refs/logbook/log/<user>/000000`, one shelf per person; two machines of the same person are merged on sync). Sharing is opt-in per entry.
 
 **Status: alpha.** The engine, git-ref storage, sharing and the Claude Code integration work and are tested on Linux,
