@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "getlogbook"
-version = "0.0.7"
+version = "0.0.8rc3"
 description = "Commit-anchored shared memory for AI-assisted repos (stdlib only)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,9 @@ classifiers = [
   "Topic :: Software Development :: Version Control :: Git",
 ]
 dependencies = []
+
+[project.optional-dependencies]
+semantic = ["onnxruntime", "tokenizers", "huggingface_hub", "numpy"]  # search by meaning (`logbook index`, `config semantic on`); the core stays standard-library only
 
 [project.urls]
 Homepage = "https://github.com/vssehdave/Logbook"

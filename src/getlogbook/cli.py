@@ -8,7 +8,7 @@ import re
 import sys
 import time
 
-from . import capture, cites, convo, ground, nav, outbox, recall, sync, tidy, tree
+from . import capture, cites, convo, embed, ground, nav, outbox, recall, sync, tidy, tree
 from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, inside, looks_tabular, redact, scrub_paths
@@ -396,8 +396,58 @@ def cmd_sync(a):
     return 0 if res["fetch"]["ok"] else 1
 
 
+def _embedder(r):
+    """The embedder when search by meaning is on (`config semantic on`) and can start; otherwise None, with a line saying why when it was asked for."""
+    if r.cfg().get("semantic") != "on":
+        return None
+    emb = embed.load(r.cfg())
+    if emb is None:
+        out("(search by meaning is on, but its model could not start: showing matches on words only. `pip install \"getlogbook[semantic]\"`)")
+    return emb
+
+
+def _meaning_search(r, a, emb):
+    """Words and meaning together. Each hit is shown with where it is held and whether git still holds the same note."""
+    caught = r.db.index_vectors(emb, limit=300)  # notes written since the last `logbook index`, a bounded catch-up
+    left = r.db.vector_missing(emb.name)
+    res = recall.hybrid(r, a.q, emb, a.limit)
+    if not res:
+        out("no match")
+        return 4
+    prov = r.db.provenance([v["id"] for _, v, _, _ in res])
+    held = recall.verify(r, prov)
+    for score, v, how, sim in res:
+        out(line(v))
+        p = prov.get(v["id"], {})
+        where = ("private to this machine, not in git" if p.get("scope") == "private" else
+                 f"shelf {p.get('ref', '?').split('/log/')[-1]}, blob {p.get('blob', '')[:8]}, " + ("the same note is in git" if held.get(v["id"]) else "NOT found in git at that shelf tip: run `logbook sync`"))
+        c = v["checks"] or {}
+        out(f"    found by {' + '.join(how)}" + (f" (meaning {sim:.2f})" if sim is not None else "") + f"; {where}; "
+            f"{'trusted author' if v['trusted'] else 'author not trusted'}; evidence {'yes' if c.get('evidence') else 'no'}"
+            + (f"; {len(c.get('unsupported', []))} fact(s) not in the tool output" if c.get("unsupported") else ""))
+    if left:
+        out(f"({left} note(s) are not in the meaning index yet: `logbook index`)")
+    return 0
+
+
+def cmd_index(a):
+    """Embed the notes that have no vector yet, for search by meaning. Everything stays in the local database."""
+    r = need_repo()
+    emb = embed.load(r.cfg())
+    if emb is None:
+        raise SystemExit("logbook: search by meaning needs the extra and its model: pip install \"getlogbook[semantic]\"")
+    if a.rebuild:
+        r.db.drop_vectors()
+    n = r.db.index_vectors(emb)
+    out(f"embedded {n} note(s); {r.db.vector_count(emb.name)} in the index (model {emb.name}). Turn it on for `logbook ask` with: logbook config semantic on")
+    return 0
+
+
 def cmd_query(a):
     r = need_repo()
+    emb = None if getattr(a, "exact", False) else _embedder(r)
+    if emb is not None:
+        return _meaning_search(r, a, emb)
     vs, an = views(r)
     ranked = recall.rank(r, query=a.q, views=vs, anch=an)[: a.limit]
     if not ranked:
@@ -567,7 +617,7 @@ def cmd_ask(a):
         code = cmd_explain(argparse.Namespace(target=words[0], quiet=True))
         if code != 4:
             return code
-    return cmd_query(argparse.Namespace(q=" ".join(words), limit=a.limit))
+    return cmd_query(argparse.Namespace(q=" ".join(words), limit=a.limit, exact=getattr(a, "exact", False)))
 
 
 def cmd_setup(a):
@@ -704,7 +754,7 @@ def cmd_uninstall(a):
     return 0
 
 
-CONFIG_KEYS = {"tidy_model": "text", "quota_pause": None, "publish": PUBLISH_MODES,
+CONFIG_KEYS = {"tidy_model": "text", "quota_pause": None, "publish": PUBLISH_MODES, "semantic": ("off", "on"), "semantic_model": "text",
                "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
 
 
@@ -765,6 +815,8 @@ def cmd_config(a):
         r.save_cfg(c)
         out(f"{a.key} = {a.value}")
         return 0
+    if a.key == "semantic" and a.value == "on" and not embed.installed():
+        raise SystemExit("logbook: search by meaning needs the extra: pip install \"getlogbook[semantic]\", then `logbook index`")
     if a.key == "publish":
         a.value = LEGACY_MODES.get(a.value, a.value)  # never -> manual, claude -> ask
     if allowed and a.value not in allowed:
@@ -1022,6 +1074,7 @@ def build_parser():
     s = add("ask", cmd_ask, "search the notes; explain an id, a file or name, or a range (a..b); open a node (repo, branch:x, commit:y, note:z)")
     s.add_argument("what", nargs="+")
     s.add_argument("--limit", type=int, default=10)
+    s.add_argument("--exact", action="store_true", help="match on words only, even when search by meaning is on")
     s = add("log", cmd_log, "save a log: summarize this branch's session since the last one (private until you publish)")
     s.add_argument("--no-model", action="store_true", help="put the summary together by code, without asking a model")
     s.add_argument("--no-observe", action="store_true", help="do not first observe the tool uses still queued")
@@ -1071,6 +1124,9 @@ def build_parser():
     s = add("query", cmd_query, "search entries")
     s.add_argument("q")
     s.add_argument("--limit", type=int, default=10)
+    s.add_argument("--exact", action="store_true", help="match on words only, even when search by meaning is on")
+    s = add("index", cmd_index, "embed the notes that have no vector yet (search by meaning; needs getlogbook[semantic])")
+    s.add_argument("--rebuild", action="store_true", help="drop every vector and embed all notes again")
     s = add("explain", cmd_explain, "everything known about an entry id, a model, or a path")
     s.add_argument("target")
     s = add("path", cmd_path, "commits (with their entries) between two revisions")

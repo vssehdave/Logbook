@@ -5,7 +5,7 @@ Read `docs/ROADMAP.md` first if it exists: where we are, what is next, what was 
 ## What it is
 
 A Python package (`getlogbook`, command `logbook`, standard library only, git 2.31+) that keeps findings and the reasons behind changes in git, anchored to
-commits, so the next agent starts from them. Notes are private (`.git/logbook/private/<id>.json`) until published to the shared shelf
+commits, so the next agent starts from them. Notes are private (rows in `.git/logbook/notes.sqlite`, with the shared shelves mirrored beside them) until published to the shared shelf
 (`refs/logbook/log/<user>/000000`, one JSON file per note). Claude Code integration: hooks (`capture`), a skill and rules text, and an optional plugin in this repo
 (`.claude-plugin/`, `hooks/band/register.tsx`: the bibliography band above the prompt). Not tied to dbt or warehouses (that is Almanac, folder `lodestone`).
 
@@ -19,7 +19,7 @@ Layout: `src/getlogbook/` (`cli.py` commands, `store.py` storage and sync, `sync
 - Demo: `PYTHONPATH=src python -m getlogbook demo` (must print ALL CHECKS PASSED).
 - Band: `claude plugin validate .` and `claude plugin test .` (the validator does not catch what the engine refuses at run time).
 - End to end against an installed build: `python bench/e2e.py <path to logbook executable>` (expects ALL PASSED; on Windows the closed-input check can differ, see the script).
-- A real Claude session test: clone the repo to a temp dir, install the package into a venv, `logbook setup --yes --agent claude-code`, run `claude -p "..." --allowedTools "Read Grep Glob Edit Bash(python -m unittest:*)" --max-turns 30` with the venv on PATH, then read the note in `.git/logbook/private/` and the transcript in `~/.claude/projects/<slug>/`.
+- A real Claude session test: clone the repo to a temp dir, install the package into a venv, `logbook setup --yes --agent claude-code`, run `claude -p "..." --allowedTools "Read Grep Glob Edit Bash(python -m unittest:*)" --max-turns 30` with the venv on PATH, then read the note with `logbook ask note:<id>` and the transcript in `~/.claude/projects/<slug>/`.
 
 ## Rules
 
