@@ -37,6 +37,50 @@ class TestPrivateStore(DbBase):
         self.assertIsNone(self.r.db._con)
 
 
+class TestNothingPersonalIsKept(DbBase):
+    """Whoever writes a note or a conversation line (the agent, the observer, a savepoint), the library keeps no path outside the repository and no account name."""
+    ACCOUNT = "testaccount"
+
+    def as_that_account(self):
+        import pathlib
+        from contextlib import ExitStack
+        stack = ExitStack()
+        stack.enter_context(mock.patch("getpass.getuser", return_value=self.ACCOUNT))
+        stack.enter_context(mock.patch.object(pathlib.Path, "home", return_value=pathlib.Path("/h") / self.ACCOUNT))
+        return stack
+
+    def test_a_stored_note_has_no_outside_path_and_no_account_name(self):
+        from getlogbook.entry import new_id
+        inside = (self.r.root / "shop" / "a.py").as_posix()
+        e = Entry(id=new_id(), topic=f"ran in C:\\Users\\{self.ACCOUNT}\\proj", provenance="worker-written",
+                  body={"summary": f"{inside} and /Users/{self.ACCOUNT}/x.py", "evidence": f"logged in as {self.ACCOUNT}, ok"},
+                  anchor={"paths": ["shop/a.py", f"C:/Users/{self.ACCOUNT}/.claude/j.py", inside]},
+                  checks={"paths": [0, 2], "missing": [f"C:/Users/{self.ACCOUNT}/q.py", "shop/b.py"]},
+                  obs={"files_read": [f"/home/{self.ACCOUNT}/r.py", "shop/b.py"], "type": "discovery"})
+        with self.as_that_account():
+            self.r.add_private(e)
+            blob = self.r.get_private(e.id).to_json()
+        for private in (self.ACCOUNT, "Users", "/home/", "C:/"):
+            self.assertNotIn(private, blob, private)
+        got = self.r.get_private(e.id)
+        self.assertEqual(got.anchor["paths"], ["shop/a.py", "shop/a.py"], "a path inside the repo is made relative, the others are dropped")
+        self.assertEqual(got.checks["paths"], [0, 2], "a pair of counts that happens to be called paths is not a list of files")
+        self.assertEqual(got.checks["missing"], ["shop/b.py"], "an outside path is dropped from the names a note says are missing, as the sharing step did")
+        self.assertEqual(got.obs["files_read"], ["shop/b.py"])
+        self.assertTrue(got.body["summary"].startswith("shop/a.py and "))
+        self.assertIn("logged in as [user], ok", got.body["evidence"])
+        self.assertEqual((got.id, got.provenance), (e.id, "worker-written"), "ids and labels are not text to clean")
+
+    def test_a_conversation_line_is_cleaned_before_it_is_kept(self):
+        from getlogbook import convo, running
+        with self.as_that_account():
+            convo.record(self.r, "UserPromptSubmit", {"prompt": f"look at C:\\Users\\{self.ACCOUNT}\\work\\x.py as {self.ACCOUNT}", "session_id": "s1"})
+        run = running.Running(self.r, running.branch_now(self.r)[0])
+        talk = convo._path(run).read_text(encoding="utf-8")
+        self.assertIn("look at [outside path] as [user]", talk)
+        self.assertNotIn(self.ACCOUNT, talk)
+
+
 class TestSharedMirror(DbBase):
     def publish(self, *entries):
         self.r.publish(list(entries))

@@ -209,7 +209,8 @@ class Repo:
         return self._db
 
     def add_private(self, e, shelf=None):
-        self.db.add_private(e, shelf=shelf)
+        from .safety import clean_entry, repo_roots
+        self.db.add_private(clean_entry(e, repo_roots(self)), shelf=shelf)  # whoever wrote it: no path outside the repository and no account name is kept
 
     def get_private(self, eid):
         return self.db.get_private(eid)
