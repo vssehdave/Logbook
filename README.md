@@ -31,7 +31,8 @@ get a rules file. The only measurements so far are two small smoke tests on a to
 One command starts the repo, fetches teammates' notes when there is a remote, chains a git pre-push hook and post-merge/post-rewrite hooks (the pre-push one only reminds
 you of unshared notes, never blocks a push; in `auto` mode it also starts a publish of the queue, in `ask` mode it leaves a note for your next prompt), and for each agent it finds writes that agent's hooks, an
 always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
-`.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
+`.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers. Any other command run at a terminal in a clone that is not set up offers the
+same step once (answer no and it does not ask again); run by a hook or a script it only says what to do and writes nothing.
 `--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
 `.github/copilot-instructions.md`, `GEMINI.md` and `.cursor`. `logbook status --check` shows what is installed.
 
