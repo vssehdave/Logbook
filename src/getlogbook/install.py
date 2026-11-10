@@ -27,8 +27,33 @@ def asset(name):
     return resources.files("getlogbook").joinpath("agent", name).read_text(encoding="utf-8")
 
 
+# the command each target's agent is run with; only Claude Code has a plugin, the others get a rules file
+AGENT_COMMANDS = (("claude-code", ("claude",)), ("agents-md", ("codex",)), ("gemini", ("gemini",)), ("cursor", ("cursor-agent", "cursor")), ("copilot", ("copilot",)))
+
+
+def installed_agents():
+    """{target: (command, version line)} for the coding agents whose command is on this machine's PATH. Empty when LOGBOOK_OFFLINE is set."""
+    if os.environ.get("LOGBOOK_OFFLINE"):
+        return {}
+    found = {}
+    for target, names in AGENT_COMMANDS:
+        for name in names:
+            exe = shutil.which(name)
+            if not exe:
+                continue
+            try:
+                p = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=8)
+                lines = (p.stdout or p.stderr).strip().splitlines()
+                version = lines[0][:40] if p.returncode == 0 and lines else "version unknown"
+            except (OSError, subprocess.SubprocessError):
+                version = "version unknown"
+            found[target] = (name, version)
+            break
+    return found
+
+
 def detect(root):
-    """Agents this repo already shows signs of; Claude Code if there is no sign of any."""
+    """The agents to set up: those this repo already shows signs of plus those installed on this machine; Claude Code if there is no sign of any."""
     root = Path(root)
     found = []
     if (root / ".claude").exists() or (root / "CLAUDE.md").exists():
@@ -41,6 +66,7 @@ def detect(root):
         found.append("gemini")
     if (root / ".cursor").exists():
         found.append("cursor")
+    found += [t for t in installed_agents() if t not in found]
     return found or ["claude-code"]
 
 

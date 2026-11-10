@@ -740,7 +740,13 @@ def cmd_install(a):
     targets = _targets(a, ins.detect(r.root))
     out("logbook will make these changes (existing files are backed up to .git/logbook/backups):")
     lines = ins.describe(r, targets, pretool=not a.no_pretool)
-    want_plugin = "claude-code" in targets and ins.plugin_state() == "missing"
+    here = ins.installed_agents()
+    if here:
+        out("coding agents found on this machine: " + ", ".join(f"{t} ({v})" for t, (_, v) in here.items()))
+    state = ins.plugin_state() if "claude-code" in targets else ""
+    if state == "unavailable" and "claude-code" in here:
+        out(f"this Claude Code ({here['claude-code'][1]}) cannot install plugins, so the Sources band is skipped; update Claude Code and run `logbook setup` again for it.")
+    want_plugin = state == "missing"
     if want_plugin:
         lines.append(f"  create     Claude Code plugin {ins.PLUGIN} (the Sources band; from the {ins.MARKETPLACE} marketplace)")
     for line in lines:
