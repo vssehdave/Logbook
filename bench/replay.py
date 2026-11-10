@@ -256,8 +256,8 @@ def main(argv=None):
     report = {"completed": not paused, "next_hook_call": done if not paused else i, "of": len(events),
               "paused": {"reason": paused[0], "until": int(paused[1])} if paused else None, "code": code,
               "models": led.get("models"), "model_asked_for": os.environ.get("LOGBOOK_WORKER_MODEL", worker.MODEL), "hook_calls": done, "seconds": int(time.time() - t0), "background_steps": len(spawned), "errors": errors[:20],
-              "private": {k: sum(1 for e in entries if e.kind == k) for k in ("log", "finding", "change", "summary")},
-              "shared": {k: sum(1 for l in shared if l.entry.kind == k) for k in ("finding", "change", "summary", "log")}, "archived": len(list((repo.cdir / "archive").glob("*.json"))), "queue": len(repo.queued()),
+              "private": {k: sum(1 for e in entries if e.kind == k) for k in ("savepoint", "finding", "change", "summary")},
+              "shared": {k: sum(1 for l in shared if l.entry.kind == k) for k in ("finding", "change", "summary", "savepoint")}, "archived": len(list((repo.cdir / "archive").glob("*.json"))), "queue": len(repo.queued()),
               "model_calls": led["calls"], "cost_usd": round(led["cost"], 4), "branches": sorted({e.anchor.get("branch", "") for e in entries}),
               "clone": str(clone.path)}
     (a.work / "report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")

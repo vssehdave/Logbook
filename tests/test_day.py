@@ -127,7 +127,7 @@ class TestADay(unittest.TestCase):
         self.A = self.clone("alice", "alice@example.com", origin, seed=True)
         self.B = self.clone("bob", "bob@example.com", origin)
         for d in (self.A, self.B):
-            self.assertEqual(self.run_cli(d, "install", "--yes", "--agent", "claude-code")[0], 0)
+            self.assertEqual(self.run_cli(d, "setup", "--yes", "--agent", "claude-code")[0], 0)
         for d in (self.A, self.B):  # what setup writes is the person's local setup, not part of the shared work
             (d / ".git" / "info").mkdir(exist_ok=True)
             (d / ".git" / "info" / "exclude").write_text(".claude/\nCLAUDE.md\n", encoding="utf-8")
@@ -261,7 +261,7 @@ class TestADay(unittest.TestCase):
                 seen_ids |= set(ids)
             # every log is filed under a branch, and a commit it names is real
             for e in repo.all_entries():
-                if e.entry.kind == "log":
+                if e.entry.kind == "savepoint":
                     self.assertTrue(e.entry.anchor.get("branch"), f"{label}: {who} has a log with no branch")
                     sha = e.entry.anchor.get("sha")
                     if sha and e.user == repo.user:  # a teammate's log may name a commit only their machine has
@@ -286,7 +286,7 @@ class TestADay(unittest.TestCase):
         self.invariants("morning")
         run_a = running.Running(ra, "feat/a")
         self.assertEqual(run_a.pending_bytes(), 0)
-        logs_a = [v for v in tree.all_views(ra)[0] if v["kind"] == "log" and v["branch"] == "feat/a"]
+        logs_a = [v for v in tree.all_views(ra)[0] if v["kind"] == "savepoint" and v["branch"] == "feat/a"]
         self.assertGreaterEqual(len(logs_a), 1, "auto mode saved a log without anyone asking")
         self.assertTrue(any(v["sha"] for v in logs_a), "and one of them carries a commit")
         self.assertTrue(any(c[:1] == ["log"] for c in self.spawned), self.spawned)
@@ -342,7 +342,7 @@ class TestADay(unittest.TestCase):
         shared = ra.load_shared()[0]
         shared_ids = {l.entry.id for l in shared}
         self.assertTrue([l for l in shared if l.entry.kind == "finding" and l.entry.anchor.get("branch") == "feat/a"], "the merged branch's notes were published")
-        self.assertFalse([l for l in shared if l.entry.kind == "log"], "and no log, ever: logs stay on this machine")
+        self.assertFalse([l for l in shared if l.entry.kind == "savepoint"], "and no log, ever: logs stay on this machine")
         self.assertNotIn(probe.id, shared_ids, "the throwaway session's note was not published")
         self.assertTrue((ra.cdir / "archive" / f"{probe.id}.json").exists(), "it was archived, not deleted")
         self.assertFalse([e for e in ra.queued() if e.anchor.get("branch") == "feat/a"], "everything tidy queued on the merged branch went out")
@@ -359,7 +359,7 @@ class TestADay(unittest.TestCase):
         alice_private = {e.id for e in ra.load_private()}
         self.assertFalse(alice_private & {l.entry.id for l in rb.all_entries()}, "nothing alice kept private reaches bob")
         theirs = [l for l in rb.all_entries() if l.user == ra.user]
-        self.assertTrue(theirs and all(l.entry.kind != "log" for l in theirs), "what bob has of alice's is notes")
+        self.assertTrue(theirs and all(l.entry.kind != "savepoint" for l in theirs), "what bob has of alice's is notes")
         T.sh("git", "switch", "-q", "-c", "feat/c", cwd=B)
         self.session(B, "b2", 4, start=40)
         self.invariants("teammate")
@@ -378,7 +378,7 @@ class TestADay(unittest.TestCase):
             self.session(A, f"s6{j}", 2, start=60 + 3 * j, commit_every=1)
             self.run_cli(A, "log")
         self.assertTrue(any(c[:2] == ["tidy", "--work"] for c in self.spawned[-12:]), "tidy auto runs after a log is saved")
-        logs = [v for v in tree.all_views(ra)[0] if v["kind"] == "log" and v["branch"] == "feat/b"]
+        logs = [v for v in tree.all_views(ra)[0] if v["kind"] == "savepoint" and v["branch"] == "feat/b"]
         self.assertGreaterEqual(len(logs), 5, "every log is kept: nothing folds or archives a log")
         for v in logs:
             self.assertIsNotNone(ra.get_private(v["id"]))
@@ -414,11 +414,11 @@ class TestADay(unittest.TestCase):
         self.tidy_up(A, "end of day")
         self.assertEqual(T.sh("git", "status", "--porcelain", cwd=A), "", "nothing Logbook did left the work tree dirty")
         T.sh("git", "fsck", "--no-progress", cwd=A)
-        self.assertFalse([v for v in tree.all_views(ra)[0] if v["kind"] == "log" and v.get("status") in ("resolved", "in-progress")], "tidy never judges a saved log")
+        self.assertFalse([v for v in tree.all_views(ra)[0] if v["kind"] == "savepoint" and v.get("status") in ("resolved", "in-progress")], "tidy never judges a saved log")
         # uninstall puts the files back and keeps the notes
-        n_logs = len([e for e in ra.all_entries() if e.entry.kind == "log"])
+        n_logs = len([e for e in ra.all_entries() if e.entry.kind == "savepoint"])
         self.assertEqual(self.run_cli(A, "uninstall", "--yes")[0], 0)
-        self.assertEqual(len([e for e in ra.all_entries() if e.entry.kind == "log"]), n_logs, "uninstalling keeps every log")
+        self.assertEqual(len([e for e in ra.all_entries() if e.entry.kind == "savepoint"]), n_logs, "uninstalling keeps every log")
 
     # ---- passes that overlap ---------------------------------------------------------------------------------------------
     def test_passes_that_overlap_lose_and_double_nothing(self):

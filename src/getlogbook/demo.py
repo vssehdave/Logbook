@@ -204,5 +204,5 @@ def run(dir=None):
     check(not any(l == "fail" for l, _ in sync.doctor(ra)), "doctor reports no failures for Alice")
 
     say(f"\n{'ALL CHECKS PASSED' if not FAILS else str(len(FAILS)) + ' CHECK(S) FAILED'}")
-    say(f"try it yourself:  cd {bob}   then  logbook status | logbook query refunds")
+    say(f"try it yourself:  cd {bob}   then  logbook status | logbook ask refunds")
     return 1 if FAILS else 0
