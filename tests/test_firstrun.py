@@ -51,9 +51,9 @@ class TestFirstRun(T.CliRepo):
         self.assertFalse(self.hooks())
 
     def test_taking_it_out_on_purpose_means_do_not_ask_again(self):
-        self.run_cli("setup", "--yes", "--agent", "agents-md")
+        self.run_cli("setup", "--yes")
         self.assertTrue(self.hooks())
-        self.run_cli("uninstall", "--yes", "--agent", "agents-md")
+        self.run_cli("uninstall", "--repo", "--yes")
         self.assertFalse(self.hooks())
         self.assertTrue(self.r.cfg().get("setup_declined"))
 

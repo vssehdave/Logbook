@@ -47,7 +47,7 @@ def one(lb, name, args):
         run("git", *c, cwd=d)
     env = dict(os.environ, PATH=str(Path(lb).parent) + os.pathsep + os.environ["PATH"])
     env.pop("LOGBOOK_WRITER", None)
-    run(lb, "setup", "--yes", "--agent", "claude-code", cwd=d, env=env)
+    run(lb, "setup", "--yes", cwd=d, env=env)  # the hooks come from the person's own `logbook install`; this run needs it done
     cmd =["claude", "-p", prompt, "--output-format", "json", "--max-turns", str(args.max_turns),
            "--allowedTools", "Read Grep Glob Edit Bash(python -m unittest:*) Bash(logbook:*)"]
     if args.model:
