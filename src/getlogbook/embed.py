@@ -1,10 +1,8 @@
-"""Embeddings for search by meaning (optional; the core of Logbook stays standard-library only).
+"""Embeddings for search by meaning (on by default; `logbook config semantic off` turns it off).
 
 An embedder turns text into a unit-length vector of 32-bit floats, packed as bytes, so that two texts about the same thing sit close together even
-when they share no word ("totals lose a cent" finds "refund rounding drops a cent"). Nothing here runs unless `config semantic on` is set and the extra
-is installed:
-
-    pip install "getlogbook[semantic]"      # onnxruntime + tokenizers: all-MiniLM-L6-v2, a 90 MB model downloaded once, runs on the CPU
+when they share no word ("totals lose a cent" finds "refund rounding drops a cent"). The packages come with `pip install getlogbook` (onnxruntime, tokenizers,
+huggingface_hub, numpy) and the model, all-MiniLM-L6-v2 (90 MB, CPU only), is downloaded once, by `logbook setup` or the first search. LOGBOOK_OFFLINE=1 never downloads or loads it.
 
 The vectors are derived data. They live in the local SQLite file (notesdb.note_vec), never in git, are never published, and are rebuilt from the notes
 at any time. They only add candidates to a search; every hit is still a stored note with its author, ref, git blob, commit, time and checks, and is
@@ -44,8 +42,8 @@ def note_text(e):
 
 
 def load(cfg):
-    """The configured embedder, or None when the extra is not installed or the model cannot be loaded (the caller then falls back to text search)."""
-    if not installed():
+    """The configured embedder, or None when the packages are missing, the model cannot be loaded or LOGBOOK_OFFLINE is set (the caller then falls back to text search)."""
+    if os.environ.get("LOGBOOK_OFFLINE") or not installed():
         return None
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     name = cfg.get("semantic_model") or DEFAULT_MODEL

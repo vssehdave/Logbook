@@ -396,13 +396,18 @@ def cmd_sync(a):
     return 0 if res["fetch"]["ok"] else 1
 
 
+def _semantic_on(r):
+    """Search by meaning is on unless `config semantic off` (stored as False) turned it off."""
+    return r.cfg().get("semantic", "on") not in (False, "off")
+
+
 def _embedder(r):
-    """The embedder when search by meaning is on (`config semantic on`) and can start; otherwise None, with a line saying why when it was asked for."""
-    if r.cfg().get("semantic") != "on":
+    """The embedder when search by meaning is on (the default; `config semantic off` turns it off) and can start; otherwise None, with a line saying why."""
+    if not _semantic_on(r):
         return None
     emb = embed.load(r.cfg())
-    if emb is None:
-        out("(search by meaning is on, but its model could not start: showing matches on words only. `pip install \"getlogbook[semantic]\"`)")
+    if emb is None and not os.environ.get("LOGBOOK_OFFLINE"):
+        out("(the search model could not start, so these are matches on words only. It is downloaded once and needs the network the first time: `logbook index` tries again.)")
     return emb
 
 
@@ -435,11 +440,11 @@ def cmd_index(a):
     r = need_repo()
     emb = embed.load(r.cfg())
     if emb is None:
-        raise SystemExit("logbook: search by meaning needs the extra and its model: pip install \"getlogbook[semantic]\"")
+        raise SystemExit("logbook: the search model could not start. It is downloaded once (90 MB) and needs the network the first time; if that is not it, `pip install --upgrade getlogbook` repairs the packages.")
     if a.rebuild:
         r.db.drop_vectors()
     n = r.db.index_vectors(emb)
-    out(f"embedded {n} note(s); {r.db.vector_count(emb.name)} in the index (model {emb.name}). Turn it on for `logbook ask` with: logbook config semantic on")
+    out(f"embedded {n} note(s); {r.db.vector_count(emb.name)} in the index (model {emb.name}).")
     return 0
 
 
@@ -666,6 +671,7 @@ def cmd_doctor(a):
         bad |= level == "fail"
     from . import install as ins
     out("what is installed here (`logbook setup` sets it up, `logbook uninstall` removes it):")
+    out(f"  claude plugin: {ins.plugin_state()} ({ins.PLUGIN})")
     out(f"  git hooks   : pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}, "
         f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}, "
         f"post-commit {'installed' if ins.git_hook_installed(r, 'post-commit') else 'missing'}")
@@ -727,6 +733,9 @@ def cmd_install(a):
     targets = _targets(a, ins.detect(r.root))
     out("logbook will make these changes (existing files are backed up to .git/logbook/backups):")
     lines = ins.describe(r, targets, pretool=not a.no_pretool)
+    want_plugin = "claude-code" in targets and ins.plugin_state() == "missing"
+    if want_plugin:
+        lines.append(f"  create     Claude Code plugin {ins.PLUGIN} (the Sources band; from the {ins.MARKETPLACE} marketplace)")
     for line in lines:
         out(line)
     if not _confirm(a, lines):
@@ -734,6 +743,12 @@ def cmd_install(a):
     if not r.cfg().get("user"):
         r.init()
     ins.apply(r, targets, pretool=not a.no_pretool)
+    if want_plugin:
+        out(f"installed the Claude Code plugin {ins.PLUGIN}." if ins.plugin_install() else
+            f"could not install the Claude Code plugin; run: claude plugin marketplace add {ins.MARKETPLACE} && claude plugin install {ins.PLUGIN}")
+    if _semantic_on(r) and not os.environ.get("LOGBOOK_OFFLINE"):
+        out("fetching the search model (all-MiniLM-L6-v2, 90 MB, once)...")
+        out("search by meaning is ready." if embed.load(r.cfg()) else "could not fetch it now; search matches on words until `logbook index` succeeds.")
     out("done. `logbook status --check` shows what is installed; `logbook uninstall` reverses it.")
     if "claude-code" in targets:
         out("Claude Code sessions are now observed per branch (private; `logbook worker --status`). `logbook log` saves a log of the session so far.")
@@ -815,8 +830,6 @@ def cmd_config(a):
         r.save_cfg(c)
         out(f"{a.key} = {a.value}")
         return 0
-    if a.key == "semantic" and a.value == "on" and not embed.installed():
-        raise SystemExit("logbook: search by meaning needs the extra: pip install \"getlogbook[semantic]\", then `logbook index`")
     if a.key == "publish":
         a.value = LEGACY_MODES.get(a.value, a.value)  # never -> manual, claude -> ask
     if allowed and a.value not in allowed:
@@ -1114,7 +1127,7 @@ def build_parser():
     s.add_argument("--fetch-only", action="store_true", help="kept for older scripts: sync never pushes now")
     s.add_argument("--json", action="store_true")
     s.add_argument("--depth", type=int)
-    s = add("index", cmd_index, "embed the notes that have no vector yet (search by meaning; needs getlogbook[semantic])")
+    s = add("index", cmd_index, "embed the notes that have no vector yet (search by meaning; the first run downloads the model)")
     s.add_argument("--rebuild", action="store_true", help="drop every vector and embed all notes again")
     s = add("status", cmd_status, "what is recorded, what is waiting to be shared (--check for problems)")
     s.add_argument("--check", action="store_true", help="also run the setup and coverage checks")

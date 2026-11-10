@@ -82,19 +82,19 @@ class TestMeaning(DbBase):
             without = [l.entry.id for l, _ in self.r.db.vector_search(EMB, "slow csv export hang", 5)]
         self.assertEqual(with_np, without)
 
-    def test_ask_uses_meaning_only_when_it_is_on_and_shows_where_a_hit_is_held(self):
-        with mock.patch.object(embed, "installed", lambda: False), self.assertRaises(SystemExit):
-            self.run_cli("config", "semantic", "on")
-        self.assertEqual(self.run_cli("ask", "why do totals lose money")[0], 4, "off: words only, nothing in common")
-        with mock.patch.object(embed, "installed", lambda: True), mock.patch.object(embed, "load", lambda cfg: EMB):
-            self.run_cli("config", "semantic", "on")
-            code, text = self.run_cli("ask", "why do totals lose money")
+    def test_ask_uses_meaning_by_default_and_shows_where_a_hit_is_held(self):
+        with mock.patch.object(embed, "load", lambda cfg: None):  # the model cannot start (no network yet): words only
+            self.assertEqual(self.run_cli("ask", "why do totals lose money")[0], 4, "no model: words only, nothing in common")
+        with mock.patch.object(embed, "load", lambda cfg: EMB):
+            code, text = self.run_cli("ask", "why do totals lose money")  # nothing to switch on
             self.assertEqual(code, 0, text)
             self.assertIn(self.money.id, text)
             self.assertIn("found by meaning", text)
             self.assertIn(f"shelf {self.r.user}/000000", text)
             self.assertIn("the same note is in git", text)
             self.assertEqual(self.run_cli("ask", "why do totals lose money", "--exact")[0], 4, "--exact is words only")
+            self.run_cli("config", "semantic", "off")
+            self.assertEqual(self.run_cli("ask", "why do totals lose money")[0], 4, "off: words only")
 
 
 class TestConversations(DbBase):
