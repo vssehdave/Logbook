@@ -15,10 +15,11 @@ sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
 os.environ["LOGBOOK_OFFLINE"] = "1"  # no test downloads the model or installs a plugin
+os.environ["LOGBOOK_GITHUB_LOGIN"] = ""  # no test asks `gh` who you are
 for _k in [k for k in os.environ if k.startswith("CLAUDE")]:  # run from inside Claude Code, these would make every note look agent-written
     del os.environ[_k]
 
-from getlogbook import capture, cli, ground, recall, safety, sync, tidy, tree  # noqa: E402
+from getlogbook import capture, cli, ground, recall, safety, store, sync, tidy, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
 from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
@@ -478,7 +479,7 @@ class TestInstaller(Base):
         self.assertIn("logbook:start", real.read_text())
 
     def test_doctor_reports_install_state(self):
-        self.run_cli("setup", "--dry-run")  # creates your id and installs nothing
+        Repo(self.d).init()  # your id, and nothing installed
         _, before = self.run_cli("status", "--check")
         self.assertRegex(before, r"claude-code\s*: missing")
         self.run_cli("setup", "--yes")
@@ -3252,6 +3253,55 @@ class TestPluginAndModelAtSetup(CliRepo):
         self.assertNotIn(("plugin", "install", "logbook@logbook"), calls)
         _, text, calls, _ = self.run_setup(installed_after="", listed_before="[]", present=False)
         self.assertEqual(calls, [])
+
+
+class TestSyncWithoutARemote(CliRepo):
+    def test_a_repo_with_no_remote_has_nothing_to_sync_and_that_is_fine(self):
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn("no remote named 'origin'", text)
+        self.assertIn("stay on this machine", text)
+        code, text = self.run_cli("sync", "--json")
+        self.assertEqual((code, json.loads(text)["fetch"]["ok"]), (0, True))
+
+
+class TestGithubIdentity(Base):
+    def fresh(self, email="f@x.io"):
+        d = make_repo(self.root, "fresh", email)
+        self.cd(d)
+        return d
+
+    def test_your_github_login_is_what_teammates_see_and_your_id_stays_a_stable_hash(self):
+        d = self.fresh()
+        with unittest.mock.patch.dict(os.environ, {"LOGBOOK_GITHUB_LOGIN": "Alice-Dev"}):
+            c = Repo(d).init()
+        self.assertEqual((c["github"], c["display"]), ("Alice-Dev", "Alice-Dev"))
+        self.assertEqual(c["user"], store.user_id("f@x.io"), "the id is still the hash: refs and the committer trust rule depend on it")
+
+    def test_the_login_is_found_without_the_network_from_git_config_or_a_noreply_email(self):
+        d = self.fresh("12345+bobby@users.noreply.github.com")
+        with unittest.mock.patch.dict(os.environ):
+            del os.environ["LOGBOOK_GITHUB_LOGIN"]
+            self.assertEqual(store.github_login(d), "bobby")
+            sh("git", "config", "github.user", "robert", cwd=d)
+            self.assertEqual(store.github_login(d), "robert", "an explicit git setting wins")
+            sh("git", "config", "github.user", "not a login!", cwd=d)
+            self.assertEqual(store.github_login(d), "bobby", "a value that is not a GitHub login is ignored")
+
+    def test_with_no_login_anywhere_you_are_shown_by_your_git_name(self):
+        d = self.fresh()
+        c = Repo(d).init()
+        self.assertNotIn("github", c)
+        self.assertEqual(c["display"], g.config_get(d, "user.name"))
+
+    def test_a_dry_run_of_setup_writes_nothing_not_even_your_id(self):
+        d = self.fresh()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.assertEqual(cli.main(["setup", "--dry-run", "--agent", "agents-md"]), 0)
+        self.assertIn("(dry run) setup would create your id", buf.getvalue())
+        self.assertFalse((Repo(d).cdir / "config.json").exists())
+        self.assertEqual(Repo(d).cfg().get("user", ""), "")
 
 
 if __name__ == "__main__":

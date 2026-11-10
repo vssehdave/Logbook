@@ -13,7 +13,7 @@ from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, inside, looks_tabular, redact, scrub_paths
 from .safety import sanitize as safety_sanitize
-from .store import LEGACY_MODES, PUBLISH_MODES, Repo
+from .store import LEGACY_MODES, PUBLISH_MODES, Repo, github_login, user_id
 
 SHARE_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale")  # allowlist: evidence is opt-in
 
@@ -387,6 +387,8 @@ def cmd_sync(a):
     res = sync.sync(r, a.remote, True, a.depth)
     if a.json:
         out(json.dumps(res, indent=2))
+    elif res["fetch"].get("skipped"):
+        out(f"{res['fetch']['skipped']}: nothing to fetch, and your notes stay on this machine until you add one (git remote add {a.remote} <url>).")
     elif not res["fetch"]["ok"]:
         out("logbook: could not fetch from " + a.remote + ": " + res["fetch"]["error"][:200])
     else:
@@ -628,6 +630,12 @@ def cmd_ask(a):
 def cmd_setup(a):
     """init (or join, when there is a remote) and install, in one go."""
     r = Repo(".")
+    if a.dry_run:  # only looks: nothing is written, not even your id
+        if not r.cfg().get("user"):
+            email, login = g.config_get(r.root, "user.email"), github_login(r.root)
+            out("(dry run) set `git config user.email` first: setup needs it for your id." if not email else
+                f"(dry run) setup would create your id {user_id(email)}" + (f" and show you to teammates as {login}" if login else "") + "; nothing is written.")
+        return cmd_install(a)
     if "origin" in sync.remotes(r):
         cmd_join(argparse.Namespace(remote="origin"))
     else:
@@ -639,7 +647,7 @@ def cmd_status(a):
     r = need_repo()
     vs, an = views(r)
     shared, _ = r.load_shared()
-    out(f"you: {r.user}  attribution: {r.attribution()}  transport: {r.cfg().get('transport', 'refs')}")
+    out(f"you: {r.user}" + (f" (github: {r.cfg()['github']})" if r.cfg().get("github") else "") + f"  attribution: {r.attribution()}  transport: {r.cfg().get('transport', 'refs')}")
     out(f"entries: {len(vs)} visible ({sum(1 for v in vs if v['scope'] == 'private')} private, "
         f"{sum(1 for v in vs if v['scope'] == 'shared')} shared) from {len({l.user for l in shared})} writers")
     from . import running
