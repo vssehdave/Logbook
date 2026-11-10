@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -46,6 +48,29 @@ def _norm(e):
 def user_id(email):
     """Stable, pseudonymous id for a person: same on every machine, derived from their git email."""
     return hashlib.sha256(email.strip().lower().encode()).hexdigest()[:10]
+
+
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
+_NOREPLY_RE = re.compile(r"^(?:\d+\+)?([A-Za-z0-9-]+)@users\.noreply\.github\.com$")
+
+
+def github_login(root):
+    """Your GitHub login, or '' when it cannot be found. In order: LOGBOOK_GITHUB_LOGIN (an override, empty means "none"), `git config github.user`, a
+    users.noreply.github.com commit email, then `gh api user` when the gh CLI is signed in (the only one that touches the network, once, at setup)."""
+    if "LOGBOOK_GITHUB_LOGIN" in os.environ:
+        found = os.environ["LOGBOOK_GITHUB_LOGIN"].strip()
+        return found if _LOGIN_RE.match(found) else ""
+    found = g.config_get(root, "github.user").strip()
+    if not _LOGIN_RE.match(found):
+        m = _NOREPLY_RE.match(g.config_get(root, "user.email").strip())
+        found = m.group(1) if m else ""
+    if not found and shutil.which("gh"):
+        try:
+            p = subprocess.run(["gh", "api", "user", "--jq", ".login"], capture_output=True, text=True, timeout=8, cwd=str(root))
+            found = p.stdout.strip() if p.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            found = ""
+    return found if _LOGIN_RE.match(found) else ""
 
 
 def atomic_write(path, data):
@@ -117,7 +142,10 @@ class Repo:
             raise SystemExit("logbook: set `git config user.email` first (used only to derive a stable pseudonymous id).")
         c.setdefault("user", user_id(email))
         c.setdefault("device", os.urandom(3).hex())
-        c.setdefault("display", g.config_get(self.root, "user.name"))
+        login = github_login(self.root)
+        if login:
+            c.setdefault("github", login)
+        c.setdefault("display", login or g.config_get(self.root, "user.name"))  # what teammates see: your GitHub login, else your git name
         c.setdefault("trusted", [])
         c.setdefault("deny", [])
         c.setdefault("transport", "refs")
