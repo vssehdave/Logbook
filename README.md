@@ -7,8 +7,9 @@ particular stack.
 
 - Python 3.10+, **standard library only**, git 2.31+. Windows, macOS, Linux. No server to host, and no key: the optional observer uses your own `claude -p`.
   The agent writes the notes; the observer and `logbook log` ask a cheap model to condense them.
-- Two logs: a **private** one under `.git/logbook/` (a SQLite file, `notes.sqlite`; never tracked), and a **shared** one on git refs
-  (`refs/logbook/log/<user>/000000`, one shelf per person; two machines of the same person are merged on sync). Sharing is opt-in per entry.
+- One local file, `.git/logbook/library.sqlite` (never tracked), holds everything on this machine: **logs** (the conversation up to a savepoint), **shelves** (the notes taken
+  from a log) and **notes**. The shared side is git: `refs/logbook/log/<user>/000000` is one shelf per person (two machines of the same person are merged on sync), mirrored
+  into the library, so a team's notes read as one big shelf. Sharing is opt-in per note.
 
 **Status: alpha.** The engine, git-ref storage, sharing and the Claude Code integration work and are tested on Linux,
 macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
@@ -91,16 +92,16 @@ call to a fraction of a cent. `logbook worker --status` shows what it has spent 
 
 ## Branch memory at the start of a session
 
-When a Claude Code session starts, the hook adds a short block before the matching notes: your latest saved logs on this branch and on the main line (each with its age
+When a Claude Code session starts, the hook adds a short block before the matching notes: your latest savepoint notes on this branch and on the main line (each with its age
 and commit, or "no commit"), the latest notes teammates shared there (their logs stay on their machines), then what the observer has seen on this branch since the last
 savepoint. Notes from authors you have not trusted are left out, every word is cleaned like any injected note, and the block is marked as data to verify. It is empty when
-nothing has been recorded. (Logs are not picked by relevance to a prompt, only shown at session start.)
+nothing has been recorded. (Savepoint notes are not picked by relevance to a prompt, only shown at session start.)
 
 ## Modes and savepoints
 
 `logbook log` is a **savepoint**. It first observes whatever tool uses are still queued, then summarizes the observations made on this branch since the last savepoint
-(request, what was looked at, what was learned, what was done, next steps) and stores the result as a **private log** filed under the branch. The commit is optional: a
-log carries one only when a commit was made since the last savepoint, so it can be saved before or after committing. The summary comes from the same cheap model as the
+(request, what was looked at, what was learned, what was done, next steps) and stores the result as a **savepoint note** on a new **shelf** filed under the branch (the conversation up to it is saved as the shelf's **log**). The commit is optional: a
+shelf carries one only when a commit was made since the last savepoint, so it can be saved before or after committing. The summary comes from the same cheap model as the
 observations, or, with `--no-model` or no model available, is put together from the observations by code. Each observation it covered also becomes a note of its own (private until published, shown
 to agents when it carries evidence and names nothing that is missing). The observations and the tool uses behind them move to
 `.git/logbook/running/<branch>/archive/`; the ones a new branch inherited from the main line stay as context. The old view of notes next to commits is `logbook history`.
@@ -131,11 +132,13 @@ The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A r
 
 ## Logs stay on your machine; notes are what is shared
 
-A log (`logbook log`) is the record of a session, and the conversation behind it (what you typed and the agent's final replies, recorded by two hooks with no model; never
-thinking, tool calls or tool output; secrets and emails masked as they are written) is kept with it in the local database (`notes.sqlite`; older versions used `.git/logbook/convo/`). **Neither is ever published.** Only notes go
-to the shared ref, so there is nothing of unknown size or content to carry in a public repository. Every note made at a savepoint keeps the id of its log in `sources`: for
-your own notes that is a way in (`logbook ask note:<id>` says `from your log <log id>`, `logbook convo <log id>` prints the conversation, and `logbook cites --json` carries the
-log id for the band); for a teammate's note the log is not on your machine, so it just shows as a note. `logbook config worker off` stops the recording.
+A **log** is the conversation behind a savepoint (`logbook log`): what you typed and the agent's final replies, recorded by two hooks with no model; never thinking, tool
+calls or tool output; secrets and emails masked as they are written. It is kept in the library with the branch you were on. The note-taker then takes a **shelf** of notes
+from it: the shelf carries the log, the branch and, when a commit triggered the savepoint, the commit, and every note on it gets that branch and commit unless it has its own.
+The savepoint's own summary is a note of kind `savepoint` on the same shelf. **Neither the log nor the savepoint note is ever published.** Only notes go to your shelf on
+git, so there is nothing of unknown size or content to carry in a public repository. A note finds its log through its shelf: for your own notes `logbook ask note:<id>` says
+`from your log <log id>`, `logbook convo <log id>` prints the conversation, and `logbook cites --json` carries the log id for the band; for a teammate's note the log is not on
+your machine, so it just shows as a note. `logbook config worker off` stops the recording.
 
 ## Sync, publish and the news
 
@@ -176,7 +179,7 @@ shared, archives the junk and the repeats and updates statuses, and only then pu
 paused, the day's call cap is reached, the model call failed) nothing is published and it says why; `--no-tidy` publishes unchecked anyway. `ask` and `manual` do not
 start tidy by themselves.
 
-In `auto` the worker runs in the background after a log is saved and after a `git pull`. A log is never folded, edited or marked true or false, and tidy never archives one: it is the record of a session. What tidy judges are the notes the savepoint made from the observations. The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
+In `auto` the worker runs in the background after a log is saved and after a `git pull`. A savepoint note is never folded, edited or marked true or false, and tidy never archives one: it is the record of a session. What tidy judges are the notes the savepoint made from the observations. The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
 commit touches its files, and `--garbage` still archives your old machine-made drafts.
 
 ## What Claude may run without asking (Claude Code)
@@ -241,7 +244,7 @@ CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/
     logbook index                           # embeds your notes and logs (a few hundred per second); `--rebuild` starts over
     logbook config semantic on              # `logbook ask` now ranks by words and meaning together; `--exact` is words only
 
-The vectors live in the local database only (`notes.sqlite`), are never published, and can be rebuilt from the notes at any time. They only choose which notes are looked at: every hit
+The vectors live in the local database only (`library.sqlite`), are never published, and can be rebuilt from the notes at any time. They only choose which notes are looked at: every hit
 is a stored note and is shown with its author, whether you trust them, whether it carries evidence, and where it is held (`shelf <author>/000000, blob <id>, the same note is in git`, or
 `private to this machine`); a shared hit is re-read from git at the shelf tip it was indexed from, and a difference is reported instead of trusted. Starting the model takes about
 half a second (the first run downloads it), so only `ask` and `index` use it; the lookup that runs on every prompt stays on words. The vectors add 1.5 KB per note to the file (384 numbers). How good the matches are depends on the model; `config semantic_model` names another one that
