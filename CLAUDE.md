@@ -1,6 +1,6 @@
 # Logbook: brief for Claude Code
 
-Read `docs/ROADMAP.md` first: where we are, what is next, what was decided. Design of the next phases: `docs/TIDY-AND-SUMMARY-TREE.md`.
+Read `docs/ROADMAP.md` first if it exists: where we are, what is next, what was decided. Design of the next phases: `docs/TIDY-AND-SUMMARY-TREE.md`. `docs/` is git-ignored planning notes kept on the maintainer's machine, not part of the repository.
 
 ## What it is
 
@@ -11,7 +11,7 @@ commits, so the next agent starts from them. Notes are private (`.git/logbook/pr
 
 Layout: `src/getlogbook/` (`cli.py` commands, `store.py` storage and sync, `sync.py`, `tree.py` anchoring and the tree, `nav.py` addresses, `recall.py` injection, `cites.py` citations,
 `ground.py` grounding checks, `capture.py` hooks, `observer.py` / `running.py` / `savepoint.py` / `worker.py` (the observer and `logbook log`), `install.py`, `agent/skill.md` and `rules.md`), `tests/test_logbook.py` and `tests/band.test.tsx`, `bench/` (`e2e.py`,
-`run_ab.py`), `docs/`.
+`run_ab.py`).
 
 ## Commands
 

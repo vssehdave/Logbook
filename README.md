@@ -15,7 +15,7 @@ macOS and Windows. Notes are followed through a merge, a rebase and (when writte
 its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Summaries of the repo
 or a branch are written by your agent on request and go stale when a note is added. Hooks exist only for Claude Code; other agents
 get a rules file. Entries marked `auto-copied` (written by 0.0.5 and earlier from a transcript or a commit) carry no reason and are never
-injected into an agent's prompt. The only measurements so far are two small smoke tests on a toy repo (see `docs/DESIGN.md`).
+injected into an agent's prompt. The only measurements so far are two small smoke tests on a toy repo.
 
 ## Try it (no credentials, about 30 seconds)
 
@@ -223,7 +223,7 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
     logbook sync                              # fetch teammates' entries and merge them in; says what is new; never pushes
     logbook queue                             # what publish will share; --add / --remove ids; `logbook note -q` queues a note
     logbook ask "refunds" | orders.py | <id> | main..HEAD   # exit 0 found, 3 ambiguous, 4 no match
-    logbook ask repo | branch:<name> | commit:<sha> | note:<id>   # walk the tree from the top (docs/SUMMARY-TREE.md)
+    logbook ask repo | branch:<name> | commit:<sha> | note:<id>   # walk the tree from the top
     logbook cites                             # the numbered sources behind an answer in this chat (links, names, dates)
     logbook log                               # save a log: summarize this branch's session since the last one (private until you publish)
     logbook history                           # the notes next to your commits, newest first (-v for their text)
@@ -258,5 +258,3 @@ uses them.
 - `logbook purge <id> --push` rewrites your own ref without the entry and leaves an id-only tombstone. Rotate any leaked secret.
 - Optional `.logbook/policy.json` (tracked): `publish`, `inject_from` (`self`|`trusted`), `attribution` (`none`|`pseudonym`|`named`
   ceiling), `max_entry_bytes`. The client only ever gets stricter from it. Default attribution is a pseudonymous id.
-
-See `docs/DESIGN.md` for decisions, the failure-mode table, a small benchmark, and what is not built.
