@@ -41,6 +41,15 @@ def ok(cond, msg, detail=""):
         fails.append(msg)
 
 
+def private_notes(d):
+    """The private notes of a clone, oldest first, as dicts: they live in library.sqlite (not in files)."""
+    con = sqlite3.connect(d / ".git/logbook/library.sqlite")
+    try:
+        return [json.loads(js) for (js,) in con.execute("select json from note where scope='private' and status_of='' order by id")]
+    finally:
+        con.close()
+
+
 def clone(name, email, display, remote):
     d = root / name
     git(root, "clone", "-q", "file://" + str(remote).replace("\\", "/"), str(d))
@@ -152,12 +161,12 @@ ok(lb(alice, "config", "publish")[1].strip() == "ask", "the 0.0.4 name claude re
 (alice / ".logbook" / "policy.json").write_text('{"publish": false}')
 nn = note(alice, "policy-off note", ["shop/revenue.py"])
 rc, o = lbq(alice, "publish", nn, "--yes")
-ok(rc != 0 and (alice / ".git/logbook/private" / f"{nn}.json").exists(), "a repo policy that turns publishing off refuses to publish", o)
+ok(rc != 0 and any(n["id"] == nn for n in private_notes(alice)), "a repo policy that turns publishing off refuses to publish", o)
 (alice / ".logbook" / "policy.json").unlink()
 lb(alice, "config", "publish", "auto")
 rc, o = lb(alice, "note", "--json", inp=json.dumps({"kind": "finding", "topic": "auto note", "summary": "mail a@b.io about it", "why": "w", "paths": ["shop/revenue.py"]}))
 ok("(private)" in o, "auto does not share a note as it is written: it waits for the branch to merge", o)
-ok(any("auto note" in p.read_text() for p in (alice / ".git/logbook/private").glob("*.json")), "it is still in the private log")
+ok(any(n["topic"] == "auto note" for n in private_notes(alice)), "it is still in the private log")
 lb(alice, "config", "publish", "ask")
 
 # --- the file-overwrite hole ----------------------------------------------------------------------------------------------
@@ -212,16 +221,13 @@ for gone in ("query", "explain", "doctor", "stats", "init", "join", "path", "sni
 # --- 0.0.4: notes as key: value lines, plain notes, who wrote it, the allow rules --------------------------------------------------
 rc, o = lb(bob, "note", "--fields", "--check", inp="title: t\nsummary: see `shop/gone.py` and `total()`\npaths: shop/revenue.py\n")
 ok("! not found: shop/gone.py" in o and "checked only" in o, "note --fields --check reports the grounding and saves nothing", o)
-before = len(list((bob / ".git/logbook/private").glob("*.json")))
 rc, o = lb(bob, "note", "A plain note in plain words", "shop/revenue.py", env={"LOGBOOK_WRITER": "user"})
 ok(rc == 0 and "recorded" in o, "a person writes a note in plain words", o)
-newest = max((bob / ".git/logbook/private").glob("*.json"), key=lambda p: p.stat().st_mtime)
-d = json.loads(newest.read_text(encoding="utf-8"))
+d = private_notes(bob)[-1]  # ids sort by time
 ok(d["provenance"] == "user-written" and d["v"] == 2 and d["anchor"]["paths"] == ["shop/revenue.py"], "it is labelled user-written", d["provenance"])
 rc, o = lb(bob, "note", "--fields", inp="kind: finding\ntitle: agent note\nsummary: `total()` in `shop/revenue.py` sums rows\nwhy: no filter\nevidence: read shop/revenue.py\npaths: shop/revenue.py\n",
            env={"LOGBOOK_WRITER": "agent"})
-newest = max((bob / ".git/logbook/private").glob("*.json"), key=lambda p: p.stat().st_mtime)
-d = json.loads(newest.read_text(encoding="utf-8"))
+d = private_notes(bob)[-1]
 ok(rc == 0 and d["provenance"] == "agent-written" and d["topic"] == "agent note" and d["checks"]["evidence"], "an agent's note is labelled agent-written, title: is the topic, and it is grounded", d)
 home = root / "claude-home"  # `install` wires Claude Code once per machine, into the Claude folder and never into a repository
 rc, o = lb(bob, "install", "--yes", env={"CLAUDE_CONFIG_DIR": str(home), "LOGBOOK_OFFLINE": "1"})

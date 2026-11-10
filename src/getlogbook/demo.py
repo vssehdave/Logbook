@@ -132,8 +132,8 @@ def run(dir=None):
     check(g.is_shallow(bob), "Bob's clone is shallow (depth 1)")
     check(not g.try_run(["for-each-ref", "refs/logbook-remote"], bob)[1].strip(), "a plain clone has no logbook refs (this is why `join` exists)")
     sync.sync(rb, depth=1)
-    shared, _ = rb.load_shared()
-    check(len(shared) >= 2, f"after join/sync Bob sees {len(shared)} entries from {len({l.user for l in shared})} writer(s) even on a depth-1 clone")
+    bobs, _ = rb.load_shared()  # not `shared`: that is Alice's shared note, used again in step 7
+    check(len(bobs) >= 2, f"after join/sync Bob sees {len(bobs)} entries from {len({l.user for l in bobs})} writer(s) even on a depth-1 clone")
     vs, _ = views(rb)
     for v in recall.rank(rb, query="revenue refunds", views=vs)[:3]:
         say(line(v[1]))
