@@ -4,13 +4,13 @@ An embedder turns text into a unit-length vector of 32-bit floats, packed as byt
 when they share no word ("totals lose a cent" finds "refund rounding drops a cent"). Nothing here runs unless `config semantic on` is set and the extra
 is installed:
 
-    pip install "getlogbook[semantic]"      # model2vec: a static embedding model, about 30 MB, no GPU, no network after the first download
+    pip install "getlogbook[semantic]"      # onnxruntime + tokenizers: all-MiniLM-L6-v2, a 90 MB model downloaded once, runs on the CPU
 
 The vectors are derived data. They live in the local SQLite file (notesdb.note_vec), never in git, are never published, and are rebuilt from the notes
 at any time. They only add candidates to a search; every hit is still a stored note with its author, ref, git blob, commit, time and checks, and is
 shown with them.
 
-Starting the model takes about 2.5 s (imports and loading), so it is used by the commands a person or an agent runs on purpose (`logbook ask`, `logbook
+Starting the model takes about half a second once it is downloaded (the first run downloads 90 MB), so it is used by the commands a person or an agent runs on purpose (`logbook ask`, `logbook
 index`), not by the hook that runs on every prompt.
 """
 from __future__ import annotations
@@ -19,7 +19,9 @@ import importlib.util
 import os
 from array import array
 
-DEFAULT_MODEL = "minishlab/potion-base-8M"
+DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"  # the commit of the default model that was tested; another `semantic_model` follows its main branch
+MAX_TOKENS = 256  # the model's own limit; longer text is cut
 MAX_TEXT = 1500  # characters of one note that are embedded
 FIELDS = ("summary", "what", "why", "wrong", "fix", "decided", "context", "open")
 
@@ -32,7 +34,7 @@ class Embedder:
 
 
 def installed():
-    return all(importlib.util.find_spec(m) is not None for m in ("model2vec", "numpy"))
+    return all(importlib.util.find_spec(m) is not None for m in ("onnxruntime", "tokenizers", "huggingface_hub", "numpy"))
 
 
 def note_text(e):
@@ -47,18 +49,34 @@ def load(cfg):
         return None
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     name = cfg.get("semantic_model") or DEFAULT_MODEL
+    rev = MODEL_REVISION if name == DEFAULT_MODEL else None
     try:
         import numpy as np
-        from model2vec import StaticModel
-        model = StaticModel.from_pretrained(name)
+        import onnxruntime as ort
+        from huggingface_hub import hf_hub_download
+        from tokenizers import Tokenizer
+        tok = Tokenizer.from_file(hf_hub_download(name, "tokenizer.json", revision=rev))
+        tok.enable_truncation(MAX_TOKENS)
+        tok.enable_padding()
+        sess = ort.InferenceSession(hf_hub_download(name, "onnx/model.onnx", revision=rev), providers=["CPUExecutionProvider"])
+        wants_types = "token_type_ids" in {i.name for i in sess.get_inputs()}
     except Exception:  # a missing download, a bad name, a broken install: text search still works
         return None
 
     def encode(texts):
-        m = np.asarray(model.encode(list(texts)), dtype="float32").reshape(len(texts), -1)
-        norms = np.linalg.norm(m, axis=1, keepdims=True)
-        m = m / np.where(norms == 0, 1, norms)
-        return [row.tobytes() for row in m]
+        texts, out = list(texts), []
+        for i in range(0, len(texts), 32):  # small batches keep memory flat
+            enc = tok.encode_batch(texts[i:i + 32])
+            ids = np.array([e.ids for e in enc], dtype="int64")
+            mask = np.array([e.attention_mask for e in enc], dtype="int64")
+            feed = {"input_ids": ids, "attention_mask": mask}
+            if wants_types:
+                feed["token_type_ids"] = np.zeros_like(ids)
+            hidden = sess.run(None, feed)[0]  # (batch, tokens, 384)
+            m = (hidden * mask[..., None]).sum(axis=1) / np.maximum(mask.sum(axis=1, keepdims=True), 1)  # mean over real tokens only
+            norms = np.linalg.norm(m, axis=1, keepdims=True)
+            out += [row.tobytes() for row in (m / np.where(norms == 0, 1, norms)).astype("float32")]
+        return out
 
     return Embedder(name, encode)
 

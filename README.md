@@ -237,15 +237,15 @@ CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/
 
 `logbook ask "why do totals lose a cent"` matches words. With the extra installed it can also match meaning, so it finds "refund rounding drops a cent" without sharing a word:
 
-    pip install "getlogbook[semantic]"      # a small static model (about 30 MB, no GPU); downloaded once
+    pip install "getlogbook[semantic]"      # all-MiniLM-L6-v2 on the CPU (a 90 MB download, once)
     logbook index                           # embeds your notes and logs (a few hundred per second); `--rebuild` starts over
     logbook config semantic on              # `logbook ask` now ranks by words and meaning together; `--exact` is words only
 
 The vectors live in the local database only (`notes.sqlite`), are never published, and can be rebuilt from the notes at any time. They only choose which notes are looked at: every hit
 is a stored note and is shown with its author, whether you trust them, whether it carries evidence, and where it is held (`shelf <author>/000000, blob <id>, the same note is in git`, or
 `private to this machine`); a shared hit is re-read from git at the shelf tip it was indexed from, and a difference is reported instead of trusted. Starting the model takes about
-2.5 s, so only `ask` and `index` use it; the lookup that runs on every prompt stays on words. Measured: a scan of 1,000 vectors takes 4 ms, 10,000 takes 59 ms and 100,000 takes
-about 1 s (numpy, which the extra brings), and the vectors add about 1.4 KB per note to the file. How good the matches are depends on the model; the default one is small.
+half a second (the first run downloads it), so only `ask` and `index` use it; the lookup that runs on every prompt stays on words. The vectors add 1.5 KB per note to the file (384 numbers). How good the matches are depends on the model; `config semantic_model` names another one that
+publishes `tokenizer.json` and `onnx/model.onnx`.
 
 ## How an agent consults it first
 
