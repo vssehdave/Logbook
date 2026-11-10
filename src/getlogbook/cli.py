@@ -958,6 +958,7 @@ def cmd_tidy(a):
         except (SystemExit, OSError, ValueError):
             pass
     if a.work:  # the tidy worker's pass: judge, archive junk (what the hooks start in `tidy auto`)
+        r.db.archive_stale_chats()  # and the citations page of a chat nobody has cited in for 20 days
         res = tidy.auto(r, judge=not a.no_judge) if tidy.mode(r.cfg()) == "auto" else tidy.run(r, judge=not a.no_judge)
         if not a.quiet:
             out(json.dumps(res))
@@ -1072,7 +1073,7 @@ def cmd_cites(a):
     vs, _ = views(r)
     recs = cites.records(r, session, vs)
     if a.json:
-        out(json.dumps({"session": session, "status": cites.status(r, session), "mode": r.publish_mode(), "sources": recs}, ensure_ascii=False))
+        out(json.dumps({"session": session, "mode": r.publish_mode(), "sources": recs}, ensure_ascii=False))
         return 0
     if not recs:
         out("no notes have been numbered in this chat yet")

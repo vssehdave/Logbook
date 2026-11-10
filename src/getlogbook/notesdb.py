@@ -390,14 +390,11 @@ class NoteDB:
         return r[0] if r else ""
 
     @_closing
-    def chat_status(self, chat_id):
-        r = self.con.execute("select status from chat where id=?", (chat_id,)).fetchone()
-        return r[0] if r else ""
-
-    @_closing
-    def end_chat(self, chat_id):
+    def archive_stale_chats(self, days=20):
+        """Archive the citations page of every chat that has not cited anything for `days` days. The page is kept; citing in that chat again reopens it. Returns how many."""
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - days * 86400))
         with self._tx():
-            self.con.execute("update chat set status='archived', updated=? where id=? and status='open'", (time.strftime("%Y-%m-%dT%H:%M:%S"), chat_id))
+            return self.con.execute("update chat set status='archived' where status='open' and updated < ?", (cutoff,)).rowcount
 
     # vectors: search by meaning ---------------------------------------------------------------------------------------------------
     @_closing
