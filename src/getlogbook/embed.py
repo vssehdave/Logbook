@@ -75,8 +75,14 @@ def load(cfg):
         import onnxruntime as ort
         from tokenizers import Tokenizer
         tok = Tokenizer.from_file(_file(name, rev, "tokenizer.json"))
-        tok.enable_truncation(MAX_TOKENS)
-        tok.enable_padding()
+        if hasattr(tok, "enable_truncation"):
+            tok.enable_truncation(MAX_TOKENS)
+            tok.enable_padding()
+        else:  # tokenizers 1.0: settings on an editable tokenizer, then compile() for one that encodes
+            from tokenizers import Padding, Truncation
+            tok.truncation = Truncation(max_length=MAX_TOKENS)
+            tok.padding = Padding()
+            tok = tok.compile()
         sess = ort.InferenceSession(_file(name, rev, "onnx/model.onnx"), providers=["CPUExecutionProvider"])
         wants_types = "token_type_ids" in {i.name for i in sess.get_inputs()}
     except Exception:  # a missing download, a bad name, a broken install: text search still works
