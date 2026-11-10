@@ -127,10 +127,7 @@ class TestADay(unittest.TestCase):
         self.A = self.clone("alice", "alice@example.com", origin, seed=True)
         self.B = self.clone("bob", "bob@example.com", origin)
         for d in (self.A, self.B):
-            self.assertEqual(self.run_cli(d, "setup", "--yes", "--agent", "claude-code")[0], 0)
-        for d in (self.A, self.B):  # what setup writes is the person's local setup, not part of the shared work
-            (d / ".git" / "info").mkdir(exist_ok=True)
-            (d / ".git" / "info" / "exclude").write_text(".claude/\nCLAUDE.md\n", encoding="utf-8")
+            self.assertEqual(self.run_cli(d, "setup", "--yes")[0], 0)
         for k, v in (("publish", "auto"), ("tidy", "auto"), ("worker_calls", "300")):
             self.run_cli(self.A, "config", k, v)
         self.run_cli(self.B, "config", "publish", "ask")
@@ -417,7 +414,7 @@ class TestADay(unittest.TestCase):
         self.assertFalse([v for v in tree.all_views(ra)[0] if v["kind"] == "savepoint" and v.get("status") in ("resolved", "in-progress")], "tidy never judges a saved log")
         # uninstall puts the files back and keeps the notes
         n_logs = len([e for e in ra.all_entries() if e.entry.kind == "savepoint"])
-        self.assertEqual(self.run_cli(A, "uninstall", "--yes")[0], 0)
+        self.assertEqual(self.run_cli(A, "uninstall", "--repo", "--yes")[0], 0)
         self.assertEqual(len([e for e in ra.all_entries() if e.entry.kind == "savepoint"]), n_logs, "uninstalling keeps every log")
 
     # ---- passes that overlap ---------------------------------------------------------------------------------------------

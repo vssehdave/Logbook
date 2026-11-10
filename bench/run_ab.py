@@ -65,9 +65,9 @@ def build(root, logbook, with_note, nudge=""):
     sh(["git", "config", "user.name", "bench"], d)
     sh(["git", "add", "-A"], d)
     sh(["git", "commit", "-q", "-m", "initial shop"], d)
-    r = sh([logbook, "install", "--yes", "--agent", "claude-code"], d)
+    r = sh([logbook, "setup", "--yes"], d)  # the hooks come from the person's own `logbook install`
     if r.returncode:
-        sys.exit("logbook install failed: " + r.stderr + r.stdout)
+        sys.exit("logbook setup failed: " + r.stderr + r.stdout)
     if nudge:
         sh([logbook, "config", "nudge", nudge], d)
     if with_note:

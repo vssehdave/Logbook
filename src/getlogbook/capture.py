@@ -174,8 +174,8 @@ def _sid(sid):
 
 
 # ---- installers ---------------------------------------------------------------------------------------------
-def _py(repo):
-    return (repo.cfg().get("interpreter") or sys.executable).replace("\\", "/")
+def _py(repo=None):
+    return ((repo.cfg().get("interpreter") if repo else "") or sys.executable).replace("\\", "/")
 
 
 def _hooks_dir(repo):
@@ -257,7 +257,7 @@ def uninstall_pull_hooks(repo):
         _strip_hook_block(_hooks_dir(repo) / name)
 
 
-def claude_snippet(repo, pretool=False):
+def claude_snippet(repo=None, pretool=False):
     py = _py(repo)
     mk = lambda ev: [{"hooks": [{"type": "command", "command": f'"{py}" -m getlogbook capture --event {ev} --agent claude-code'}]}]
     hooks = {ev: mk(ev) for ev in CLAUDE_EVENTS}
@@ -269,8 +269,8 @@ def claude_snippet(repo, pretool=False):
     return {"hooks": hooks}
 
 
-def install_claude(repo, path=None, pretool=False, write=False, remove=False):
-    path = Path(path or repo.root / ".claude" / "settings.local.json")  # local: it holds a machine-specific interpreter path
+def install_claude(path, pretool=False, write=False, remove=False, repo=None):
+    path = Path(path)  # the person's own Claude settings: they hold a machine-specific interpreter path
     try:
         cur = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except ValueError:

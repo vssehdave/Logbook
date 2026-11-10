@@ -63,7 +63,7 @@ def _first_run(r):
     if (r.cfg().get("user") and ins.git_hook_installed(r, "post-commit")) or r.cfg().get("setup_declined") or not _interactive():
         return False
     out("Logbook is not set up in this clone (no id or no git hooks yet). `logbook setup` would make these changes:")
-    cmd_setup(argparse.Namespace(agent=None, yes=False, dry_run=False, no_pretool=False))
+    cmd_setup(argparse.Namespace(yes=False, dry_run=False))
     now = Repo(".")
     if not (now.cfg().get("user") and ins.git_hook_installed(now, "post-commit")):
         c = now.cfg()
@@ -97,7 +97,6 @@ def cmd_init(a):
         c["attribution"] = a.attribution
         r.save_cfg(c)
     out(f"initialised. you are {c['user']}; attribution: {r.attribution()}")
-    out("next: `logbook setup`")
 
 
 def cmd_join(a):
@@ -650,19 +649,30 @@ def cmd_ask(a):
 
 
 def cmd_setup(a):
-    """init (or join, when there is a remote) and install, in one go."""
+    """Per repository: your id and the library, the git hooks, and teammates' notes when there is a remote. The Claude Code side is `logbook install`, once per machine."""
+    from . import install as ins
     r = Repo(".")
     if a.dry_run:  # only looks: nothing is written, not even your id
         if not r.cfg().get("user"):
             email, login = g.config_get(r.root, "user.email"), github_login(r.root)
             out("(dry run) set `git config user.email` first: setup needs it for your id." if not email else
                 f"(dry run) setup would create your id {user_id(email)}" + (f" and show you to teammates as {login}" if login else "") + "; nothing is written.")
-        return cmd_install(a)
-    if "origin" in sync.remotes(r):
-        cmd_join(argparse.Namespace(remote="origin"))
     else:
-        cmd_init(argparse.Namespace(attribution=None))
-    return cmd_install(a)
+        if "origin" in sync.remotes(r):
+            cmd_join(argparse.Namespace(remote="origin"))
+        else:
+            cmd_init(argparse.Namespace(attribution=None))
+    out("logbook will make these changes in this repository:")
+    lines = ins.describe_repo(r)
+    for line in lines:
+        out(line)
+    if not _confirm(a, lines):
+        return 0
+    ins.apply_repo(r)
+    out("done. `logbook status --check` shows what is in place; `logbook uninstall --repo` takes the git hooks out again.")
+    if ins.wiring_state() != "installed":
+        out("Claude Code is not wired to Logbook yet: run `logbook install` once (it is per machine, not per repository).")
+    return 0
 
 
 def cmd_status(a):
@@ -700,18 +710,15 @@ def cmd_doctor(a):
         out(f"[{level:<4}] {msg}")
         bad |= level == "fail"
     from . import install as ins
-    out("what is installed here (`logbook setup` sets it up, `logbook uninstall` removes it):")
+    out("what is in place (`logbook install` wires Claude Code once per machine, `logbook setup` the git hooks in this repository):")
     out(f"  claude plugin: {ins.plugin_state()} ({ins.PLUGIN})")
+    out(f"  claude wiring: {ins.wiring_state()} (hooks, rules and skill in {_shown(ins.claude_home())})")
     out(f"  git hooks   : pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}, "
         f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}, "
         f"post-commit {'installed' if ins.git_hook_installed(r, 'post-commit') else 'missing'}")
     for sm in tree.summaries(views(r)[0]):
         node = "repo" if sm["level"] == "repo" else "branch " + sm["branch"]
         out(f"  summary     : {node}: {'up to date' if sm['fresh'] else str(sm['new_notes']) + ' newer note(s), stale (logbook summarize)'}")
-    for t, st in ins.status(r).items():
-        out(f"  {t:<12}: {st}")
-    out("  Only Claude Code has hooks (it captures sessions and shows notes automatically). The other agents get the rules")
-    out("  file only, so they rely on the agent following it; the git hook is the same for everyone.")
     return 1 if bad else 0
 
 
@@ -730,17 +737,6 @@ def cmd_post_commit(a):
     return hookmain.run(["post-commit"])  # the git hook's entry point: save a log in the background in ask and auto mode
 
 
-def _targets(a, default):
-    from . import install as ins
-    picked = list(a.agent or [])
-    if not picked or "auto" in picked:
-        return default
-    bad = [t for t in picked if t not in ins.TARGETS]
-    if bad:
-        raise SystemExit(f"logbook: unknown agent {bad[0]!r}; choose from {', '.join(ins.TARGETS)} or auto")
-    return picked
-
-
 def _confirm(a, lines):
     if a.dry_run:
         out("(dry run: nothing written)")
@@ -756,48 +752,70 @@ def _confirm(a, lines):
     return False
 
 
+def _shown(path):
+    return str(path).replace(os.path.expanduser("~"), "~")
+
+
 def cmd_install(a):
-    """One command: init if needed, the git hook, and for each agent its hooks, skill and always-on rules."""
+    """Once per machine: the Claude Code wiring (hooks, rules, skill) in your Claude folder, the Claude Code plugin, the search model. Repositories are set up by `logbook setup`."""
+    from . import embed
     from . import install as ins
-    r = Repo(".")
-    targets = _targets(a, ins.detect(r.root))
-    out("logbook will make these changes (existing files are backed up to .git/logbook/backups):")
-    lines = ins.describe(r, targets, pretool=not a.no_pretool)
-    want_plugin = "claude-code" in targets and ins.plugin_state() == "missing"
-    if want_plugin:
-        lines.append(f"  create     Claude Code plugin {ins.PLUGIN} (the Sources band; from the {ins.MARKETPLACE} marketplace)")
+    offline = bool(os.environ.get("LOGBOOK_OFFLINE"))
+    git = ins.git_version()
+    if not git or git < (2, 31):
+        raise SystemExit(f"logbook: git 2.31 or newer is needed (found {'.'.join(map(str, git)) if git else 'none'}). Get it from https://git-scm.com/downloads and run `logbook install` again.")
+    claude = ins.claude_version()
+    if not claude and not offline:
+        raise SystemExit("logbook: Claude Code was not found on the PATH. Install it from https://claude.com/claude-code, then run `logbook install` again.")
+    steps = ins.wiring(pretool=not a.no_pretool)
+    state = ins.plugin_state()
+    out(f"git {'.'.join(map(str, git))}" + (f", Claude Code {claude}" if claude else ""))
+    out(f"logbook will make these changes (existing files are backed up to {_shown(ins.claude_home() / 'logbook-backups')}):")
+    lines = [f"  {s.verb:<10} {_shown(s.path)}  ({s.label})" for s in steps]
+    if state in ("missing", "outdated"):
+        lines.append(f"  {'create' if state == 'missing' else 'update':<10} Claude Code plugin {ins.PLUGIN} (the Sources band; from the {ins.MARKETPLACE} marketplace)")
+    elif state == "unavailable" and claude:
+        lines.append("  skip       Claude Code plugin: this Claude Code cannot install plugins; update it and run `logbook install` again for the Sources band")
     for line in lines:
         out(line)
     if not _confirm(a, lines):
         return 0
-    if not r.cfg().get("user"):
-        r.init()
-    ins.apply(r, targets, pretool=not a.no_pretool)
-    if want_plugin:
-        out(f"installed the Claude Code plugin {ins.PLUGIN}." if ins.plugin_install() else
+    ins.apply_wiring(steps)
+    if state in ("missing", "outdated"):
+        out(f"{'installed' if state == 'missing' else 'updated'} the Claude Code plugin {ins.PLUGIN}; restart Claude Code to load it." if ins.plugin_install() else
             f"could not install the Claude Code plugin; run: claude plugin marketplace add {ins.MARKETPLACE} && claude plugin install {ins.PLUGIN}")
-    if _semantic_on(r) and not os.environ.get("LOGBOOK_OFFLINE"):
+    if not offline:
         out("fetching the search model (all-MiniLM-L6-v2, 90 MB, once)...")
-        out("search by meaning is ready." if embed.load(r.cfg()) else "could not fetch it now; search matches on words until `logbook index` succeeds.")
-    out("done. `logbook status --check` shows what is installed; `logbook uninstall` reverses it.")
-    if "claude-code" in targets:
-        out("Claude Code sessions are now observed per branch (private; `logbook worker --status`). `logbook log` saves a log of the session so far.")
+        out("search by meaning is ready." if embed.load({}) else "could not fetch it now; search matches on words until `logbook index` succeeds.")
+    out("done. Now run `logbook setup` once in each repository you want Logbook in (or run any logbook command there, and it offers to).")
     return 0
 
 
 def cmd_uninstall(a):
+    """Take out what `install` wired into your Claude folder; with --repo, what `setup` put in this repository (its git hooks). Your notes are kept, and so is the plugin
+    (`claude plugin uninstall logbook@logbook` removes that)."""
     from . import install as ins
-    r = Repo(".")
-    targets = _targets(a, list(ins.TARGETS))
-    out("logbook will remove its own changes (your notes are kept; files are backed up first):")
-    for line in ins.describe(r, targets, remove=True):
-        out(line)
+    if a.repo:
+        r = Repo(".")
+        out("logbook will remove its git hooks from this repository (your notes are kept):")
+        lines = ins.describe_repo(r, remove=True)
+        for line in lines:
+            out(line)
+        if not _confirm(a, lines):
+            return 0
+        ins.apply_repo(r, remove=True)
+        c = r.cfg()
+        c["setup_declined"] = True  # you took it out on purpose: no more offers
+        r.save_cfg(c)
+        out("done.")
+        return 0
+    steps = ins.wiring(remove=True)
+    out(f"logbook will remove its wiring from {_shown(ins.claude_home())} (files are backed up first; the plugin and your notes stay):")
+    for s in steps:
+        out(f"  {s.verb:<10} {_shown(s.path)}  ({s.label})")
     if not _confirm(a, None):
         return 0
-    ins.apply(r, targets, remove=True)
-    c = r.cfg()
-    c["setup_declined"] = True  # you took it out on purpose: no more offers
-    r.save_cfg(c)
+    ins.apply_wiring(steps)
     out("done.")
     return 0
 
@@ -1039,11 +1057,6 @@ def cmd_inject(a):
     out(text if text else "(nothing to inject)")
 
 
-def cmd_snippet(a):
-    from . import install as ins
-    out(ins.asset("rules.md").rstrip())
-
-
 def cmd_stats(a):
     r = need_repo()
     p = r.cdir / "injections.log"
@@ -1078,10 +1091,10 @@ def cmd_demo(a):
 
 
 HIDDEN = {"queue", "capture", "post-commit",
-          "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "snippet", "demo",
+          "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "demo",
           "cites", "tidy", "worker", "history"}
 HELP_MORE = """more (run `logbook <name> -h`):
-  trust purge gc config uninstall snippet demo queue history tidy
+  trust purge gc config uninstall demo queue history tidy
 agents and hooks call these; you rarely need to:
   summarize inject cites capture"""
 
@@ -1097,11 +1110,13 @@ def build_parser():
         sp.set_defaults(fn=fn)
         return sp
 
-    s = add("setup", cmd_setup, "set up this repo: your id, git hook, agent hooks, skill and rules (asks first)")
-    s.add_argument("--agent", nargs="+", metavar="AGENT", help="claude-code agents-md copilot gemini cursor, or auto (default)")
+    s = add("install", cmd_install, "once per machine: wire Claude Code to Logbook (hooks, rules, skill), install its plugin, fetch the search model (asks first)")
     s.add_argument("--yes", action="store_true", help="apply without asking")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--no-pretool", action="store_true", help="do not add the before-read/edit note lookup")
+    s = add("setup", cmd_setup, "once per repository: your id, the library, the git hooks, teammates' notes (asks first)")
+    s.add_argument("--yes", action="store_true", help="apply without asking")
+    s.add_argument("--dry-run", action="store_true")
     s = add("ask", cmd_ask, "search the notes; explain an id, a file or name, or a range (a..b); open a node (repo, branch:x, commit:y, note:z)")
     s.add_argument("what", nargs="+")
     s.add_argument("--limit", type=int, default=10)
@@ -1156,8 +1171,8 @@ def build_parser():
     s.add_argument("--event", required=True)
     s.add_argument("--agent", default="")
     add("post-commit", cmd_post_commit, "git hook entry point")
-    s = add("uninstall", cmd_uninstall, "remove what install added (notes are kept)")
-    s.add_argument("--agent", nargs="+", metavar="AGENT")
+    s = add("uninstall", cmd_uninstall, "remove what install wired into Claude Code (or, with --repo, this repository's git hooks); notes are kept")
+    s.add_argument("--repo", action="store_true", help="this repository's git hooks instead of the Claude Code wiring")
     s.add_argument("--yes", action="store_true")
     s.add_argument("--dry-run", action="store_true")
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
@@ -1208,7 +1223,6 @@ def build_parser():
     s.add_argument("--json", action="store_true")
     s.add_argument("--compact", action="store_true", help="one short line per source, no links")
     s.add_argument("--where", type=int, help="the answers in this chat that cite this number, as JSON (the band uses it)")
-    add("snippet", cmd_snippet, "text to paste into CLAUDE.md / AGENTS.md / copilot-instructions for agents without hooks")
     s = add("demo", cmd_demo, "build a scratch two-person team and walk through it")
     s.add_argument("--dir")
     return p

@@ -18,6 +18,7 @@ os.environ["LOGBOOK_OFFLINE"] = "1"  # no test downloads the model or installs a
 os.environ["LOGBOOK_GITHUB_LOGIN"] = ""  # no test asks `gh` who you are
 for _k in [k for k in os.environ if k.startswith("CLAUDE")]:  # run from inside Claude Code, these would make every note look agent-written
     del os.environ[_k]
+os.environ["CLAUDE_CONFIG_DIR"] = tempfile.mkdtemp(prefix="logbook-test-claude-")  # install writes into the person's Claude folder: a test must never reach the real one
 
 from getlogbook import capture, cli, ground, recall, safety, store, sync, tidy, tree  # noqa: E402
 from getlogbook import git as g  # noqa: E402
@@ -271,12 +272,12 @@ class TestCapture(Base):
         p.parent.mkdir()
         p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo other"}]}]}, "model": "x"}))
         for _ in range(2):
-            capture.install_claude(r, write=True)
+            capture.install_claude(p, write=True)
         cur = json.loads(p.read_text())
         self.assertEqual(cur["model"], "x")
         self.assertEqual(sum("getlogbook capture" in json.dumps(e) for e in cur["hooks"]["Stop"]), 1)
         self.assertTrue(any("echo other" in json.dumps(e) for e in cur["hooks"]["Stop"]))
-        capture.install_claude(r, write=True, remove=True)
+        capture.install_claude(p, write=True, remove=True)
         self.assertNotIn("logbook", p.read_text())
         self.assertIn("echo other", p.read_text())
 
@@ -378,9 +379,14 @@ class TestRealPayloads(Base):
 class TestInstaller(Base):
     def setUp(self):
         super().setUp()
+        import unittest.mock
         self.d = make_repo(self.root, "r", "a@x.io")
         commit(self.d, "b", {"a.txt": "x"})
         self.cd(self.d)
+        self.home = self.root / "claude-home"  # the person's Claude folder: install writes there and never into a repository
+        env = unittest.mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.home)})
+        env.start()
+        self.addCleanup(env.stop)
 
     def run_cli(self, *args):
         buf = io.StringIO()
@@ -388,85 +394,91 @@ class TestInstaller(Base):
             code = cli.main(list(args))
         return code, buf.getvalue()
 
-    def test_one_command_sets_up_and_is_idempotent_and_reversible(self):
-        (self.d / "CLAUDE.md").write_bytes(b"# Mine\r\n\r\nKeep this.\r\n")
-        (self.d / ".claude").mkdir()
-        (self.d / ".claude" / "settings.local.json").write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}))
-        code, text = self.run_cli("setup", "--yes")
+    def test_install_wires_claude_code_once_and_is_idempotent_and_reversible(self):
+        self.home.mkdir()
+        (self.home / "CLAUDE.md").write_bytes(b"# Mine\r\n\r\nKeep this.\r\n")
+        (self.home / "settings.json").write_text(json.dumps({"model": "x", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}))
+        code, text = self.run_cli("install", "--yes")
         self.assertEqual(code, 0, text)
-        md = (self.d / "CLAUDE.md").read_bytes().decode()
+        md = (self.home / "CLAUDE.md").read_bytes().decode()
         self.assertIn("# Mine\r\n\r\nKeep this.", md)
         self.assertIn("logbook:start", md)
         self.assertNotIn("\r\n\r\n\r\n", md)
         self.assertTrue(md.count("\n") == md.count("\r\n"), "CRLF file stays CRLF")
-        skill = (self.d / ".claude" / "skills" / "logbook" / "SKILL.md").read_text(encoding="utf-8")
+        skill = (self.home / "skills" / "logbook" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("managed-by: logbook", skill)
-        self.assertFalse((self.d / ".claude" / "agents").exists(), "no scribe agent any more")
-        hooks = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
+        cfg = json.loads((self.home / "settings.json").read_text())
+        self.assertEqual(cfg["model"], "x")
+        hooks = cfg["hooks"]
         self.assertIn("mine", json.dumps(hooks["Stop"]), "existing hooks are kept")
         self.assertIn("getlogbook capture", json.dumps(hooks["UserPromptSubmit"]))
         self.assertIn("Read|Edit", json.dumps(hooks["PreToolUse"]))
-        self.assertTrue(list((self.d / ".git" / "logbook" / "backups").glob("*CLAUDE.md.bak")), "originals are backed up")
-        self.assertTrue(Repo(self.d).cfg().get("user"), "install runs init")
-        _, again = self.run_cli("setup", "--yes")
+        self.assertTrue(list((self.home / "logbook-backups").glob("*CLAUDE.md.bak")), "originals are backed up")
+        self.assertFalse((self.d / "CLAUDE.md").exists() or (self.d / ".claude").exists(), "install touches no repository")
+        _, again = self.run_cli("install", "--yes")
         self.assertNotIn("create", again)
         self.assertNotIn("update", again)
         self.run_cli("uninstall", "--yes")
-        self.assertEqual((self.d / "CLAUDE.md").read_bytes(), b"# Mine\r\n\r\nKeep this.\r\n")
-        self.assertFalse((self.d / ".claude" / "skills").exists(), "empty folders the install made are removed too")
-        self.assertFalse((self.d / ".claude" / "agents").exists())
-        left = json.loads((self.d / ".claude" / "settings.local.json").read_text())["hooks"]
+        self.assertEqual((self.home / "CLAUDE.md").read_bytes(), b"# Mine\r\n\r\nKeep this.\r\n")
+        self.assertFalse((self.home / "skills").exists(), "empty folders the install made are removed too")
+        left = json.loads((self.home / "settings.json").read_text())["hooks"]
         self.assertEqual(list(left), ["Stop"])
         self.assertIn("mine", json.dumps(left))
 
     def test_dry_run_and_non_interactive_write_nothing(self):
-        code, text = self.run_cli("setup", "--dry-run")
+        code, text = self.run_cli("install", "--dry-run")
         self.assertIn("create", text)
-        self.assertFalse((self.d / "CLAUDE.md").exists())
-        self.run_cli("setup")
-        self.assertFalse((self.d / "CLAUDE.md").exists(), "without --yes and without a terminal nothing is applied")
+        self.assertFalse((self.home / "CLAUDE.md").exists())
+        self.run_cli("install")
+        self.assertFalse((self.home / "CLAUDE.md").exists(), "without --yes and without a terminal nothing is applied")
 
-    def test_other_agents_get_a_rules_block_and_a_foreign_skill_is_never_touched(self):
-        code, _ = self.run_cli("setup", "--yes", "--agent", "agents-md", "copilot", "gemini", "cursor")
-        self.assertEqual(code, 0)
-        for rel in ("AGENTS.md", ".github/copilot-instructions.md", "GEMINI.md", ".cursor/rules/logbook.mdc"):
-            self.assertIn("logbook:start", (self.d / rel).read_text(encoding="utf-8"), rel)
-        self.assertIn("alwaysApply: true", (self.d / ".cursor" / "rules" / "logbook.mdc").read_text(encoding="utf-8"))
-        sk = self.d / ".claude" / "skills" / "logbook"
+    def test_a_skill_of_someone_elses_with_the_same_name_is_never_overwritten_or_removed(self):
+        sk = self.home / "skills" / "logbook"
         sk.mkdir(parents=True)
         (sk / "SKILL.md").write_text("someone else's skill")
         with self.assertRaises(SystemExit):
-            self.run_cli("setup", "--yes", "--agent", "claude-code")
+            self.run_cli("install", "--yes")
         self.run_cli("uninstall", "--yes")
         self.assertEqual((sk / "SKILL.md").read_text(), "someone else's skill")
-
-    def test_someone_elses_agent_of_the_same_name_is_never_overwritten_or_removed(self):
-        ag = self.d / ".claude" / "agents"
-        ag.mkdir(parents=True)
-        (ag / "logbook-scribe.md").write_text("someone else's agent")
-        self.assertEqual(self.run_cli("setup", "--yes", "--agent", "claude-code")[0], 0)
-        self.run_cli("uninstall", "--yes")
-        self.assertEqual((ag / "logbook-scribe.md").read_text(), "someone else's agent")
 
     def test_symlinked_rules_file_is_written_through(self):
         real = self.root / "shared-claude.md"
         real.write_text("# shared\n")
-        link = self.d / "CLAUDE.md"
+        self.home.mkdir()
+        link = self.home / "CLAUDE.md"
         try:
             os.symlink(real, link)
         except (OSError, NotImplementedError):
             self.skipTest("cannot create symlinks here")
-        self.run_cli("setup", "--yes", "--agent", "claude-code")
+        self.run_cli("install", "--yes")
         self.assertTrue(link.is_symlink())
         self.assertIn("logbook:start", real.read_text())
 
-    def test_doctor_reports_install_state(self):
+    def test_setup_makes_your_id_and_the_git_hooks_and_touches_no_claude_file(self):
+        from getlogbook import install as ins
+        code, text = self.run_cli("setup", "--yes")
+        self.assertEqual(code, 0, text)
+        r = Repo(self.d)
+        self.assertTrue(r.cfg().get("user"), "setup makes your id")
+        for hook in ("post-commit", "pre-push", "post-merge"):
+            self.assertTrue(ins.git_hook_installed(r, hook), hook)
+        self.assertFalse((self.d / ".claude").exists() or (self.d / "CLAUDE.md").exists() or self.home.exists(), "no agent file, here or in the Claude folder")
+        self.assertIn("logbook install", text, "and it says Claude Code is not wired yet")
+        _, again = self.run_cli("setup", "--yes")
+        self.assertNotIn("create", again)
+        self.run_cli("uninstall", "--repo", "--yes")
+        for hook in ("post-commit", "pre-push", "post-merge"):
+            self.assertFalse(ins.git_hook_installed(r, hook), hook)
+        self.assertTrue(Repo(self.d).cfg().get("user"), "your id and notes stay")
+
+    def test_status_check_reports_the_wiring_and_the_hooks(self):
         Repo(self.d).init()  # your id, and nothing installed
         _, before = self.run_cli("status", "--check")
-        self.assertRegex(before, r"claude-code\s*: missing")
+        self.assertRegex(before, r"claude wiring\s*: missing")
+        self.run_cli("install", "--yes")
         self.run_cli("setup", "--yes")
         _, after = self.run_cli("status", "--check")
-        self.assertRegex(after, r"claude-code\s*: installed")
+        self.assertRegex(after, r"claude wiring\s*: installed")
         self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed, post-commit installed")
 
 
@@ -555,7 +567,7 @@ class TestSharingQueue(CliRepo):
         self.assertEqual(safety.localize(f"{(real / 'src' / 'a.py').as_posix()} and {(self.root / 'elsewhere' / 'b.py').as_posix()}", roots), "src/a.py and [outside path]")
 
     def test_pre_push_hook_reminds_and_never_blocks(self):
-        self.run_cli("setup", "--yes", "--agent", "agents-md")
+        self.run_cli("setup", "--yes")
         remote = self.root / "remote.git"
         sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
         sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
@@ -563,7 +575,7 @@ class TestSharingQueue(CliRepo):
         p = subprocess.run(["git", "push", "origin", "HEAD"], cwd=self.d, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("1 private note(s) are not shared", p.stderr)
-        self.run_cli("uninstall", "--yes", "--agent", "agents-md")
+        self.run_cli("uninstall", "--repo", "--yes")
         self.assertFalse((self.d / ".git" / "hooks" / "pre-push").exists(), "uninstall removes the hook file it created")
         self.assertFalse((self.d / ".git" / "hooks" / "post-commit").exists())
 
@@ -786,11 +798,11 @@ class TestCommands(CliRepo):
 
     def test_help_lists_the_main_commands_and_the_older_names_are_gone(self):
         h = cli.build_parser().format_help()
-        for name in ("setup", "note", "publish", "sync", "ask", "log", "status"):
+        for name in ("install", "setup", "note", "publish", "sync", "ask", "log", "status"):
             self.assertIn(f"  {name}  ", h)
         for name in ("capture", "post-commit"):
             self.assertNotIn(f"\n    {name}", h, "hook-only names are not listed")
-        for old in ("init", "join", "query", "explain", "path", "doctor", "stats", "install"):
+        for old in ("init", "join", "query", "explain", "path", "doctor", "stats", "snippet"):
             with self.assertRaises(SystemExit, msg=f"`{old}` is gone"):
                 with contextlib.redirect_stderr(io.StringIO()):
                     self.run_cli(old)
@@ -1141,15 +1153,15 @@ class TestGrounding(CliRepo):
         with self.assertRaises(SystemExit):
             self.run_cli("note", "the cache is slow too")
 
-    def test_install_writes_a_permission_hook_and_no_allow_rules_and_clears_the_old_ones(self):
-        path, cur = capture.install_claude(self.r, write=True)
+    def test_install_writes_a_permission_hook_and_no_allow_rules(self):
+        path, cur = capture.install_claude(self.root / "claude-settings.json", write=True)
         self.assertNotIn("permissions", cur, "permissions come from the hook, not from rules in settings")
         bash = [e for e in cur["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]
         self.assertEqual(len(bash), 1)
         self.assertIn("--event Permission", json.dumps(bash))
-        _, after = capture.install_claude(self.r, write=True)
+        _, after = capture.install_claude(path, write=True)
         self.assertEqual(len([e for e in after["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]), 1, "installing twice adds nothing")
-        _, gone = capture.install_claude(self.r, write=True, remove=True)
+        _, gone = capture.install_claude(path, write=True, remove=True)
         self.assertNotIn("PreToolUse", gone.get("hooks", {}))
 
 
@@ -2543,7 +2555,7 @@ class TestPublishByBranch(CliRepo):
     def test_setup_installs_a_pull_hook_that_only_fetches_and_uninstall_removes_it(self):
         import unittest.mock
         from getlogbook import hookmain
-        self.run_cli("setup", "--yes", "--agent", "claude-code")
+        self.run_cli("setup", "--yes")
         hooks = Path(sh("git", "rev-parse", "--path-format=absolute", "--git-path", "hooks", cwd=self.d))
         for name in ("post-merge", "post-rewrite"):
             self.assertIn("getlogbook post-merge", (hooks / name).read_text(encoding="utf-8"), name)
@@ -2554,7 +2566,7 @@ class TestPublishByBranch(CliRepo):
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             hookmain.run(["post-merge"])
         self.assertEqual(spawn.call_args.args[0][-1:], ["sync"], "a pull never pushes")
-        self.run_cli("uninstall", "--yes", "--agent", "claude-code")
+        self.run_cli("uninstall", "--repo", "--yes")
         self.assertFalse((hooks / "post-merge").exists() or (hooks / "post-rewrite").exists())
 
     def test_tidy_fetches_shared_logs_first_unless_told_not_to(self):
@@ -2674,7 +2686,7 @@ class TestPublishMoves(CliRepo):
         self.assertIn("would publish", self.run_cli("publish", mine.id, "--yes", "--force")[1])
 
     def remote_with_hooks(self):
-        self.run_cli("setup", "--yes", "--agent", "agents-md")
+        self.run_cli("setup", "--yes")
         remote = self.root / "remote.git"
         sh("git", "init", "-q", "--bare", str(remote), cwd=self.root)
         sh("git", "remote", "add", "origin", "file://" + str(remote).replace("\\", "/"), cwd=self.d)
@@ -3143,41 +3155,80 @@ class TestChatCitations(CliRepo):
         self.assertEqual([s["n"] for s in data["sources"]], [1])
 
 
-class TestPluginAndModelAtSetup(CliRepo):
-    def run_setup(self, installed_after, listed_before, present=True):
-        """Run `setup --yes` for Claude Code with a fake `claude` command and a fake model; returns the exit code, the text, the commands it was given and the model loader."""
-        from getlogbook import embed
-        calls, state = [], {"list": listed_before}
+class TestInstallCommand(Base):
+    """`logbook install` with a stand-in `claude` command, git and model: the plugin is installed, updated or skipped by what this Claude Code can do."""
+
+    def setUp(self):
+        super().setUp()
+        import unittest.mock
+        self.home = self.root / "claude-home"
+        env = unittest.mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.home)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def install(self, listed=None, after=None, claude=True, version="2.1.322 (Claude Code)", plugins=True, package="1.2.3", git=(2, 47)):
+        """Run `install --yes`; returns (exit code, text, the claude commands run, the model loader). `listed`/`after` are what `claude plugin list` says before and after."""
+        import shutil
+        import unittest.mock as m
+        from getlogbook import embed, install as ins
+        calls, state = [], {"list": listed if listed is not None else "[]"}
 
         def fake_claude(*args, timeout=0):
             calls.append(args)
+            if args == ("--version",):
+                return 0, version + "\n"
             if args[:2] == ("plugin", "list"):
-                return 0, state["list"]
-            if args[:2] == ("plugin", "install"):
-                state["list"] = installed_after
+                return (0, state["list"]) if plugins else (1, "")
+            if args[:2] in (("plugin", "install"), ("plugin", "update")):
+                state["list"] = after if after is not None else state["list"]
             return 0, ""
 
+        real_which = shutil.which
         env = {k: v for k, v in os.environ.items() if k != "LOGBOOK_OFFLINE"}
-        with unittest.mock.patch.dict(os.environ, env, clear=True), unittest.mock.patch("getlogbook.install._claude", fake_claude), \
-                unittest.mock.patch("shutil.which", lambda name: "claude" if present else None), unittest.mock.patch.object(embed, "load", return_value=object()) as load:
-            code, text = self.run_cli("setup", "--yes", "--agent", "claude-code")
-        return code, text, calls, load
+        buf = io.StringIO()
+        with m.patch.dict(os.environ, env, clear=True), m.patch.object(ins, "_claude", fake_claude), m.patch.object(ins, "_version", lambda: package), \
+                m.patch.object(ins, "git_version", lambda: git), m.patch("shutil.which", lambda n: ("/bin/claude" if claude else None) if n == "claude" else real_which(n)), \
+                m.patch.object(embed, "load", return_value=object()) as load, contextlib.redirect_stdout(buf):
+            code = cli.main(["install", "--yes"])
+        return code, buf.getvalue(), calls, load
 
-    def test_setup_installs_the_plugin_when_it_is_missing_and_fetches_the_model(self):
-        code, text, calls, load = self.run_setup(installed_after='[{"id": "logbook@logbook"}]', listed_before="[]")
+    def test_a_missing_plugin_is_installed_and_the_model_fetched(self):
+        code, text, calls, load = self.install(listed="[]", after='[{"id": "logbook@logbook", "version": "1.2.3"}]')
         self.assertEqual(code, 0, text)
-        self.assertIn("Claude Code plugin logbook@logbook", text)
+        self.assertIn("Claude Code 2.1.322", text)
         self.assertIn(("plugin", "marketplace", "add", "vssehdave/Logbook"), calls)
         self.assertIn(("plugin", "install", "logbook@logbook"), calls)
         self.assertIn("installed the Claude Code plugin", text)
         self.assertTrue(load.called)
         self.assertIn("search by meaning is ready", text)
+        self.assertIn("getlogbook capture", (self.home / "settings.json").read_text(), "and the hooks are wired in the Claude folder")
 
-    def test_setup_leaves_an_installed_plugin_alone_and_does_nothing_without_claude(self):
-        _, text, calls, _ = self.run_setup(installed_after="", listed_before='[{"id": "logbook@logbook"}]')
+    def test_a_plugin_of_another_version_is_updated_and_a_current_one_is_left_alone(self):
+        _, text, calls, _ = self.install(listed='[{"id": "logbook@logbook", "version": "0.0.6"}]', after='[{"id": "logbook@logbook", "version": "1.2.3"}]')
+        self.assertIn(("plugin", "update", "logbook@logbook"), calls)
         self.assertNotIn(("plugin", "install", "logbook@logbook"), calls)
-        _, text, calls, _ = self.run_setup(installed_after="", listed_before="[]", present=False)
-        self.assertEqual(calls, [])
+        self.assertIn("updated the Claude Code plugin", text)
+        _, _, calls, _ = self.install(listed='[{"id": "logbook@logbook", "version": "1.2.3"}]')
+        self.assertFalse([c for c in calls if c[:2] in (("plugin", "install"), ("plugin", "update"))])
+
+    def test_a_claude_code_too_old_for_plugins_still_gets_the_wiring_and_is_told_why(self):
+        code, text, calls, _ = self.install(plugins=False, version="0.2.9 (Claude Code)")
+        self.assertEqual(code, 0, text)
+        self.assertIn("cannot install plugins", text)
+        self.assertFalse([c for c in calls if c[:2] in (("plugin", "install"), ("plugin", "update"))])
+        self.assertIn("getlogbook capture", (self.home / "settings.json").read_text())
+
+    def test_no_claude_code_and_no_git_are_stopped_with_what_to_do(self):
+        with self.assertRaises(SystemExit) as e:
+            self.install(claude=False)
+        self.assertIn("Claude Code was not found", str(e.exception))
+        self.assertFalse(self.home.exists(), "nothing was written")
+        with self.assertRaises(SystemExit) as e:
+            self.install(git=(2, 20))
+        self.assertIn("git 2.31 or newer", str(e.exception))
+        with self.assertRaises(SystemExit) as e:
+            self.install(git=None)
+        self.assertIn("found none", str(e.exception))
 
 
 class TestSyncWithoutARemote(CliRepo):
@@ -3223,7 +3274,7 @@ class TestGithubIdentity(Base):
         d = self.fresh()
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            self.assertEqual(cli.main(["setup", "--dry-run", "--agent", "agents-md"]), 0)
+            self.assertEqual(cli.main(["setup", "--dry-run"]), 0)
         self.assertIn("(dry run) setup would create your id", buf.getvalue())
         self.assertFalse((Repo(d).cdir / "config.json").exists())
         self.assertEqual(Repo(d).cfg().get("user", ""), "")

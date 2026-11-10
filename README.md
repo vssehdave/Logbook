@@ -23,18 +23,22 @@ get a rules file. The only measurements so far are two small smoke tests on a to
                              # the command is `logbook`; the package name is getlogbook because `logbook` on PyPI is taken
     logbook demo           # Alice, Bob and a hostile Mallory on a scratch repo; every claim is checked
 
-## Set it up in a repo
+## Install once, then set up each repository
 
-    logbook setup          # shows what it will change and asks; --yes to apply, --dry-run to only look
-    logbook uninstall      # puts every file back (your notes are kept)
+    logbook install        # once per machine: wires Claude Code, installs its plugin, fetches the search model
+    logbook setup          # once per repository: your id, the library, the git hooks, teammates' notes
 
-One command starts the repo, fetches teammates' notes when there is a remote, chains a git pre-push hook and post-merge/post-rewrite hooks (the pre-push one only reminds
-you of unshared notes, never blocks a push; in `auto` mode it also starts a publish of the queue, in `ask` mode it leaves a note for your next prompt), and for each agent it finds writes that agent's hooks, an
-always-on rules block and, for Claude Code, a skill (`.claude/skills/logbook/SKILL.md`). Every file it edits is backed up first to
-`.git/logbook/backups`, written atomically (through symlinks, keeping line endings), and changed only between its own markers. Any other command run at a terminal in a clone that is not set up offers the
-same step once (answer no and it does not ask again); run by a hook or a script it only says what to do and writes nothing.
-`--agent claude-code agents-md copilot gemini cursor` picks agents; otherwise it looks for `.claude`, `AGENTS.md`,
-`.github/copilot-instructions.md`, `GEMINI.md` and `.cursor`. `logbook status --check` shows what is installed.
+Both show what they will change and ask first (`--yes` applies, `--dry-run` only looks), and both can also be run from Claude Code: `/logbook setup`.
+`install` needs git 2.31 or newer and Claude Code on the PATH. It writes into your Claude folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`): the hooks in
+`settings.json`, an always-on rules block in `CLAUDE.md`, and the skill; then it installs the `logbook@logbook` plugin (the Sources band) or updates it when it is another
+version, and says so when your Claude Code is too old to take plugins. The hooks do nothing in a repository that has not been set up, so one `install` serves every repository.
+Every file it edits is backed up first to `logbook-backups` in that folder, written atomically (through symlinks, keeping line endings), and changed only between its own markers.
+
+`setup` starts the repository's library and fetches teammates' notes when there is a remote, and chains a git post-commit hook, a pre-push hook (it only reminds you of unshared
+notes, never blocks a push; in `auto` mode it also starts a publish of the queue, in `ask` mode it leaves a note for your next prompt) and post-merge/post-rewrite hooks. Any other command run at a
+terminal in a clone that is not set up offers the same step once (answer no and it does not ask again); run by a hook or a script it only says what to do and writes nothing.
+`logbook uninstall` takes the Claude wiring out (the plugin stays: `claude plugin uninstall logbook@logbook`), `logbook uninstall --repo` takes this repository's git hooks out; your notes are kept.
+`logbook status --check` shows what is in place.
 
 ## The Bibliography band (Claude Code only, optional)
 
@@ -208,6 +212,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `trust` | ask |
 | `config` | ask |
 | `setup` | ask |
+| `install` | ask |
 | `uninstall` | ask |
 
 Checked in a real `claude -p` session: a hook's `allow` runs a command that would otherwise be refused, `ask` and `deny` do not run it. Not checked: that
@@ -255,8 +260,7 @@ Hooks (Claude Code is the only adapter shipped): `SessionStart`, `UserPromptSubm
 inject a digest of at most ~1,500 characters. A note is shown when the prompt or file names something a note was written about, or
 when a prompt with no names clearly overlaps a note's words (at most two such notes). Only from people who have commits on this
 history (or whom you ran `logbook trust` on), only entries that say *why* or *how wrong*, findings first, each labelled with
-author, provenance, age, commits behind HEAD and "verify first". Each note is shown once per session. Agents without hooks get
-the rules file, and `logbook snippet` prints the same text. Injection guarantees the notes are in context, not that the model
+author, provenance, age, commits behind HEAD and "verify first". Each note is shown once per session. Injection guarantees the notes are in context, not that the model
 uses them.
 
 ## Safety defaults
