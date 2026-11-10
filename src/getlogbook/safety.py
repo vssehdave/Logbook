@@ -1,6 +1,7 @@
 """Redaction (best-effort lint, not a guarantee) and sanitising of text that enters agent context."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import math
 import re
@@ -59,7 +60,7 @@ def scrub_paths(text):
 
 
 USER_MARK = "[user]"
-_PATH_LISTS = frozenset({"paths", "old_paths", "files_read", "files_modified"})  # lists of files in a note's anchor and observation
+_PATH_LISTS = frozenset({"paths", "old_paths", "files_read", "files_modified", "missing"})  # lists of files in a note's anchor, observation and checks (`missing` also holds names)
 
 
 def _account_re():
@@ -71,7 +72,11 @@ def _account_re():
             names.add(get())
         except (KeyError, OSError, RuntimeError):
             pass
-    names = sorted((n for n in names if len(n) >= 4), key=len, reverse=True)
+    return _name_re(tuple(sorted((n for n in names if len(n) >= 4), key=len, reverse=True)))
+
+
+@functools.lru_cache(maxsize=4)
+def _name_re(names):
     return re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, names)) + r")(?![A-Za-z0-9])") if names else None
 
 

@@ -65,6 +65,7 @@ class TestNothingPersonalIsKept(DbBase):
         got = self.r.get_private(e.id)
         self.assertEqual(got.anchor["paths"], ["shop/a.py", "shop/a.py"], "a path inside the repo is made relative, the others are dropped")
         self.assertEqual(got.checks["paths"], [0, 2], "a pair of counts that happens to be called paths is not a list of files")
+        self.assertEqual(got.checks["missing"], ["shop/b.py"], "an outside path is dropped from the names a note says are missing, as the sharing step did")
         self.assertEqual(got.obs["files_read"], ["shop/b.py"])
         self.assertTrue(got.body["summary"].startswith("shop/a.py and "))
         self.assertIn("logged in as [user], ok", got.body["evidence"])
