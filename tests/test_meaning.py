@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from array import array
 import unittest
 from unittest import mock
 
@@ -15,6 +16,12 @@ GROUPS = [{"cent", "rounding", "refund", "total", "totals", "money", "price"}, {
           {"stall", "hang", "slow", "chunk", "csv", "export"}]
 
 
+def pack(values):
+    """Floats to the packed unit-length form the library stores."""
+    norm = sum(v * v for v in values) ** 0.5 or 1.0
+    return array("f", [v / norm for v in values]).tobytes()
+
+
 def fake_encode(texts):
     """A stand-in for a real model: a word counts toward the topic group it belongs to, so two texts about the same thing are close without sharing a word."""
     out = []
@@ -23,7 +30,7 @@ def fake_encode(texts):
         for w in text.lower().replace(",", " ").split():
             hit = [i for i, g in enumerate(GROUPS) if w in g]
             v[hit[0] if hit else len(GROUPS)] += 1.0 if hit else 0.05
-        out.append(embed.pack(v))
+        out.append(pack(v))
     return out
 
 

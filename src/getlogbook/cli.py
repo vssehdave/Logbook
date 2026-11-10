@@ -414,7 +414,7 @@ def _embedder(r):
 
 def _meaning_search(r, a, emb):
     """Words and meaning together. Each hit is shown with where it is held and whether git still holds the same note."""
-    caught = r.db.index_vectors(emb, limit=300)  # notes written since the last `logbook index`, a bounded catch-up
+    r.db.index_vectors(emb, limit=300)  # notes written since the last `logbook index`, a bounded catch-up
     left = r.db.vector_missing(emb.name)
     res = recall.hybrid(r, a.q, emb, a.limit)
     if not res:

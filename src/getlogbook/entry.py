@@ -16,7 +16,6 @@ KINDS = ("change", "finding", "summary", "savepoint")  # savepoint: the summary 
 PROVENANCE = ("agent-written", "user-written", "user-edited", "worker-written")  # who really wrote a note; anything else a file claims reads as agent-written
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
 BODY_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale", "evidence")
-INJECTABLE = ("summary", "what", "why", "fix")  # evidence/wrong never enter agent context
 MAX_FIELD = 2000
 MAX_SUMMARY = 1000  # a few sentences, not a line
 MAX_SCALE = 300

@@ -325,9 +325,6 @@ class Repo:
         self._write_ref(ref, files, "logbook: squash", None)
         return ref
 
-    def refs(self):
-        return [r for _, r in self.ref_tips()]
-
     def ref_tips(self):
         out = g.try_run(["for-each-ref", "--format=%(objectname) %(refname)", "refs/logbook", REMOTE_NS, "refs/heads/logbook"], self.root)[1]
         return [tuple(l.split(" ", 1)) for l in out.splitlines() if " " in l and _REF_RE.search(l)]

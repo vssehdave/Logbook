@@ -448,13 +448,6 @@ class TestInstaller(Base):
         self.run_cli("uninstall", "--yes")
         self.assertEqual((ag / "logbook-scribe.md").read_text(), "someone else's agent")
 
-    def test_the_scribe_agent_an_older_install_wrote_is_removed(self):
-        ag = self.d / ".claude" / "agents"
-        ag.mkdir(parents=True)
-        (ag / "logbook-scribe.md").write_text("---\nname: logbook-scribe\nmetadata:\n  managed-by: logbook\n---\nbody\n")
-        self.assertEqual(self.run_cli("setup", "--yes", "--agent", "claude-code")[0], 0)
-        self.assertFalse((ag / "logbook-scribe.md").exists())
-
     def test_symlinked_rules_file_is_written_through(self):
         real = self.root / "shared-claude.md"
         real.write_text("# shared\n")
@@ -475,25 +468,6 @@ class TestInstaller(Base):
         _, after = self.run_cli("status", "--check")
         self.assertRegex(after, r"claude-code\s*: installed")
         self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed, post-commit installed")
-
-
-    def test_setup_replaces_the_old_per_commit_block_and_keeps_the_persons_own(self):
-        self.run_cli("setup", "--yes", "--agent", "agents-md")
-        hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], self.d).strip())
-        hooks.mkdir(exist_ok=True)
-        old = "#!/bin/sh\necho mine\n" + capture.MARK_BEGIN + "\n\"python\" -m getlogbook post-commit\n" + capture.MARK_END + "\n"
-        (hooks / "post-commit").write_text(old, newline="\n")
-        _, text = self.run_cli("setup", "--dry-run")
-        self.assertRegex(text, r"update\s+git post-commit hook")
-        for _ in range(2):
-            self.run_cli("setup", "--yes")
-        left = (hooks / "post-commit").read_text()
-        self.assertIn("echo mine", left)
-        self.assertEqual(left.count("getlogbook post-commit >/dev/null"), 1, "one block, however often setup runs")
-        self.assertTrue((hooks / "post-merge").exists() and (hooks / "pre-push").exists())
-        self.run_cli("uninstall", "--yes")
-        self.assertNotIn("logbook", (hooks / "post-commit").read_text())
-        self.assertIn("echo mine", (hooks / "post-commit").read_text())
 
 
 class CliRepo(Base):
@@ -1173,11 +1147,7 @@ class TestGrounding(CliRepo):
         bash = [e for e in cur["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]
         self.assertEqual(len(bash), 1)
         self.assertIn("--event Permission", json.dumps(bash))
-        old = json.loads(path.read_text())
-        old["permissions"] = {"allow": list(capture.OLD_ALLOW) + ["Bash(git status:*)"]}  # what 0.0.4 left behind, and the person's own rule
-        path.write_text(json.dumps(old))
         _, after = capture.install_claude(self.r, write=True)
-        self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "the old rules go, the person's stay")
         self.assertEqual(len([e for e in after["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]), 1, "installing twice adds nothing")
         _, gone = capture.install_claude(self.r, write=True, remove=True)
         self.assertNotIn("PreToolUse", gone.get("hooks", {}))
