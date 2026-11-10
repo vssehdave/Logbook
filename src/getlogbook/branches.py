@@ -4,7 +4,7 @@ Two signals, both from git alone:
   * a commit one of the branch's own entries is anchored to is now part of the main line's history (the entry's commit is not just the point the branch left
     the main line, which a branch with no commits of its own also "contains");
   * a merge commit on the main line names the branch ("Merge pull request #7 from user/feat-x", "Merge branch 'feat-x'").
-A squash merge leaves neither: someone with access to the host (the agent, using the GitHub tools) says so, and `logbook publish --branch <name>` does the rest.
+A squash merge leaves neither: someone with access to the host (the agent, with `gh pr view`) says so, and `logbook publish --branch <name>` does the rest.
 """
 from __future__ import annotations
 
