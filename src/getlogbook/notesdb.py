@@ -473,14 +473,6 @@ class NoteDB:
         return heap
 
     @_closing
-    def drop_vectors(self, model=None):
-        with self._tx():
-            if model:
-                self.con.execute("delete from note_vec where model=?", (model,))
-            else:
-                self.con.execute("delete from note_vec")
-
-    @_closing
     def provenance(self, ids):
         """{note id: {scope, author, ref, blob, tip, published_ref}} for the row a search would show (shared before private): where it is held and, for a shared
         note, the git blob and shelf tip it was read from."""

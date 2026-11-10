@@ -51,7 +51,7 @@ class TestMeaning(DbBase):
         with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(embed, "load", lambda cfg: EMB):
             self.run_cli("tidy", "--work", "--quiet", "--no-sync")
         self.assertEqual(self.r.db.vector_missing(EMB.name), 0)
-        self.assertGreaterEqual(self.r.db.vector_count(EMB.name), 2, "both notes have a vector without anyone running `logbook index`")
+        self.assertGreaterEqual(self.r.db.vector_count(EMB.name), 2, "both notes have a vector without anyone running a command for it")
         self.r.db.con.execute("delete from note_vec")
         self.run_cli("tidy", "--work", "--quiet", "--no-sync")  # offline (the tests' default): nothing is embedded, nothing fails
         self.assertEqual(self.r.db.vector_count(EMB.name), 0)
@@ -108,6 +108,11 @@ class TestMeaning(DbBase):
     def test_ask_uses_meaning_by_default_and_shows_where_a_hit_is_held(self):
         with mock.patch.object(embed, "load", lambda cfg: None):  # the model cannot start (no network yet): words only
             self.assertEqual(self.run_cli("ask", "why do totals lose money")[0], 4, "no model: words only, nothing in common")
+        with mock.patch.object(embed, "load", lambda cfg: EMB):
+            code, text = self.run_cli("ask", "why do totals lose money")
+            self.assertEqual(code, 4, "nothing is embedded until the tidy pass has run, and nothing shares a word")
+            self.assertIn("not in the meaning index yet", text, "and ask says so")
+        self.r.db.index_vectors(EMB)  # what the background tidy pass does after a savepoint or a pull
         with mock.patch.object(embed, "load", lambda cfg: EMB):
             code, text = self.run_cli("ask", "why do totals lose money")  # nothing to switch on
             self.assertEqual(code, 0, text)

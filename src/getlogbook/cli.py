@@ -439,17 +439,16 @@ def _embedder(r):
         return None
     emb = embed.load(r.cfg())
     if emb is None and not os.environ.get("LOGBOOK_OFFLINE"):
-        out("(the search model could not start, so these are matches on words only. It is downloaded once and needs the network the first time: `logbook index` tries again.)")
+        out("(the search model could not start, so these are matches on words only. It is downloaded once and needs the network the first time; the next tidy pass tries again.)")
     return emb
 
 
 def _meaning_search(r, a, emb):
     """Words and meaning together. Each hit is shown with where it is held and whether git still holds the same note."""
-    r.db.index_vectors(emb, limit=300)  # notes written since the last `logbook index`, a bounded catch-up
     left = r.db.vector_missing(emb.name)
     res = recall.hybrid(r, a.q, emb, a.limit)
     if not res:
-        out("no match")
+        out("no match" + (f" ({left} note(s) are not in the meaning index yet; the next tidy pass adds them)" if left else ""))
         return 4
     prov = r.db.provenance([v["id"] for _, v, _, _ in res])
     held = recall.verify(r, prov)
@@ -463,20 +462,7 @@ def _meaning_search(r, a, emb):
             f"{'trusted author' if v['trusted'] else 'author not trusted'}; evidence {'yes' if c.get('evidence') else 'no'}"
             + (f"; {len(c.get('unsupported', []))} fact(s) not in the tool output" if c.get("unsupported") else ""))
     if left:
-        out(f"({left} note(s) are not in the meaning index yet: `logbook index`)")
-    return 0
-
-
-def cmd_index(a):
-    """Embed the notes that have no vector yet, for search by meaning. Everything stays in the local database."""
-    r = need_repo()
-    emb = embed.load(r.cfg())
-    if emb is None:
-        raise SystemExit("logbook: the search model could not start. It is downloaded once (90 MB) and needs the network the first time; if that is not it, `pip install --upgrade getlogbook` repairs the packages.")
-    if a.rebuild:
-        r.db.drop_vectors()
-    n = r.db.index_vectors(emb)
-    out(f"embedded {n} note(s); {r.db.vector_count(emb.name)} in the index (model {emb.name}).")
+        out(f"({left} note(s) are not in the meaning index yet; the next tidy pass adds them)")
     return 0
 
 
@@ -779,7 +765,7 @@ def cmd_install(a):
             f"could not install the Claude Code plugin; run: claude plugin marketplace add {ins.MARKETPLACE} && claude plugin install {ins.PLUGIN}")
     if not offline:
         out("fetching the search model (all-MiniLM-L6-v2, 90 MB, once)...")
-        out("search by meaning is ready." if embed.load({}) else "could not fetch it now; search matches on words until `logbook index` succeeds.")
+        out("search by meaning is ready." if embed.load({}) else "could not fetch it now; search matches on words until a tidy pass can fetch it.")
     out("done. Now run `logbook setup` once in each repository you want Logbook in (or run any logbook command there, and it offers to).")
     return 0
 
@@ -1120,8 +1106,6 @@ def build_parser():
     s.add_argument("--remote", default="origin")
     s.add_argument("--json", action="store_true")
     s.add_argument("--depth", type=int)
-    s = add("index", cmd_index, "embed the notes that have no vector yet (search by meaning; the first run downloads the model)")
-    s.add_argument("--rebuild", action="store_true", help="drop every vector and embed all notes again")
     s = add("status", cmd_status, "what is recorded, what is waiting to be shared (--check for problems)")
     s.add_argument("--check", action="store_true", help="also run the setup and coverage checks")
     s.add_argument("--stats", action="store_true", help="also show injection and cost counters")
