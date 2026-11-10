@@ -72,20 +72,6 @@ def merge_remote(repo, remote="origin"):
     return ("rewritten" if purged else "merged"), purged
 
 
-def _drop_legacy_remote(repo, remote):
-    """Delete the old per-device names of your own refs on the remote, once the shelf is pushed."""
-    names = repo.cfg().get("legacy_remote", [])
-    left = []
-    for n in names:
-        rc, _, err = g.try_run(["push", "--quiet", remote, f":{n}"], repo.root)
-        if rc and "exist" not in err:
-            left.append(n)
-    if left != names:
-        c = repo.cfg()
-        c["legacy_remote"] = left
-        repo.save_cfg(c)
-
-
 def unpushed(repo, remote="origin"):
     """True when your shelf has commits the remote copy lacks, or the remote has no copy yet."""
     tip = _sha(repo, repo.own_ref())
@@ -98,7 +84,6 @@ def _mark_pushed(repo, remote):
 
 
 def push(repo, remote="origin", force=False):
-    repo.adopt_legacy()
     ref = repo.own_ref()
     if g.try_run(["rev-parse", "--verify", "-q", ref], repo.root)[0]:
         return {"ok": True, "via": "nothing to push", "ref": ref}
@@ -111,7 +96,6 @@ def push(repo, remote="origin", force=False):
         rc, _, err = g.try_run(["push", "--quiet", *flag, remote, f"{ref}:{ref}"], repo.root)
         if rc == 0:
             _mark_pushed(repo, remote)
-            _drop_legacy_remote(repo, remote)
             return {"ok": True, "via": repo.cfg().get("transport", "refs"), "ref": ref}
         if not _DIVERGED.search(err) or attempt == 2:
             break
@@ -141,7 +125,6 @@ def sync(repo, remote="origin", fetch_only=True, depth=None):
     """Fetch what teammates shared and merge your own shelf's two copies. It never pushes (`publish` does); `fetch_only` is kept for older callers.
     The result has "news": what is new from teammates since the last look (also kept for the next prompt, see news.py)."""
     from . import news
-    repo.adopt_legacy()
     out = {"fetch": fetch(repo, remote, depth)}
     fetched = out["fetch"]["ok"] and not out["fetch"].get("skipped")
     if fetched:

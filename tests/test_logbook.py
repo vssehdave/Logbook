@@ -2760,17 +2760,6 @@ class TestShelf(Base):
         self.assertTrue(sync.push(desk)["ok"])
         self.assertEqual(self.reader(), {e2.id}, "the purged note must not come back through the other machine")
 
-    def test_old_per_device_refs_are_folded_into_the_shelf(self):
-        lap, _ = self.clones()
-        e = capture.make_entry(lap, "finding", "old", {"summary": "s", "why": "w"})
-        old = f"refs/logbook/log/{lap.user}/abc123"
-        lap._write_ref(old, {f"entries/{e.id}.json": e.to_json().encode()}, "0.0.2 style", None)
-        self.assertEqual(lap.legacy_refs(), [old])
-        lap.adopt_legacy()
-        self.assertEqual(lap.legacy_refs(), [])
-        self.assertEqual([l.entry.id for l in lap.load_shared()[0]], [e.id])
-        self.assertEqual(lap.cfg()["legacy_remote"], [old])
-
 
 class TestPublishMoves(CliRepo):
     def test_publish_moves_the_note_and_skips_what_is_already_shared(self):

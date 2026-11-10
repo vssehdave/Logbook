@@ -655,7 +655,7 @@ def cmd_status(a):
     out(f"observer: {run.pending_bytes()} bytes of tool uses queued, {len(running.own(run))} observation(s) since the last log on {run.branch}")
     if an.shallow:
         out("note: shallow clone; some anchors are unverified")
-    if not shared and (r.cdir / "private").exists():
+    if not shared and any(v["scope"] == "private" for v in vs):
         out("note: nothing shared yet: `logbook publish` then `logbook sync`; or `logbook setup` to fetch teammates' entries")
     stale = [s for s in tree.summaries(vs) if not s["fresh"]]
     if stale:

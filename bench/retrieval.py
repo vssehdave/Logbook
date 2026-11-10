@@ -83,14 +83,14 @@ def make_repo(path, rnd, commits=400):
 
 
 def write_notes(path, repo, n, rnd, words, files, shas):
-    """30% private (one file each), 70% on shared refs; returns {ids by scope} and the shelf users."""
+    """30% private (rows in the library), 70% on shared refs; returns {ids by scope} and the shelf users."""
     base = 1_700_000_000_000
     n_priv, n_sh = int(n * 0.3), n - int(n * 0.3)
     shelves = max(1, -(-n_sh // 4000))
     users = [user_id(f"dev{i}@bench.test") for i in range(6)] + [user_id(f"ext{i}@bench.test") for i in range(max(0, shelves - 6))]
     users = users[:shelves]
     shelf_streams = {u: [] for u in users}
-    made = []
+    made, private = [], []
     for i in range(n):
         eid = f"{base + i:011x}-{os.urandom(4).hex()}"
         f = rnd.choice(files)
@@ -102,11 +102,14 @@ def write_notes(path, repo, n, rnd, words, files, shas):
                   anchor={"sha": rnd.choice(shas), "branch": "main", "subject": ws(5), "paths": [f], "names": [stem, rnd.choice(words)]})
         made.append(e)
         if i < n_priv:
-            (repo.pdir / f"{eid}.json").write_text(e.to_json(), encoding="utf-8")
+            private.append(e)
         else:
             u = users[(i - n_priv) % shelves]
             data = e.to_json().encode("utf-8")
             shelf_streams[u].append(f"M 100644 inline entries/{eid}.json\ndata {len(data)}\n".encode() + data + b"\n")
+    with repo.db._tx():  # one transaction: 30,000 separate ones would time the disk, not the retrieval
+        for e in private:
+            repo.db._put(e, "private", repo.user, repo.device)
     for u, chunks in shelf_streams.items():
         head = f"commit {PREFIX}/{u}/{SHELF}\ncommitter logbook <logbook@localhost> 1700000000 +0000\ndata 6\nbench\n".encode()
         sh("git", "fast-import", "--quiet", cwd=path, inp=head + b"".join(chunks))
@@ -145,20 +148,12 @@ def run_size(work, n, nq, runs):
     picks = rnd.sample(notes, nq)  # prompts: a file name plus topic words of a real note, topic words only, and one of stop words (matches nothing)
     prompts = [f"why did {Path(e.anchor['paths'][0]).stem} change, {e.topic}" for e in picks[: nq // 2]] + [e.topic + " " + e.body["why"][:40] for e in picks[nq // 2:]]
     prompts[-1] = "please can you do that for me now"
-    has_db = hasattr(repo, "db")
-    if has_db:  # the first open: older private files become rows, the shared shelves are mirrored
-        res["first_open_s"] = round(timed(lambda: (repo.db, repo.db.refresh_shared()))[0], 2)
-        res["notes_sqlite_mb"] = round((repo.cdir / "library.sqlite").stat().st_size / 1e6, 1)
-        res["private_dir_mb"] = round(dirsize(repo.cdir / "private.imported") / 1e6, 1)
-    else:
-        res["private_dir_mb"] = round(dirsize(repo.pdir) / 1e6, 1)
-    cache = repo.cdir / "shared-cache.json"
+    res["first_open_s"] = round(timed(lambda: (repo.db, repo.db.refresh_shared()))[0], 2)  # the shared shelves are mirrored into the library
+    res["library_mb"] = round((repo.cdir / "library.sqlite").stat().st_size / 1e6, 1)
 
     cold = []
-    for i in range(min(runs, 3)):  # the first prompt after a sync: the old code re-reads every shared note, the new one only what changed
-        if has_db:
-            repo.db.con.execute("delete from shelf")  # forces a full re-read of every shelf, the worst case
-        cache.unlink(missing_ok=True)
+    for i in range(min(runs, 3)):  # the first prompt after a sync: every shelf is read again
+        repo.db.drop_mirror()
         cold.append(hook_run(path, prompts[0], 100 + i)[0])
     hook_run(path, prompts[0], 200)  # warm up the cache
     warm, chars = [], []
@@ -172,19 +167,19 @@ def run_size(work, n, nq, runs):
 
     res["in_process_s"] = {"load_private": round(timed(repo.load_private)[0], 3), "load_shared": round(timed(repo.load_shared)[0], 3),
                            "all_views_everything": round(timed(tree.all_views, repo)[0], 3)}
-    if has_db:  # new shared notes arriving (a teammate published 100): what the next prompt pays to take them in
-        ref = f"{PREFIX}/{users[0]}/{SHELF}"
-        extra = []
-        for i in range(100):
-            e = Entry(id=f"{2_000_000_000_000 + i:011x}-{os.urandom(4).hex()}", topic="fresh note", body={"why": "because", "summary": "s"}, provenance="agent-written", v=2,
-                      anchor={"sha": shas[0], "branch": "main", "paths": [files[0]], "names": ["fresh"]})
-            data = e.to_json().encode()
-            extra.append(f"M 100644 inline entries/{e.id}.json\ndata {len(data)}\n".encode() + data + b"\n")
-        stream = f"commit {ref}\ncommitter logbook <logbook@localhost> 1700000100 +0000\ndata 4\nmore\nfrom {ref}^0\n".encode() + b"".join(extra)
-        sh("git", "fast-import", "--quiet", cwd=path, inp=stream)
-        res["refresh_after_100_new_shared_notes_ms"] = round(1000 * timed(repo.db.refresh_shared)[0], 1)
-        res["refresh_when_nothing_changed_ms"] = round(1000 * timed(repo.db.refresh_shared)[0], 1)
-        repo.db.con.close()  # Windows will not delete an open database
+    # new shared notes arriving (a teammate published 100): what the next prompt pays to take them in
+    ref = f"{PREFIX}/{users[0]}/{SHELF}"
+    extra = []
+    for i in range(100):
+        e = Entry(id=f"{2_000_000_000_000 + i:011x}-{os.urandom(4).hex()}", topic="fresh note", body={"why": "because", "summary": "s"}, provenance="agent-written", v=2,
+                  anchor={"sha": shas[0], "branch": "main", "paths": [files[0]], "names": ["fresh"]})
+        data = e.to_json().encode()
+        extra.append(f"M 100644 inline entries/{e.id}.json\ndata {len(data)}\n".encode() + data + b"\n")
+    stream = f"commit {ref}\ncommitter logbook <logbook@localhost> 1700000100 +0000\ndata 4\nmore\nfrom {ref}^0\n".encode() + b"".join(extra)
+    sh("git", "fast-import", "--quiet", cwd=path, inp=stream)
+    res["refresh_after_100_new_shared_notes_ms"] = round(1000 * timed(repo.db.refresh_shared)[0], 1)
+    res["refresh_when_nothing_changed_ms"] = round(1000 * timed(repo.db.refresh_shared)[0], 1)
+    repo.db.con.close()  # Windows will not delete an open database
     return res
 
 

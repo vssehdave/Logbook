@@ -151,8 +151,6 @@ class Repo:
         c.setdefault("transport", "refs")
         c.setdefault("interpreter", __import__("sys").executable)
         self.save_cfg(c)
-        for d in ("private", "seen"):
-            (self.cdir / d).mkdir(parents=True, exist_ok=True)
         return c
 
     @property
@@ -206,38 +204,7 @@ class Repo:
         base = BRANCH_PREFIX if self.cfg().get("transport") == "branches" else PREFIX
         return f"{base}/{self.user}/{SHELF}"
 
-    def legacy_refs(self):
-        """Your own local per-device refs from 0.0.2 (one per clone), which `adopt_legacy` folds into the single shelf."""
-        own = self.own_ref()
-        out = g.try_run(["for-each-ref", "--format=%(refname)", f"{PREFIX}/{self.user}", f"{BRANCH_PREFIX}/{self.user}"], self.root)[1]
-        return [r for r in out.split() if r != own and _REF_RE.search(r)]
-
-    def adopt_legacy(self):
-        """Move entries from old per-device refs into the shelf, then delete the old local refs. Returns the refs that were folded."""
-        old = self.legacy_refs()
-        if not old:
-            return []
-        ref = self.own_ref()
-        tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
-        files = self._tree_files(ref) if tip else {}
-        for r in old:
-            files.update(self._tree_files(r))
-        files = _apply_tombstones(files)
-        self._write_ref(ref, files, "logbook: adopt per-device refs", tip)
-        for r in old:
-            g.run(["update-ref", "-d", r], self.root)
-        c = self.cfg()  # `sync` deletes these names on the remote after the shelf has been pushed
-        c["legacy_remote"] = sorted(set(c.get("legacy_remote", [])) | set(old))
-        self.save_cfg(c)
-        return old
-
     # private log ---------------------------------------------------------
-    @property
-    def pdir(self):
-        """The folder older versions kept private notes in, one JSON file each. Notes live in library.sqlite now (notesdb.py); the first open
-        imports what is here and moves it to private.imported/."""
-        return self.cdir / "private"
-
     @property
     def db(self):
         if self._db is None:
@@ -324,7 +291,6 @@ class Repo:
         """Write notes to your shared ref. A savepoint note is refused here, whoever asks: it and the log behind it stay on this machine."""
         if any(e.kind == "savepoint" for e in entries):
             raise ValueError("a savepoint note stays on this machine; only notes are published")
-        self.adopt_legacy()
         ref = self.own_ref()
         tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
         files = self._tree_files(ref) if tip else {}
@@ -341,7 +307,6 @@ class Repo:
 
     def purge(self, eid, reason="author request"):
         """Rewrite own ref as a parentless commit without the entry; leave an id-only tombstone."""
-        self.adopt_legacy()
         ref = self.own_ref()
         files = self._tree_files(ref)
         if f"entries/{eid}.json" not in files:
@@ -355,7 +320,6 @@ class Repo:
 
     def squash_own_ref(self):
         """Parentless commit with the same tree (gc). Caller force-pushes with lease."""
-        self.adopt_legacy()
         ref = self.own_ref()
         files = self._tree_files(ref)
         if not files:
