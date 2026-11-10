@@ -9,7 +9,7 @@ from unittest import mock
 
 import test_logbook as T  # noqa: F401  (puts the source on the path and sets the test environment)
 from test_notesdb import DbBase  # noqa: E402
-from getlogbook import embed, recall  # noqa: E402
+from getlogbook import capture, embed, recall  # noqa: E402
 from getlogbook.entry import Entry  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
 
@@ -35,7 +35,13 @@ def fake_encode(texts):
     return out
 
 
+def strict_encode(texts):
+    """Like fake_encode, but a word that belongs to no group counts for nothing, so two texts with no topic in common are not close."""
+    return [pack([sum(1.0 for w in t.lower().replace(",", " ").split() if w in g) for g in GROUPS] + [0.0]) for t in texts]
+
+
 EMB = embed.Embedder("fake-v1", fake_encode)
+STRICT = embed.Embedder("fake-v1", strict_encode)
 
 
 class TestMeaning(DbBase):
@@ -123,6 +129,68 @@ class TestMeaning(DbBase):
             self.assertEqual(self.run_cli("ask", "why do totals lose money", "--exact")[0], 4, "--exact is words only")
             self.run_cli("config", "semantic", "off")
             self.assertEqual(self.run_cli("ask", "why do totals lose money")[0], 4, "off: words only")
+
+
+class TestHookMeaning(DbBase):
+    """The hook that runs on every prompt: meaning decides for a prompt that names nothing the notes know; one shared common word never puts a note in front of the agent."""
+
+    def setUp(self):
+        super().setUp()
+        self.money = self.plain("refund rounding drops a cent", "shop/ledger.py")
+        self.login = self.plain("setup looks up the handle for teammates", "shop/people.py")
+
+    def plain(self, topic, path):
+        """A note whose words, apart from the topic, belong to no topic group, so the stand-in model sees only the topic."""
+        return capture.make_entry(self.r, "finding", topic, {"summary": topic, "why": "because it matters"}, paths=[path], provenance="user-written")
+
+    def digest(self, prompt, emb, session):
+        with mock.patch.object(embed, "load", lambda cfg: emb), mock.patch.object(embed, "DEFAULT_MODEL", STRICT.name):
+            return recall.digest(self.r, "UserPromptSubmit", prompt, session=session)
+
+    def test_a_paraphrase_that_shares_no_word_is_injected_when_the_vectors_exist(self):
+        self.assertEqual(self.digest("why do totals lose money", None, "s1"), "", "no vectors and no model: words only, nothing in common")
+        self.r.db.index_vectors(STRICT)
+        text = self.digest("why do totals lose money", STRICT, "s2")
+        self.assertIn(self.money.id, text)
+        self.assertNotIn(self.login.id, text)
+
+    def test_chatter_is_silent_with_and_without_the_model(self):
+        self.assertEqual(self.digest("ok thanks looks good", None, "s3"), "", "one shared word is not a topic")
+        self.r.db.index_vectors(STRICT)
+        self.assertEqual(self.digest("ok thanks looks good", STRICT, "s4"), "", "and far from every note in meaning")
+        self.assertIn(self.login.id, self.digest("looks up login teammates", None, "s5"), "two shared words still count when there is no model")
+
+    def test_a_word_match_alone_does_not_decide_when_the_model_runs(self):
+        self.r.db.index_vectors(STRICT)
+        self.assertEqual(self.digest("looks up login teammates", STRICT, "s6"), "", "the words match but the meaning is far: the model's view wins")
+
+    def test_the_two_free_text_places_go_to_notes_that_can_be_shown(self):
+        for i in range(3):  # drafts with no evidence are never shown; they must not use up the places
+            capture.make_entry(self.r, "finding", f"refund rounding draft {i}", {"summary": "refund rounding draft", "why": "w"}, paths=["shop/x.py"], provenance="worker-written")
+        text = self.digest("refund rounding cent", None, "s7")
+        self.assertIn(self.money.id, text)
+
+    def test_ask_drops_a_note_found_by_one_common_word_only(self):
+        self.r.db.index_vectors(STRICT)
+        self.assertEqual(recall.hybrid(self.r, "ok thanks looks good", STRICT, 5), [])
+
+
+class TestModelFiles(unittest.TestCase):
+    def test_a_cached_model_file_is_found_without_importing_the_downloader(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as hub:
+            snap = os.path.join(hub, "models--a--b", "snapshots", "rev1", "onnx")
+            os.makedirs(snap)
+            open(os.path.join(snap, "model.onnx"), "w").close()
+            with mock.patch.dict(os.environ, {"HF_HUB_CACHE": hub}):
+                self.assertEqual(embed._cached("a/b", "rev1", "onnx/model.onnx"), os.path.join(snap, "model.onnx"))
+                self.assertIsNone(embed._cached("a/b", "rev1", "tokenizer.json"), "a file that is not there is downloaded")
+                self.assertIsNone(embed._cached("a/b", None, "onnx/model.onnx"), "another model follows its main branch, so the downloader checks it")
+
+    def test_search_by_meaning_is_on_unless_turned_off(self):
+        self.assertTrue(embed.semantic_on({}))
+        self.assertFalse(embed.semantic_on({"semantic": False}))
+        self.assertFalse(embed.semantic_on({"semantic": "off"}))
 
 
 class TestConversations(DbBase):
