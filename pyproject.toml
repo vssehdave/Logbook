@@ -26,6 +26,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+semantic = ["model2vec>=0.6"]  # search by meaning (`logbook index`, `config semantic on`); the core stays standard-library only
+
 [project.urls]
 Homepage = "https://github.com/vssehdave/Logbook"
 Issues = "https://github.com/vssehdave/Logbook/issues"

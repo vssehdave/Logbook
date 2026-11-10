@@ -166,12 +166,70 @@ def candidate_views(repo, names, files, qtokens):
     want = {m.lower() for m in names}
     for m in list(want):
         want |= {a.lower() for a in tree.aliases_for(repo, m)}
-    loaded = repo.db.candidates(want, {f.replace("\\", "/") for f in files}, qtokens)
+    return views_of(repo, repo.db.candidates(want, {f.replace("\\", "/") for f in files}, qtokens))
+
+
+def views_of(repo, loaded):
+    """(views, Anchorer) for these notes only."""
     anch = tree.Anchorer(repo)
     with repo.snapshot():
         anch.prime([l.entry.anchor.get("sha", "") for l in loaded])
         views = [tree.view(repo, l, anch) for l in loaded]
     return tree.apply_statuses(views), anch
+
+
+RRF_K = 60  # reciprocal rank fusion: a note's score is the sum of 1/(RRF_K + rank) over the lists it is in
+MIN_SIM = 0.2  # a note that only the vectors found must be at least this close (cosine) to the question
+
+
+def hybrid(repo, query, embedder, limit=10):
+    """[(score, view, how, similarity)] best first: the notes that match the question's words (the usual ranking over the full-text candidates) and the notes whose
+    meaning is close to it (the vectors), fused by rank. `how` says which found it. Every hit is a view of a stored note, with its author, anchor, status and checks;
+    the vectors only decide which notes are looked at."""
+    db = repo.db
+    db.refresh_shared()
+    qt = tokens(query) - _STOP
+    names = db.names_in(tokens(query))
+    want = {m.lower() for m in names}
+    for m in list(want):
+        want |= {a.lower() for a in tree.aliases_for(repo, m)}
+    vec = [(l, s) for l, s in db.vector_search(embedder, query, k=50) if s >= MIN_SIM]
+    loaded, seen = [], set()
+    for l in db.candidates(want, set(), qt) + [l for l, _ in vec]:
+        if l.entry.id not in seen:
+            seen.add(l.entry.id)
+            loaded.append(l)
+    views, anch = views_of(repo, loaded)
+    text_rank = {v["id"]: i for i, (_, v) in enumerate(rank(repo, query=query, names=names, views=views, anch=anch))}
+    vec_rank = {l.entry.id: i for i, (l, _) in enumerate(vec)}
+    sim = {l.entry.id: s for l, s in vec}
+    out = []
+    for v in views:
+        if v.get("is_status") or (v["id"] not in text_rank and v["id"] not in vec_rank):
+            continue
+        how = [n for n, d in (("words", text_rank), ("meaning", vec_rank)) if v["id"] in d]
+        score = sum(1.0 / (RRF_K + d[v["id"]]) for d in (text_rank, vec_rank) if v["id"] in d)
+        out.append((score, v, how, sim.get(v["id"])))
+    out.sort(key=lambda x: (-x[0], x[1]["id"]))
+    return out[:limit]
+
+
+def verify(repo, prov):
+    """{note id: True | False | None}: a shared note's stored copy is compared with what git holds at the shelf tip it was read from (True: the same, False: git has
+    something else or nothing, the index is out of date); None for a note that is private to this machine and so not in git."""
+    from .entry import from_json
+    asks = {i: f"{p['tip']}:entries/{i}.json" for i, p in prov.items() if p["scope"] == "shared" and p["tip"]}
+    blobs = g.cat_blobs(repo.root, list(asks.values()))
+    out = {}
+    for i, p in prov.items():
+        if p["scope"] != "shared":
+            out[i] = None
+            continue
+        try:
+            out[i] = from_json(blobs[asks[i]].decode("utf-8")).id == i
+        except (KeyError, ValueError, UnicodeDecodeError):
+            out[i] = False
+    return out
 
 
 def digest(repo, event, prompt="", files=(), session="", cap=DEFAULT_CAP):
