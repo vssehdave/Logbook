@@ -1049,7 +1049,7 @@ def cmd_cites(a):
     vs, _ = views(r)
     recs = cites.records(r, session, vs)
     if a.json:
-        out(json.dumps({"session": session, "mode": r.publish_mode(), "sources": recs}, ensure_ascii=False))
+        out(json.dumps({"session": session, "status": cites.status(r, session), "mode": r.publish_mode(), "sources": recs}, ensure_ascii=False))
         return 0
     if not recs:
         out("no notes have been numbered in this chat yet")

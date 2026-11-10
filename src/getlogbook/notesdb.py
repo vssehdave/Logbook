@@ -7,6 +7,8 @@
     Private notes are STORED here (this file is their only copy); shared notes are a MIRROR of git, which stays the authority: every shared row carries its
     ref and the git blob it was read from, `refresh_shared()` brings the mirror up to date from the ref tips (only blobs it has not seen are read), and the
     mirror can be dropped and rebuilt from git at any time. Publishing still writes git objects (store.Repo.publish) from the stored note.
+  * a CHAT is one agent conversation in this repo, and its citations are its page: `cite` rows number the notes the agent was shown (the superscript it writes after a
+    claim), kept for the whole chat. A chat is `open` while it is going and `archived` when its session ends; a resumed chat opens again.
   * vectors for search by meaning (`note_vec`) are derived from the notes, never published, and rebuilt on demand (embed.py).
   * the raw queue of tool uses an observer reads (`.git/logbook/running/`) and archived notes stay plain files.
 
@@ -21,6 +23,7 @@ import functools
 import json
 import shutil
 import sqlite3
+import time
 
 from . import git as g
 from .entry import from_json
@@ -50,6 +53,12 @@ create index if not exists tomb_ref on tomb(ref);
 create table if not exists supersedes(hidden text not null, author text not null, by_id text not null);
 create index if not exists supersedes_hidden on supersedes(hidden);
 create table if not exists meta(k text primary key, v text);
+create table if not exists chat(
+  id text primary key, branch text not null default '', status text not null default 'open', started text not null default '', updated text not null default '',
+  seq integer not null default 0);  -- seq goes up each time a chat is touched, so "the latest chat" never depends on clock resolution
+create table if not exists cite(
+  chat_id text not null references chat(id), n integer not null, note_id text not null, shown text not null default '',
+  primary key (chat_id, n), unique (chat_id, note_id));
 create table if not exists note_vec(pk integer primary key, model text not null, vec blob not null);
 """
 FTS = "create virtual table if not exists note_fts using fts5(topic, body, paths, names, tokenize=\"unicode61 tokenchars '_'\")"
@@ -416,6 +425,47 @@ class NoteDB:
     def logs_of_notes(self):
         """{note id: log id} for your own notes that were taken from a log kept here: the log is found through the note's shelf."""
         return dict(self.con.execute("select n.id, s.log_id from note n join shelf s on s.id=n.shelf_id where n.scope='private' and s.log_id is not null"))
+
+    # chats and their citations: the numbered notes behind an answer ----------------------------------------------------------------------------
+    @_closing
+    def cite_items(self, chat_id):
+        """{note id: number} for this chat."""
+        return {i: n for i, n in self.con.execute("select note_id, n from cite where chat_id=?", (chat_id,))}
+
+    @_closing
+    def cite_peek(self, chat_id, note_id):
+        """The number a note has in this chat, or the one it would get, without recording anything."""
+        r = self.con.execute("select n from cite where chat_id=? and note_id=?", (chat_id, note_id)).fetchone()
+        return r[0] if r else self.con.execute("select coalesce(max(n), 0) + 1 from cite where chat_id=?", (chat_id,)).fetchone()[0]
+
+    @_closing
+    def cite_number(self, chat_id, note_id, branch=""):
+        """The number of a note in this chat, giving it the next one the first time it is shown. Opens the chat (again, when it was archived)."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with self._tx():
+            self.con.execute("insert into chat(id, branch, status, started, updated, seq) values (?,?,?,?,?, (select coalesce(max(seq), 0) + 1 from chat)) "
+                             "on conflict(id) do update set status='open', updated=excluded.updated, seq=excluded.seq", (chat_id, branch, "open", now, now))
+            r = self.con.execute("select n from cite where chat_id=? and note_id=?", (chat_id, note_id)).fetchone()
+            if r:
+                return r[0]
+            n = self.con.execute("select coalesce(max(n), 0) + 1 from cite where chat_id=?", (chat_id,)).fetchone()[0]
+            self.con.execute("insert into cite(chat_id, n, note_id, shown) values (?,?,?,?)", (chat_id, n, note_id, now))
+            return n
+
+    @_closing
+    def latest_chat(self):
+        r = self.con.execute("select id from chat order by seq desc limit 1").fetchone()
+        return r[0] if r else ""
+
+    @_closing
+    def chat_status(self, chat_id):
+        r = self.con.execute("select status from chat where id=?", (chat_id,)).fetchone()
+        return r[0] if r else ""
+
+    @_closing
+    def end_chat(self, chat_id):
+        with self._tx():
+            self.con.execute("update chat set status='archived', updated=? where id=? and status='open'", (time.strftime("%Y-%m-%dT%H:%M:%S"), chat_id))
 
     def _import_convo(self):
         """One time: the conversation files an older version kept become logs, and the folder is set aside (not deleted)."""

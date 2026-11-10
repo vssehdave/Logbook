@@ -1,7 +1,7 @@
 """Citations: the numbered sources behind an answer.
 
 When notes are put in front of an agent they get a number that stays the same for the rest of that chat (¹, ², ³ ...), kept in
-`.git/logbook/cites/<session>.json`. The agent cites a note by writing its number after the claim. This module turns a number back
+the library (tables `chat` and `cite`: a chat is open while it goes and archived when its session ends). The agent cites a note by writing its number after the claim. This module turns a number back
 into what a reader needs: the header, a link to the commit or pull request, who wrote it and when.
 
 A link and an author are shown only for notes a teammate shared. Your own notes and private notes need no source line. A shared note
@@ -16,7 +16,6 @@ from pathlib import Path
 
 from . import git as g
 from .safety import sanitize
-from .store import atomic_write
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
 _REMOTE = re.compile(r"^(?:ssh://)?(?:git@|https?://)(?:[^@/]+@)?([^/:]+)[:/](.+?)(?:\.git)?/?$")
@@ -28,39 +27,33 @@ def sup(n):
     return str(n).translate(SUP)
 
 
-def _file(repo, session):
-    return repo.cdir / "cites" / f"{_SAFE.sub('', session) or 'none'}.json"
-
-
-def _load(repo, session):
-    try:
-        d = json.loads(_file(repo, session).read_text(encoding="utf-8"))
-        return d if isinstance(d.get("items"), dict) else {"items": {}}
-    except (OSError, ValueError):
-        return {"items": {}}
+def _chat(session):
+    return _SAFE.sub("", session or "") or "none"
 
 
 def peek(repo, session, note_id):
     """The number a note has in this chat, or the one it would get, without recording anything."""
-    items = _load(repo, session)["items"]
-    return items.get(note_id) or max(items.values(), default=0) + 1
+    return repo.db.cite_peek(_chat(session), note_id)
 
 
-def number(repo, session, note_id):
-    """The number of a note in this chat, giving it the next one the first time it is shown."""
-    d = _load(repo, session)
-    if note_id not in d["items"]:
-        d["items"][note_id] = max(d["items"].values(), default=0) + 1
-        try:
-            atomic_write(_file(repo, session), json.dumps(d))
-        except OSError:
-            pass
-    return d["items"][note_id]
+def number(repo, session, note_id, branch=""):
+    """The number of a note in this chat, giving it the next one the first time it is shown (and opening the chat, with the branch it is on)."""
+    return repo.db.cite_number(_chat(session), note_id, branch)
+
+
+def archive(repo, session):
+    """The session ended: its citations page is kept, marked archived (it opens again if the chat is resumed and cites something)."""
+    if session:
+        repo.db.end_chat(_chat(session))
+
+
+def status(repo, session):
+    """'open', 'archived', or '' for a chat with no citations."""
+    return repo.db.chat_status(_chat(session))
 
 
 def latest_session(repo):
-    files = sorted((repo.cdir / "cites").glob("*.json"), key=lambda p: p.stat().st_mtime) if (repo.cdir / "cites").exists() else []
-    return files[-1].stem if files else ""
+    return repo.db.latest_chat()
 
 
 _RUNS = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹]+")
@@ -154,7 +147,7 @@ def record(repo, v, n):
 
 def records(repo, session, views):
     """Citation records for every note shown in this chat, in number order."""
-    items = _load(repo, session)["items"]
+    items = repo.db.cite_items(_chat(session))
     by_id = {v["id"]: v for v in views}
     return [record(repo, by_id[i], n) for i, n in sorted(items.items(), key=lambda kv: kv[1]) if i in by_id]
 
