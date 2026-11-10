@@ -24,10 +24,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Version Control :: Git",
 ]
-dependencies = []
-
-[project.optional-dependencies]
-semantic = ["onnxruntime", "tokenizers", "huggingface_hub", "numpy"]  # search by meaning (`logbook index`, `config semantic on`); the core stays standard-library only
+# search by meaning (all-MiniLM-L6-v2 on the CPU) is part of Logbook: one `pip install getlogbook` brings all of it; the model itself (90 MB) is fetched once, by `logbook setup`
+dependencies = ["onnxruntime", "tokenizers", "huggingface_hub", "numpy"]
 
 [project.urls]
 Homepage = "https://github.com/vssehdave/Logbook"

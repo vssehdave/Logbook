@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import time
 from importlib import resources
 from pathlib import Path
@@ -114,6 +115,34 @@ class Step:
                         folder.rmdir()
                     else:
                         break
+
+
+PLUGIN, MARKETPLACE = "logbook@logbook", "vssehdave/Logbook"
+
+
+def _claude(*args, timeout=120):
+    try:
+        p = subprocess.run(["claude", *args], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return p.returncode, p.stdout
+
+
+def plugin_state():
+    """'installed' or 'missing' for the Claude Code plugin; 'unavailable' when there is no `claude` command, it is too old to have plugins, or LOGBOOK_OFFLINE is set."""
+    if os.environ.get("LOGBOOK_OFFLINE") or not shutil.which("claude"):
+        return "unavailable"
+    rc, listed = _claude("plugin", "list", "--json", timeout=30)
+    if rc != 0:
+        return "unavailable"
+    return "installed" if PLUGIN in listed else "missing"
+
+
+def plugin_install():
+    """Add the marketplace (a repeat is harmless) and install the plugin for the person's whole Claude Code. True when it is installed afterwards."""
+    _claude("plugin", "marketplace", "add", MARKETPLACE)
+    _claude("plugin", "install", PLUGIN)
+    return plugin_state() == "installed"
 
 
 def _version():

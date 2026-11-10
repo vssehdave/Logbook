@@ -14,6 +14,7 @@ SRC = os.environ.get("LOGBOOK_SRC") or str(Path(__file__).resolve().parents[1] /
 sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
+os.environ["LOGBOOK_OFFLINE"] = "1"  # no test downloads the model or installs a plugin
 os.environ["LOGBOOK_GITHUB_LOGIN"] = ""  # no test asks `gh` who you are
 for _k in [k for k in os.environ if k.startswith("CLAUDE")]:  # run from inside Claude Code, these would make every note look agent-written
     del os.environ[_k]
@@ -3215,6 +3216,43 @@ class TestConvo(ObserverBase):
             self.assertEqual(self.r.cfg()["display"], "saved")
         path.write_text(json.dumps({**first, "display": "after"}), encoding="utf-8")
         self.assertEqual(self.r.cfg()["display"], "after", "outside the block every call reads the file")
+
+
+class TestPluginAndModelAtSetup(CliRepo):
+    def run_setup(self, installed_after, listed_before, present=True):
+        """Run `setup --yes` for Claude Code with a fake `claude` command and a fake model; returns the exit code, the text, the commands it was given and the model loader."""
+        from getlogbook import embed
+        calls, state = [], {"list": listed_before}
+
+        def fake_claude(*args, timeout=0):
+            calls.append(args)
+            if args[:2] == ("plugin", "list"):
+                return 0, state["list"]
+            if args[:2] == ("plugin", "install"):
+                state["list"] = installed_after
+            return 0, ""
+
+        env = {k: v for k, v in os.environ.items() if k != "LOGBOOK_OFFLINE"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True), unittest.mock.patch("getlogbook.install._claude", fake_claude), \
+                unittest.mock.patch("shutil.which", lambda name: "claude" if present else None), unittest.mock.patch.object(embed, "load", return_value=object()) as load:
+            code, text = self.run_cli("setup", "--yes", "--agent", "claude-code")
+        return code, text, calls, load
+
+    def test_setup_installs_the_plugin_when_it_is_missing_and_fetches_the_model(self):
+        code, text, calls, load = self.run_setup(installed_after='[{"id": "logbook@logbook"}]', listed_before="[]")
+        self.assertEqual(code, 0, text)
+        self.assertIn("Claude Code plugin logbook@logbook", text)
+        self.assertIn(("plugin", "marketplace", "add", "vssehdave/Logbook"), calls)
+        self.assertIn(("plugin", "install", "logbook@logbook"), calls)
+        self.assertIn("installed the Claude Code plugin", text)
+        self.assertTrue(load.called)
+        self.assertIn("search by meaning is ready", text)
+
+    def test_setup_leaves_an_installed_plugin_alone_and_does_nothing_without_claude(self):
+        _, text, calls, _ = self.run_setup(installed_after="", listed_before='[{"id": "logbook@logbook"}]')
+        self.assertNotIn(("plugin", "install", "logbook@logbook"), calls)
+        _, text, calls, _ = self.run_setup(installed_after="", listed_before="[]", present=False)
+        self.assertEqual(calls, [])
 
 
 class TestSyncWithoutARemote(CliRepo):
