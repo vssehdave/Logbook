@@ -22,3 +22,6 @@ Thumbs.db
 
 .playwright-cli/
 bench/real_session.json
+
+# Planning notes kept locally
+docs/
