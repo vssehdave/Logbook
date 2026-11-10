@@ -122,18 +122,9 @@ def push(repo, remote="origin", force=False):
 
 
 def sync(repo, remote="origin", depth=None):
-    """Fetch what teammates shared and merge your own shelf's two copies. It never pushes (`publish` does).
-    The result has "news": what is new from teammates since the last look (also kept for the next prompt, see news.py)."""
-    from . import news
-    out = {"fetch": fetch(repo, remote, depth)}
-    fetched = out["fetch"]["ok"] and not out["fetch"].get("skipped")
-    if fetched:
-        out["merge"] = merge_remote(repo, remote)[0]
-    shared, _ = repo.load_shared()
-    out["news"] = news.update(repo) if fetched else []
-    out["writers"] = len({l.user for l in shared})
-    out["entries"] = len(shared)
-    return out
+    """Fetch what teammates shared: git refs and objects of the shared shelves, and nothing else. It never pushes (`publish` does), merges nothing of yours (publish does
+    that when it pushes) and works out no news (a session start does)."""
+    return {"fetch": fetch(repo, remote, depth)}
 
 
 def doctor(repo, remote="origin"):

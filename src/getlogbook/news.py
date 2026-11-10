@@ -1,7 +1,7 @@
 """News: what teammates added to the shared log since you last looked, like a paper read after a long trip.
 
-`logbook sync` fetches and merges, never pushes, and records what is new here. The digest is printed by `sync` itself, and what no terminal saw (a fetch started by a
-git hook) is kept in `news.json` and shown once, at the next session start or prompt. Everything from a teammate is cleaned like any shared text.
+`logbook sync` only fetches. When a session starts, `update` works out what is new from what the library now holds and keeps it in `news.json`; it is shown to the
+agent once, at that session start. Everything from a teammate is cleaned like any shared text.
 
     .git/logbook/news.json    {"seen": [entry ids already announced], "pending": [lines not shown to anyone yet]}
 """
@@ -45,7 +45,7 @@ def digest(repo, loaded, seen):
 
 
 def update(repo):
-    """After a fetch: work out what is new from teammates, remember it for the next prompt, and return the lines. The first call only learns what is already there."""
+    """At a session start: work out what is new from teammates, remember it for the next prompt, and return the lines. The first call only learns what is already there."""
     shared, tombs = repo.load_shared()
     theirs = [l for l in shared if l.user != repo.user and (l.user, l.entry.id) not in tombs]
     d = _load(repo)

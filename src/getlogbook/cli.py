@@ -347,8 +347,7 @@ def cmd_publish(a):
     remote = "origin" in sync.remotes(r)
     if remote:  # tidy -> sync -> move -> push: bring in what teammates shared before writing
         try:
-            for line in sync.sync(r, "origin")["news"]:
-                out("news: " + line)
+            sync.sync(r, "origin")
         except (SystemExit, OSError, ValueError):
             pass
     out("Published entries cannot be fully recalled: forks and mirrors may keep copies. Rotate any secret that appears above.")
@@ -413,9 +412,7 @@ def cmd_sync(a):
     elif not res["fetch"]["ok"]:
         out("logbook: could not fetch from " + a.remote + ": " + res["fetch"]["error"][:200])
     else:
-        out(f"fetched: {res['entries']} shared entr{'y' if res['entries'] == 1 else 'ies'} from {res['writers']} writer(s); your own shelf: {res.get('merge', 'same')}. Nothing was pushed (`logbook publish` pushes).")
-        for line in res["news"] or ["no news since you last looked."]:
-            out("  " + line)
+        out(f"fetched the shared shelves from {a.remote}. Nothing was pushed (`logbook publish` sends).")
     return 0 if res["fetch"]["ok"] else 1
 
 
@@ -1158,7 +1155,7 @@ def build_parser():
     s.add_argument("--no-tidy", action="store_true", help="in auto mode, publish without running tidy first")
     s.add_argument("--no-push", action="store_true", help="write to your shared ref but do not push it")
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
-    s = add("sync", cmd_sync, "fetch teammates' entries and merge them in; never pushes (publish does); says what is new")
+    s = add("sync", cmd_sync, "fetch teammates' shared shelves from the remote (git refs and objects only; never pushes)")
     s.add_argument("--remote", default="origin")
     s.add_argument("--json", action="store_true")
     s.add_argument("--depth", type=int)
