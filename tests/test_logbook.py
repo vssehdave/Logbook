@@ -815,7 +815,7 @@ class TestTreeNav(CliRepo):
         sha8 = sh("git", "rev-parse", "--short=8", "HEAD", cwd=self.d)
         top = self.run_cli("ask", "repo")[1]
         self.assertIn(f"branch:{main}", top)
-        self.assertIn("summary: none yet", top)
+        self.assertNotIn("summary", top)
         self.assertIn(f"commit:{sha8}", self.run_cli("ask", f"branch:{main}")[1])
         text = self.run_cli("ask", f"commit:{sha8}")[1]
         self.assertIn(f"note:{e.id}", text)
@@ -1217,11 +1217,10 @@ class TestGrounding(CliRepo):
         code, text = self.run_cli("note", "--fields", stdin="topic: t2\nsummary: line one\n  line two\nevidence: ran it\n")  # lines inside a value count
         self.assertIn("recorded", text)
 
-    def test_a_person_and_a_summary_note_are_not_held_to_the_size(self):
-        self.run_cli("note", "--fields", stdin="kind: summary\nlevel: repo\nsummary: the repo in a few sentences\n")
+    def test_a_person_is_not_held_to_the_size(self):
         self.as_a_person()
         self.run_cli("note", "one line from a person")
-        self.assertEqual(len(self.r.load_private()), 2)
+        self.assertEqual(len(self.r.load_private()), 1)
 
     def test_check_reports_and_saves_nothing(self):
         code, text = self.note("--check", summary="`total()` sums rows in `shop/missing.py`", paths=["shop/revenue.py"])
