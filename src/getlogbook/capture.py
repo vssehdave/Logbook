@@ -158,9 +158,6 @@ def handle_hook(event, agent, raw):
             out = recall.hook_json(event, "\n".join(x for x in (text, note[1] if note else "") if x), note[0] if note else "")
         if event in ("Stop", "SessionEnd"):  # prompt-time hooks stay read-only and fast
             _observe(repo, cfg, flush=event == "SessionEnd", end=event == "SessionEnd")
-        if event == "SessionEnd":
-            from . import cites
-            cites.archive(repo, str(payload.get("session_id", "")))  # the chat's citations page is kept, marked archived
         if event == "SessionStart":
             _observe(repo, cfg, flush=True)  # tool uses a crashed session left in the queue
         return out

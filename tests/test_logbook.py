@@ -3100,33 +3100,47 @@ class TestConvo(ObserverBase):
 
 
 class TestChatCitations(CliRepo):
-    def test_a_chat_has_its_own_page_that_opens_with_its_first_citation_and_is_archived_when_it_ends(self):
-        import sqlite3
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(lambda: self.r.db._con and self.r.db._con.close())
+
+    def status(self, chat):
+        return self.r.db.con.execute("select status from chat where id=?", (chat,)).fetchone()[0]
+
+    def test_a_chat_has_its_own_page_and_a_note_keeps_its_number_for_the_whole_chat(self):
         from getlogbook import cites
         self.assertEqual(cites.latest_session(self.r), "", "no chat yet")
         self.assertEqual(cites.number(self.r, "chat-a", "n1", "feat/x"), 1)
         self.assertEqual([cites.number(self.r, "chat-a", x) for x in ("n2", "n1")], [2, 1], "a note keeps its number for the whole chat")
         self.assertEqual(cites.number(self.r, "chat-b", "n2"), 1, "another chat starts again at one")
-        self.assertEqual((cites.status(self.r, "chat-a"), cites.latest_session(self.r)), ("open", "chat-b"))
-        row = self.r.db.con.execute("select branch, status from chat where id='chat-a'").fetchone()
-        self.assertEqual(row, ("feat/x", "open"), "the chat is filed under the branch it was on")
-        cites.archive(self.r, "chat-a")
-        self.assertEqual(cites.status(self.r, "chat-a"), "archived")
-        self.assertEqual(self.r.db.cite_items("chat-a"), {"n1": 1, "n2": 2}, "archiving keeps the page")
-        cites.number(self.r, "chat-a", "n3")
-        self.assertEqual((cites.status(self.r, "chat-a"), cites.latest_session(self.r)), ("open", "chat-a"), "a resumed chat opens again")
+        self.assertEqual(cites.latest_session(self.r), "chat-b")
+        self.assertEqual(self.r.db.con.execute("select branch, status from chat where id='chat-a'").fetchone(), ("feat/x", "open"), "filed under the branch it was on")
 
-    def test_a_citation_names_a_chat_that_exists_and_cites_json_says_whether_it_is_over(self):
+    def test_a_page_with_no_citation_for_twenty_days_is_archived_and_citing_again_reopens_it(self):
+        from getlogbook import cites
+        cites.number(self.r, "old", "n1")
+        cites.number(self.r, "recent", "n1")
+        self.r.db.con.execute("update chat set updated='2020-01-01T00:00:00' where id='old'")
+        self.assertEqual(self.r.db.archive_stale_chats(), 1)
+        self.assertEqual((self.status("old"), self.status("recent")), ("archived", "open"))
+        self.assertEqual(self.r.db.cite_items("old"), {"n1": 1}, "the page is kept")
+        self.assertEqual(self.r.db.archive_stale_chats(), 0, "nothing more to archive")
+        cites.number(self.r, "old", "n2")
+        self.assertEqual((self.status("old"), cites.latest_session(self.r)), ("open", "old"), "a chat that cites again is open again")
+
+    def test_the_tidy_pass_does_the_archiving_and_cites_json_is_only_the_numbered_sources(self):
         import sqlite3
         from getlogbook import cites
         with self.assertRaises(sqlite3.IntegrityError):
             self.r.db.con.execute("insert into cite(chat_id, n, note_id) values ('no-chat', 1, 'x')")
         self.r.add_private(capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"], provenance="user-written"))
-        note = self.r.load_private()[0].id
-        cites.number(self.r, "chat-j", note)
-        cites.archive(self.r, "chat-j")
+        cites.number(self.r, "chat-j", self.r.load_private()[0].id)
+        self.r.db.con.execute("update chat set updated='2020-01-01T00:00:00' where id='chat-j'")
+        self.run_cli("tidy", "--work", "--quiet", "--no-sync")
+        self.assertEqual(self.status("chat-j"), "archived")
         data = json.loads(self.run_cli("cites", "--session", "chat-j", "--json")[1])
-        self.assertEqual((data["session"], data["status"], [s["n"] for s in data["sources"]]), ("chat-j", "archived", [1]))
+        self.assertEqual(sorted(data), ["mode", "session", "sources"], "nothing about the chat's state reaches the band")
+        self.assertEqual([s["n"] for s in data["sources"]], [1])
 
 
 class TestPluginAndModelAtSetup(CliRepo):
