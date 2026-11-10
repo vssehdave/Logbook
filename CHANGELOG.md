@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **New notes are embedded by the background pass.** The `tidy --work` pass that the hooks start after every savepoint and every pull now also embeds the notes that have no vector yet, so `logbook ask` finds them by meaning without a manual `logbook index` or a slow first search. (`ask` still catches up to 300 itself, and `sync` stays a pure fetch.)
 ## 0.0.8 (2026-11-10)
 
 Everything lives in one local database, `library.sqlite`: **logs** (the conversation up to a savepoint), **shelves** (the notes taken from it, or one author's notes on git) and **notes**, searched by words (FTS5) and by meaning (all-MiniLM-L6-v2). `pip install getlogbook` brings everything; `logbook install` wires Claude Code once per machine and `logbook setup` sets a repository up. Claude Code is the only agent supported. **This is not a drop-in upgrade from 0.0.7 or earlier:** nothing an earlier version stored locally is read or migrated (shared notes on the git refs still read as before).
