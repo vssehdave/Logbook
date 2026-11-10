@@ -51,7 +51,7 @@ def later_commits(repo, v):
 def candidates(repo, views):
     """[{id, topic, mine, reason, detail, commits}] in this order: repeated notes, notes whose files changed since. A note that is
     already resolved, and a status record, are not candidates."""
-    live = [v for v in views if v["kind"] != "summary" and not v.get("is_status") and v.get("status") != "resolved"]
+    live = [v for v in views if not v.get("is_status") and v.get("status") != "resolved"]
     notes = live
     out, seen = [], set()
     for v in notes:

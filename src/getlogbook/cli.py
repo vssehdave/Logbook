@@ -164,7 +164,7 @@ def _note_input(a):
     paths = obj.get("paths")
     paths = [str(p) for p in paths] if isinstance(paths, list) else (str(paths).split(",") if paths else None)
     ids = lambda k: [str(x) for x in obj.get(k) or []] if isinstance(obj.get(k), list) else []
-    return (obj.get("kind") if obj.get("kind") in ("finding", "change", "summary") else "finding", str(obj.get("topic") or ""), body, paths,
+    return (obj.get("kind") if obj.get("kind") in ("finding", "change") else "finding", str(obj.get("topic") or ""), body, paths,
             str(obj.get("commit") or "") or None, str(obj.get("level") or ""), ids("sources"), ids("supersedes"))
 
 
@@ -193,11 +193,10 @@ def cmd_note(a):
     topic = topic or body["summary"][:80]
     # Grounding: look up what the note names. Whether it is true cannot be checked; whether it points at something real can.
     cks = ground.check(r, body, topic, paths if paths is not None else (g.changed_paths(r.root, sha) if sha else []), sha)
-    near = [o for o in (ground.overlaps(views(r)[0], topic, body["summary"], cks["files"]) if kind != "summary" else [])
-            if o["id"] not in supersedes]
+    near = [o for o in ground.overlaps(views(r)[0], topic, body["summary"], cks["files"]) if o["id"] not in supersedes]
     out("grounding: " + ground.line(cks))
     agent = capture.writer() == "agent-written"
-    size = ground.size_problems(kind, body) if agent else []
+    size = ground.size_problems(body) if agent else []
     for p in ground.problems(cks, agent) + size:
         out("  ! " + p)
     for o in near:
@@ -209,7 +208,7 @@ def cmd_note(a):
         return 0
     if size:
         raise SystemExit("logbook: not saving the note, it has " + size[0])
-    if kind != "summary" and agent and not cks["evidence"] and not a.allow_ungrounded:
+    if agent and not cks["evidence"] and not a.allow_ungrounded:
         raise SystemExit("logbook: not saving a note with no evidence. Add an evidence: line with what you ran or read (a command and its result, "
                          "or file:line); naming a file is not enough. --allow-ungrounded saves it anyway, marked unverified.")
     e = capture.make_entry(r, kind, topic, body, paths=paths, via="cli", sha=sha, level=level, sources=sources, supersedes=supersedes,
@@ -583,10 +582,6 @@ def cmd_history(a):
     """The notes next to your commits, newest first, in the terminal."""
     r = need_repo()
     t = tree.build(r)
-    for s in t["summaries"]:
-        where = "repo" if s["level"] == "repo" else f"branch {s['branch']}"
-        out(f"[{where} summary{'' if s['fresh'] else ', out of date'}] {s['topic']}")
-        out("    " + (s["summary"] if s["mine"] else safety_sanitize(s["summary"], 600)))
     rows = [c for c in t["commits"] if a.verbose or c["entries"] or not c["trivial"]][: a.n]
     for c in rows:
         _log_commit(c, a.verbose)
@@ -602,7 +597,7 @@ def _is_rev(r, w):
 
 
 def _show_node(r, address):
-    """One node of the tree: where it sits, its summary, and what is below it. The way down to the original is `git show`."""
+    """One node of the tree: where it sits and what is below it. The way down to the original is `git show`."""
     nodes = nav.build(r)
     n, why = nav.resolve(nodes, address)
     if not n:
@@ -613,12 +608,6 @@ def _show_node(r, address):
         out(detail(n["view"]))
         return 0
     out(f"{n['addr']}  {n['title']}")
-    s = n["summary"]
-    if s:
-        out(f"summary ({'current' if s['fresh'] else 'out of date'}, from {s['count']} notes, by {s['author']}): "
-            + (s["summary"] if s["mine"] else safety_sanitize(s["summary"], 600)))
-    elif n["kind"] in ("repo", "branch"):
-        out("summary: none yet (an agent can write one: `logbook summarize`)")
     if n["kind"] == "commit":
         body = g.commit_body(r.root, n["sha"])
         if body:  # the whole message comes from git; a note holds only what git does not have
@@ -689,9 +678,6 @@ def cmd_status(a):
         out("note: shallow clone; some anchors are unverified")
     if not shared and any(v["scope"] == "private" for v in vs):
         out("note: nothing shared yet: `logbook publish` then `logbook sync`; or `logbook setup` to fetch teammates' entries")
-    stale = [s for s in tree.summaries(vs) if not s["fresh"]]
-    if stale:
-        out(f"{len(stale)} summary(ies) out of date: `logbook summarize` briefs an agent to refresh them")
     waiting = len(r.unpublished()) if r.publish_mode() != "never" else 0
     if waiting:
         out(f"{waiting} private note(s) not shared yet: `logbook publish`")
@@ -716,9 +702,6 @@ def cmd_doctor(a):
     out(f"  git hooks   : pre-push {'installed' if ins.git_hook_installed(r, 'pre-push') else 'missing'}, "
         f"post-merge {'installed' if ins.git_hook_installed(r, 'post-merge') else 'missing'}, "
         f"post-commit {'installed' if ins.git_hook_installed(r, 'post-commit') else 'missing'}")
-    for sm in tree.summaries(views(r)[0]):
-        node = "repo" if sm["level"] == "repo" else "branch " + sm["branch"]
-        out(f"  summary     : {node}: {'up to date' if sm['fresh'] else str(sm['new_notes']) + ' newer note(s), stale (logbook summarize)'}")
     return 1 if bad else 0
 
 
@@ -891,43 +874,6 @@ def cmd_config(a):
     return 0
 
 
-def cmd_summarize(a):
-    """Brief an agent on the notes under a node (the repo, or a branch) so it can write the summary. No model call here."""
-    r = need_repo()
-    vs, _ = views(r)
-    cur = g.branch(r.root)
-    if a.branch:
-        level, branch = "branch", a.branch
-    elif a.repo or not cur or cur == tree.default_branch(r):
-        level, branch = "repo", ""
-    else:
-        level, branch = "branch", cur
-    pool = tree.under(vs, level, branch)
-    where = "the repo" if level == "repo" else f"branch {branch}"
-    if not pool:
-        out(f"nothing to summarise: no note with a reason under {where}.")
-        return 0
-    prev = next((s for s in tree.summaries(vs) if s["level"] == level and s["branch"] == branch), None)
-    if prev and prev["fresh"]:
-        out(f"The summary of {where} is up to date (built from {prev['count']} notes). Nothing to do.")
-        return 0
-    out(f"Summarise {where} from these {len(pool)} notes (newest first). Keep what still stands, drop what newer notes overturned,")
-    out("and add no claim the notes do not support. 4 to 8 sentences, at most 1000 characters: what is known, what was decided, what is open.")
-    if prev:
-        out(f"Previous summary ({prev['new_notes']} newer note(s) since): {prev['summary'][:700]}")
-    for v in pool:
-        out("")
-        out(f"{v['id']}  {v['kind']}  {v['author']}  {txt(v, v['topic'], 90)}")
-        for k in ("summary", "why", "wrong", "decided", "open"):
-            if v["body"].get(k):
-                out(f"    {k}: {txt(v, v['body'][k], 200)}")
-    out("")
-    out("Record it with `logbook note --fields`:")
-    out(json.dumps({"kind": "summary", "level": level, "topic": f"Summary of {where}", "summary": "<your summary>",
-                    "sources": [v["id"] for v in pool]}))
-    return 0
-
-
 def cmd_worker(a):
     """The observer: `--status` shows what it has spent and whether it is on; `--drain [--branch B] [--flush]` observes what is queued now (what the hooks start in the background)."""
     from . import observer, running, worker
@@ -1090,12 +1036,12 @@ def cmd_demo(a):
 
 
 HIDDEN = {"queue", "capture", "post-commit",
-          "inject", "summarize", "trust", "purge", "gc", "config", "uninstall", "demo",
+          "inject", "trust", "purge", "gc", "config", "uninstall", "demo",
           "cites", "tidy", "worker", "history"}
 HELP_MORE = """more (run `logbook <name> -h`):
   trust purge gc config uninstall demo queue history tidy
 agents and hooks call these; you rarely need to:
-  summarize inject cites capture"""
+  inject cites capture"""
 
 
 def build_parser():
@@ -1130,7 +1076,7 @@ def build_parser():
     s.add_argument("-v", "--verbose", action="store_true", help="show each note's text and trivial commits")
     s = add("note", cmd_note, "record a finding or change as a private note")
     s.add_argument("text", nargs="*", help="the note, in plain words, then the files it is about: logbook note \"late export dips revenue\" shop/revenue.py")
-    s.add_argument("--kind", choices=["finding", "change", "summary"], default="finding")
+    s.add_argument("--kind", choices=["finding", "change"], default="finding")
     s.add_argument("--topic")
     for k in BODY_FIELDS:
         s.add_argument(f"--{k}")
@@ -1174,9 +1120,6 @@ def build_parser():
     s.add_argument("--repo", action="store_true", help="this repository's git hooks instead of the Claude Code wiring")
     s.add_argument("--yes", action="store_true")
     s.add_argument("--dry-run", action="store_true")
-    s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
-    s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
-    s.add_argument("--branch", help="a named branch")
     s = add("worker", cmd_worker, "the observer: --status, or --drain to observe what is queued now")
     s.add_argument("--drain", action="store_true")
     s.add_argument("--branch", help="the branch whose queue to observe (default: the current one)")

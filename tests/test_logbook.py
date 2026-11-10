@@ -1279,7 +1279,7 @@ class TestPermissions(CliRepo):
         return d[0] if d else None
 
     def test_the_table(self):
-        for sub in ("note", "ask", "cites", "log", "status", "summarize", "sync"):
+        for sub in ("note", "ask", "cites", "log", "status", "sync"):
             for mode in ("never", "manual", "ask", "auto"):
                 self.assertEqual(self.decide(f"logbook {sub} x", mode), "allow", sub)
         self.assertEqual([self.decide("logbook publish abc", m) for m in ("never", "manual", "ask", "auto")], ["deny", "deny", "ask", "allow"])
