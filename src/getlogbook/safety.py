@@ -58,6 +58,49 @@ def scrub_paths(text):
     return _ABS.sub(OUTSIDE, text) if isinstance(text, str) else text
 
 
+USER_MARK = "[user]"
+_PATH_LISTS = frozenset({"paths", "old_paths", "files_read", "files_modified"})  # lists of files in a note's anchor and observation
+
+
+def _account_re():
+    """The computer's account name (login and home folder name, four characters or more) as a whole word, or None. It names a person; a note and a conversation do not need it."""
+    import getpass
+    names = set()
+    for get in (getpass.getuser, lambda: Path.home().name):
+        try:
+            names.add(get())
+        except (KeyError, OSError, RuntimeError):
+            pass
+    names = sorted((n for n in names if len(n) >= 4), key=len, reverse=True)
+    return re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(map(re.escape, names)) + r")(?![A-Za-z0-9])") if names else None
+
+
+def clean_text(text, roots):
+    """A text with no path outside the repository (see `localize`) and without the account name of this computer. Applied to everything kept in the library, private or not."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = localize(text, roots)
+    acct = _account_re()
+    return acct.sub(USER_MARK, text) if acct else text
+
+
+def clean_entry(e, roots):
+    """The note with `clean_text` applied to every text in it, and its lists of files cut to the files inside the repository, written relative to it."""
+    def walk(x, key=""):
+        if isinstance(x, str):
+            return clean_text(x, roots)
+        if isinstance(x, list):
+            if key in _PATH_LISTS and all(isinstance(f, str) for f in x):  # `checks.paths` is a pair of counts, not files
+                return [clean_text(f, roots) for f in inside([repo_relative(roots, f) for f in x])]
+            return [walk(i) for i in x]
+        if isinstance(x, dict):
+            return {k: walk(v, k) for k, v in x.items()}
+        return x
+    d = e.to_dict()
+    keep = {k: d[k] for k in ("id", "kind", "provenance", "captured_via", "supersedes", "created", "display", "sources", "level", "v", "redacted") if k in d}  # ids and labels, not text
+    return type(e)(**{**walk(d), **keep})
+
+
 def repo_roots(repo):
     """The ways the repository's own folder may be spelled in a path or a text: as git reports it and fully resolved (a symlinked temp folder, `/private/var` against
     `/var` on macOS, a Windows short name like `RUNNER~1`), each with a trailing slash."""

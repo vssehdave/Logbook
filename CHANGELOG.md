@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **The library keeps no path outside the repository and no account name.** Savepoint notes did not go through the step that strips such paths, and a note's list of files (`anchor.paths`) and an observation's files were never filtered, so a private note could carry `C:\Users\<name>\...` and a conversation line the same. Every note is now cleaned as it is stored (`Repo.add_private`), whoever wrote it, and every conversation line as it is collected: a path inside the repository is made relative, any other absolute path becomes `[outside path]`, and the computer's account name becomes `[user]`. Notes written by earlier versions keep what they have until they are stored again.
 - **There is no `logbook index` command.** Embedding is part of the background tidy pass only (`ask` no longer embeds a batch itself): the pass the hooks start after every savepoint and every pull embeds the notes that have no vector yet. A search before that pass says how many notes are not in the meaning index yet.
 - **New notes are embedded by the background pass.** The `tidy --work` pass that the hooks start after every savepoint and every pull now also embeds the notes that have no vector yet, so `logbook ask` finds them by meaning without a manual `logbook index` or a slow first search. (`ask` still catches up to 300 itself, and `sync` stays a pure fetch.)
 ## 0.0.8 (2026-11-10)

@@ -17,7 +17,7 @@ import os
 import time
 
 from . import running
-from .safety import redact
+from .safety import clean_text, redact, repo_roots
 
 MAX_CONVO = 200_000  # bytes kept of one log's conversation
 MAX_MSG = 6000  # characters of one message kept (the start and the end of it)
@@ -52,6 +52,7 @@ def record(repo, event, payload):
     if branch == "HEAD":
         return
     text, _ = redact(_trim(text.strip()), cfg.get("deny", []))
+    text = clean_text(text, repo_roots(repo))  # the conversation is kept in the library: no path outside the repository, no account name
     run = running.Running(repo, branch)
     run.dir.mkdir(parents=True, exist_ok=True)
     line = json.dumps({"t": int(time.time()), "session": str(payload.get("session_id", ""))[:80], "prompt": str(payload.get("prompt_id", ""))[:40],
