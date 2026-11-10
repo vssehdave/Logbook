@@ -340,7 +340,7 @@ class Repo:
         """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered (or counted in the push reminder). A log is never one of them: logs stay on this machine."""
         shared, _ = self.load_shared()
         done = {l.entry.id for l in shared if l.user == self.user}
-        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied" and e.kind != "savepoint"]
+        return [e for e in self.load_private() if e.id not in done and e.kind != "savepoint"]
 
     def queued(self):
         """The private entries in the publish queue (outbox.py) that are not shared yet: what `logbook publish` shares."""

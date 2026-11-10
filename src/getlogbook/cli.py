@@ -777,7 +777,7 @@ def cmd_uninstall(a):
 
 
 CONFIG_KEYS = {"tidy_model": "text", "quota_pause": None, "publish": PUBLISH_MODES, "semantic": ("off", "on"), "semantic_model": "text",
-               "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
+               "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None}
 
 
 def cmd_queue(a):
@@ -943,15 +943,6 @@ def cmd_tidy(a):
         for d in drops:
             out(f"  {d['entry']}  ->  archive as {d['verdict']}" + (f" of {d['redundant_of']}" if d.get("redundant_of") else "") + f"  ({safety_sanitize(d.get('reason', ''), 160)})")
         return 0
-    if a.garbage:  # the worker's private drafts that are no longer worth keeping; --apply moves them to the archive, nothing is deleted
-        junk = tidy.garbage(r, vs)
-        if a.apply:
-            out(f"archived {tidy.archive(r, [c['id'] for c in junk])} worker draft(s) to .git/logbook/archive/")
-            return 0
-        out(f"{len(junk)} worker draft(s) no longer worth keeping (nothing was changed; `tidy --garbage --apply` archives them)")
-        for c in junk:
-            out(f"  {c['id']}  {safety_sanitize(c['topic'], 80)}  ({c['reason']})")
-        return 0
     if a.apply:
         done, errors = tidy.apply(r, vs, sys.stdin.read())
         if errors:
@@ -1032,8 +1023,7 @@ def cmd_stats(a):
     rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
     out(f"injections: {len(rows)}, entries shown: {sum(len(x['ids']) for x in rows)}, chars injected: {sum(x['chars'] for x in rows)}")
     mine = [l.entry for l in r.all_entries() if l.user == r.user]
-    out(f"your notes: {sum(1 for e in mine if e.provenance != 'auto-copied')} written, "
-        f"{sum(1 for e in mine if e.provenance == 'auto-copied')} auto-copied")
+    out(f"your notes: {len(mine)}")
 
 
 def cmd_cites(a):
@@ -1160,7 +1150,6 @@ def build_parser():
     s.add_argument("--proposals", action="store_true", help="show what the tidy worker proposed and kept for you")
     s.add_argument("--accept", action="store_true", help="store the worker's proposals (each is checked against git again; asks first in Claude Code)")
     s.add_argument("--restore", nargs="+", metavar="ID", help="put archived entries back in the private log")
-    s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
     s = add("queue", cmd_queue, "show what `logbook publish` will share (the publish queue)")

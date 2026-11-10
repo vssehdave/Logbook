@@ -13,7 +13,7 @@ import time
 ID_RE = re.compile(r"^[0-9a-f]{11}-[0-9a-f]{8}$")
 HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")  # a commit, tree or parent id: never anything git could read as an option
 KINDS = ("change", "finding", "summary", "savepoint")  # savepoint: the summary note a savepoint (`logbook log`) files on its shelf; it is never published
-PROVENANCE = ("agent-written", "user-written", "user-edited", "auto-copied", "worker-written")  # auto-copied: built by code from git data, carries no reason; worker-written: a background model's draft, private and checked by code
+PROVENANCE = ("agent-written", "user-written", "user-edited", "worker-written")  # who really wrote a note; anything else a file claims reads as agent-written
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
 BODY_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale", "evidence")
 INJECTABLE = ("summary", "what", "why", "fix")  # evidence/wrong never enter agent context
@@ -130,7 +130,7 @@ def from_dict(d):
             anchor[k] = ""
     kind = d.get("kind") if d.get("kind") in KINDS else "finding"
     prov = d.get("provenance")
-    prov = "auto-copied" if prov not in PROVENANCE else prov
+    prov = prov if prov in PROVENANCE else "agent-written"
     version = d.get("v") if d.get("v") in (1, 2) else 1  # 2: the provenance says who really wrote it; 1 claimed "agent-written" for everyone
     return Entry(id=d["id"], kind=kind, topic=_s(d.get("topic"), 200),
                  body={k: _s(body.get(k), field_cap(k)) for k in BODY_FIELDS if body.get(k)},

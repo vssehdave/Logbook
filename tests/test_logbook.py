@@ -103,7 +103,7 @@ class TestEntry(unittest.TestCase):
             from_dict({"id": "../../etc/passwd"})
         e = from_dict({"id": new_id(), "kind": "weird", "topic": "t" * 999, "provenance": "trust-me", "user": "alice", "author": "root",
                        "body": {"why": "w" * 99999, "evil": "x"}, "anchor": {"paths": ["a"] * 500, "sha": 5}, "supersedes": ["nope"]})
-        self.assertEqual((e.kind, e.provenance), ("finding", "auto-copied"))
+        self.assertEqual((e.kind, e.provenance), ("finding", "agent-written"))
         self.assertLessEqual(len(e.topic), 200)
         self.assertLessEqual(len(e.body["why"]), 2000)
         self.assertNotIn("evil", e.body)
@@ -317,7 +317,7 @@ class TestRichNotes(Base):
                          ("c", "d", "o", "3 of 40 rows"))
         self.assertEqual((back.level, back.sources), ("branch", [src]))
         junk = from_dict({"id": new_id(), "level": "galaxy", "sources": ["../x", src], "provenance": "inferred"})
-        self.assertEqual((junk.level, junk.sources, junk.provenance), ("", [src], "auto-copied"))
+        self.assertEqual((junk.level, junk.sources, junk.provenance), ("", [src], "agent-written"))
 
     def test_every_field_survives_publish_and_a_maximal_note_fits_the_default_cap(self):
         d = make_repo(self.root, "r", "a@x.io")
@@ -522,9 +522,7 @@ class CliRepo(Base):
 class TestSharingQueue(CliRepo):
     def test_queue_lists_unshared_notes_and_publish_all_shares_them_once_confirmed(self):
         keep = capture.make_entry(self.r, "finding", "worth sharing", {"summary": "s", "why": "w"})
-        capture.make_entry(self.r, "finding", "copied", {"summary": "s"}, provenance="auto-copied")
         self.assertIn(keep.id, self.run_cli("queue")[1])
-        self.assertNotIn("copied", self.run_cli("queue")[1])
         self.assertEqual([e.id for e in self.r.unpublished()], [keep.id])
         code, text = self.run_cli("publish", "--all", "--yes")
         self.assertEqual(code or 0, 0, text)
@@ -1373,15 +1371,6 @@ class TestTidy(CliRepo):
         (c,) = [c for c in self.candidates() if c["reason"] == "may say the same as another note"]
         self.assertEqual({c["id"], c["detail"][0].split()[0]}, {a.id, b.id})
 
-    def test_an_old_auto_copied_draft_is_listed_and_a_new_one_is_not(self):
-        from getlogbook.entry import Entry, new_id
-        for created in ("2020-01-01T00:00:00", capture.now()):
-            e = Entry(id=new_id(), kind="finding", topic="draft " + created[:4], body={"summary": "the final message"}, provenance="auto-copied", captured_via="claude-code", created=created)
-            e.anchor = tree.anchor_for(self.r, sha=None, paths=[], dirty=False)
-            self.r.add_private(e)
-        (c,) = self.candidates()
-        self.assertEqual((c["topic"], c["reason"].startswith("auto-copied draft")), ("draft 2020", True))
-
     def test_a_commit_id_taken_from_a_note_never_reaches_git_unchecked(self):
         from getlogbook import tidy
         v = {"kind": "finding", "placed": "", "sha": "", "paths": ["shop/revenue.py"], "checks": {"at": "--output=evil.txt", "files": ["shop/revenue.py"]}}
@@ -1582,26 +1571,10 @@ class TestTidyWorker(CliRepo):
         got = [c["id"] for c in self.tidy.candidates(self.r, tree.all_views(self.r)[0]) if c["commits"] and c["id"] in (a.id, b.id)]
         self.assertEqual(got, [b.id, a.id])
 
-    def test_a_log_is_never_junk(self):
-        old = capture.make_entry(self.r, "savepoint", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
-        old.created = "2020-01-01T00:00:00"
-        self.r.add_private(old)
-        self.assertEqual(self.tidy.garbage(self.r, tree.all_views(self.r)[0]), [], "a saved log is not a stale draft")
-
-    def test_old_auto_copied_drafts_are_listed_as_junk_and_archived_not_deleted(self):
-        draft = Entry(id=new_id(), kind="finding", topic="Read shop/revenue.py ...", body={"summary": "the final message"}, provenance="auto-copied", created="2020-01-01T00:00:00", v=2)
-        draft.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
-        self.r.add_private(draft)
-        (c,) = [x for x in self.tidy.garbage(self.r, tree.all_views(self.r)[0]) if x["id"] == draft.id]
-        self.assertIn("days old", c["reason"])
-        self.assertIn("archived 1", self.run_cli("tidy", "--garbage", "--apply", "--no-sync")[1])
-        self.assertIsNone(self.r.get_private(draft.id))
-        self.assertTrue((self.r.cdir / "archive" / f"{draft.id}.json").exists())
-
     def test_auto_does_all_of_it_in_one_pass(self):
         self.run_cli("config", "tidy", "auto")
         res = self.tidy.auto(self.r, lambda p: (SAVEPOINT_XML if "savepoint" in p else f"status_of: {self.note.id}\nstatus: resolved\ncommits: {self.later[:8]}\nreason: reworked\n", 0.001, ""))
-        self.assertEqual((res["applied"], res["archived"]), ([self.note.id], 0))
+        self.assertEqual(res["applied"], [self.note.id])
 
     def test_the_pull_hook_starts_the_tidy_pass_in_ask_and_auto_mode_only(self):
         import unittest.mock
@@ -2137,27 +2110,7 @@ class TestObserver(ObserverBase):
         self.run_cli("config", "worker", "off")
         self.assertNotEqual(self.r.cfg().get("worker"), "on")
         decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
-        self.assertEqual((decide("logbook worker --status"), decide("logbook worker --drain"), decide("logbook tidy --garbage --apply")), ("allow", "ask", "ask"))
-
-    def test_tidy_lists_old_or_dead_worker_drafts_and_archives_nothing_is_deleted(self):
-        from getlogbook import tidy
-        old = Entry(id=new_id(), kind="finding", topic="old draft", body={"summary": "s", "why": "w", "evidence": "e"}, provenance="worker-written", created="2020-01-01T00:00:00", v=2)
-        old.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
-        self.r.add_private(old)
-        person = Entry(id=new_id(), kind="finding", topic="old note by a person", body={"summary": "s", "why": "w"}, provenance="user-written", created="2020-01-01T00:00:00", v=2)
-        person.anchor = old.anchor
-        self.r.add_private(person)
-        (c,) = tidy.garbage(self.r, tree.all_views(self.r)[0])
-        self.assertEqual((c["id"], "days old" in c["reason"]), (old.id, True))
-        code, text = self.run_cli("tidy", "--garbage")
-        self.assertIn("1 worker draft(s)", text)
-        self.assertIsNotNone(self.r.get_private(old.id), "listing changes nothing")
-        code, text = self.run_cli("tidy", "--garbage", "--apply")
-        self.assertIn("archived 1", text)
-        self.assertIsNone(self.r.get_private(old.id))
-        self.assertTrue((self.r.cdir / "archive" / f"{old.id}.json").exists(), "moved, still readable")
-        self.assertIsNotNone(self.r.get_private(person.id), "a person's note is never touched")
-
+        self.assertEqual((decide("logbook worker --status"), decide("logbook worker --drain")), ("allow", "ask"))
 
 SAVEPOINT_XML = """<savepoint><title>Refunds no longer counted as revenue</title><request>Find why totals run high.</request>
 <investigated>shop/revenue.py</investigated><learned>total() never read the refunded flag.</learned>
@@ -2274,17 +2227,6 @@ class TestSavepoint(ObserverBase):
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 self.save()
             self.assertEqual(spawn.call_args.args[0][-4:], ["tidy", "--work", "--quiet", "--no-judge"], mode)
-
-    def test_a_note_about_a_file_that_was_later_deleted_is_history_and_tidy_does_not_garbage_it(self):
-        self.observe()
-        self.save()
-        draft = capture.make_entry(self.r, "finding", "an old per-turn draft", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"], provenance="worker-written")
-        sh("git", "rm", "-q", "shop/revenue.py", cwd=self.d)
-        commit(self.d, "remove revenue", {})
-        listed = {c["id"]: c["reason"] for c in tidy.garbage(self.r, tree.all_views(self.r)[0])}
-        self.assertEqual(listed, {draft.id: "every file it is about is gone"}, "a draft with no obs record still goes; the savepoint note stays")
-        (note,) = self.notes()
-        self.assertTrue(note.obs, "it is the savepoint note that was kept")
 
     def test_a_savepoint_note_keeps_no_path_outside_the_repository_in_its_text_fields_or_lists(self):
         inside_abs = (self.r.root / "shop" / "revenue.py").as_posix()

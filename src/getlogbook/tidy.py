@@ -20,7 +20,6 @@ from . import git as g
 from .entry import HEX_RE, ID_RE, STATES, from_json
 from .safety import sanitize
 
-OLD_DRAFT_DAYS = 30  # an auto-copied draft this old and never turned into a real note is junk until shown otherwise
 MAX_CHECKED = 200  # notes asked about their files, newest first: one `git log` each. shortcut: no index, upgrade if a repo has far more live notes
 MAX_COMMITS = 20  # commits looked up per note: enough to cite from, and the shown list is the first few
 SHOWN_COMMITS = 5
@@ -50,10 +49,10 @@ def later_commits(repo, v):
 
 
 def candidates(repo, views):
-    """[{id, topic, mine, reason, detail, commits}] in this order: repeated notes, notes whose files changed since, old drafts. A note that is
+    """[{id, topic, mine, reason, detail, commits}] in this order: repeated notes, notes whose files changed since. A note that is
     already resolved, and a status record, are not candidates."""
     live = [v for v in views if v["kind"] != "summary" and not v.get("is_status") and v.get("status") != "resolved"]
-    notes = [v for v in live if v["provenance"] != "auto-copied"]
+    notes = live
     out, seen = [], set()
     for v in notes:
         for o in ground.overlaps([w for w in notes if w["id"] != v["id"]], v["topic"], v["body"].get("summary", ""), v["paths"]):
@@ -67,9 +66,6 @@ def candidates(repo, views):
         if later and not (v.get("status") == "in-progress" and v["status_commits"] and later[0][0] in v["status_commits"]):  # already looked at up to the newest of these
             out.append({"id": v["id"], "topic": v["topic"], "mine": v["mine"], "reason": "files it is about changed in later commits",
                         "detail": [f"{sha[:8]} {subject[:70]}" for sha, subject in later[:SHOWN_COMMITS]], "commits": [sha for sha, _ in later]})
-    for v in live:
-        if v["provenance"] == "auto-copied" and (v["age_days"] or 0) >= OLD_DRAFT_DAYS:
-            out.append({"id": v["id"], "topic": v["topic"], "mine": v["mine"], "reason": f"auto-copied draft, {v['age_days']} days old", "detail": [], "commits": []})
     return out
 
 
@@ -162,31 +158,6 @@ def brief(repo, views, limit=20):
     return "\n".join(lines)
 
 
-RETENTION_DAYS = 30
-
-
-def garbage(repo, views, days=None):
-    """Your own private machine-made drafts (the observer's earlier per-turn notes, and the auto-copied session and commit drafts of 0.0.5 and earlier) that are no
-    longer worth keeping, each with the reason: marked resolved, about files that are all gone, or older than the retention. Only private and yours: a note a
-    person or an agent wrote, a saved log, or anything already shared is never listed here."""
-    days = int(days or repo.cfg().get("worker_days", RETENTION_DAYS))
-    out = []
-    for v in views:
-        if v.get("is_status") or not v["mine"] or v["provenance"] not in ("worker-written", "auto-copied") or v["scope"] != "private" or v["kind"] == "savepoint":
-            continue  # a saved log is the person's record of a session: it is kept, never dropped as junk
-        if v.get("obs"):
-            continue  # a note made at a savepoint records what was learned or built: a file renamed or deleted later does not make it junk, and age alone does not either (statuses handle staleness)
-        files = tracked(repo, v)[:MAX_FILES]
-        if v.get("status") == "resolved":
-            reason = "resolved"
-        elif files and all(g.try_run(["cat-file", "-e", f"HEAD:{f}"], repo.root)[0] != 0 for f in files):
-            reason = "every file it is about is gone"
-        elif (v["age_days"] or 0) >= days:
-            reason = f"{v['age_days']} days old (kept {days})"
-        else:
-            continue
-        out.append({"id": v["id"], "topic": v["topic"], "reason": reason})
-    return out
 
 
 def archive(repo, ids):
@@ -357,9 +328,8 @@ def _norm(v):
 
 
 def triage_pool(views):
-    """My own private notes that triage may archive: not logs (a log is the raw record of a session and is kept), not status records, not shared, not auto-copied drafts (`garbage` takes those)."""
-    return [v for v in views if v["mine"] and v["scope"] == "private" and not v.get("is_status") and v["kind"] in ("finding", "change")
-            and v["provenance"] != "auto-copied"]
+    """My own private notes that triage may archive: not logs (a log is the raw record of a session and is kept), not status records, not shared."""
+    return [v for v in views if v["mine"] and v["scope"] == "private" and not v.get("is_status") and v["kind"] in ("finding", "change")]
 
 
 def duplicates(pool):
@@ -584,11 +554,10 @@ def gate(repo, call=None, now=time.time):
 
 
 def auto(repo, call=None, now=time.time, judge=True):
-    """Everything the automatic mode does in one pass: judge changed notes, archive junk and repeats, archive old machine-made drafts. With `judge` off the junk
+    """Everything the automatic mode does in one pass: judge changed notes, archive junk and repeats. With `judge` off the junk
     judgment (a model call) is left for the next publish, which always does it; repeats are archived either way."""
     from . import tree
     res = work(repo, call, now)
     res["triage"] = triage(repo, call, now, apply=True, judge=judge)
-    res["archived"] = archive(repo, [c["id"] for c in garbage(repo, tree.all_views(repo)[0])])
     res["queue"] = queue_pass(repo)
     return res

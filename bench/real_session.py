@@ -59,7 +59,6 @@ def one(lb, name, args):
         res = {}
     private = d / ".git" / "logbook"
     notes = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((private / "private").glob("*.json"))] if (private / "private").exists() else []
-    notes = [n for n in notes if n.get("provenance") != "auto-copied"]  # the end-of-session draft is not the agent's note
     queued = sum(len(q.read_text(encoding="utf-8").splitlines()) for q in (private / "running").glob("*/queue.jsonl"))  # tool uses the hook queued
     observed = sum(len(q.read_text(encoding="utf-8").splitlines()) for q in (private / "running").glob("*/observations.jsonl"))  # what the observer wrote
     text = " ".join(" ".join(str(v) for v in n.get("body", {}).values()) for n in notes).lower()

@@ -15,8 +15,7 @@ particular stack.
 macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
 its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Summaries of the repo
 or a branch are written by your agent on request and go stale when a note is added. Hooks exist only for Claude Code; other agents
-get a rules file. Entries marked `auto-copied` (written by 0.0.5 and earlier from a transcript or a commit) carry no reason and are never
-injected into an agent's prompt. The only measurements so far are two small smoke tests on a toy repo.
+get a rules file. The only measurements so far are two small smoke tests on a toy repo.
 
 ## Try it (no credentials, about 30 seconds)
 
@@ -172,7 +171,7 @@ Python accepts a verdict only about one of your own private, unpublished entries
 In `manual` the verdicts wait in `logbook tidy --proposals` and `--accept` archives them; in `auto` they are archived by the worker. Entries move to
 `.git/logbook/archive/` with the reason in `reasons.jsonl`; nothing is deleted, and `logbook tidy --restore <id>` puts one back.
 
-**When the junk judgment runs.** Between publishes tidy makes no junk-judging model call: a savepoint or a pull starts `tidy --work --no-judge`, which still archives exact repeats, applies statuses to changed notes, keeps the queue and clears old drafts. The judgment itself (the cheap model reading what the code worked out about each entry) runs in the tidy that always precedes a publish, or when you run `logbook tidy --work` yourself.
+**When the junk judgment runs.** Between publishes tidy makes no junk-judging model call: a savepoint or a pull starts `tidy --work --no-judge`, which still archives exact repeats, applies statuses to changed notes, keeps the queue. The judgment itself (the cheap model reading what the code worked out about each entry) runs in the tidy that always precedes a publish, or when you run `logbook tidy --work` yourself.
 
 **Before a publish.** In `ask` and `auto` mode `logbook publish` runs tidy first, whatever the way it was asked (an id, `--branch`, `--merged`, `--all`): it fetches what teammates
 shared, archives the junk and the repeats and updates statuses, and only then publishes what is left. If tidy could not look (the usage allowance is
@@ -180,7 +179,7 @@ paused, the day's call cap is reached, the model call failed) nothing is publish
 start tidy by themselves.
 
 In `auto` the worker runs in the background after a log is saved and after a `git pull`. A savepoint note is never folded, edited or marked true or false, and tidy never archives one: it is the record of a session. What tidy judges are the notes the savepoint made from the observations. The worker shares the observer's daily call cap and its usage pause, asks about a note again only when a newer
-commit touches its files, and `--garbage` still archives your old machine-made drafts.
+commit touches its files.
 
 ## What Claude may run without asking (Claude Code)
 
