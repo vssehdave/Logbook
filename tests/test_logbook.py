@@ -15,7 +15,6 @@ sys.path.insert(0, SRC)
 os.environ["PYTHONPATH"] = SRC + os.pathsep + os.environ.get("PYTHONPATH", "")  # hooks spawn `python -m getlogbook`
 os.environ["LOGBOOK_NO_SPAWN"] = "1"  # detached workers would keep temp dirs locked on Windows
 os.environ["LOGBOOK_OFFLINE"] = "1"  # no test downloads the model or installs a plugin
-os.environ["LOGBOOK_GITHUB_LOGIN"] = ""  # no test asks `gh` who you are
 for _k in [k for k in os.environ if k.startswith("CLAUDE")]:  # run from inside Claude Code, these would make every note look agent-written
     del os.environ[_k]
 os.environ["CLAUDE_CONFIG_DIR"] = tempfile.mkdtemp(prefix="logbook-test-claude-")  # install writes into the person's Claude folder: a test must never reach the real one
@@ -24,6 +23,9 @@ from getlogbook import capture, cli, ground, recall, safety, store, sync, tidy, 
 from getlogbook import git as g  # noqa: E402
 from getlogbook.entry import BODY_FIELDS, Entry, from_dict, new_id  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
+
+_REAL_GITHUB_LOGIN = store.github_login
+store.github_login = cli.github_login = lambda root: ""  # no test asks `gh` who you are
 
 
 def sh(*a, cwd):
@@ -3249,20 +3251,20 @@ class TestGithubIdentity(Base):
 
     def test_your_github_login_is_what_teammates_see_and_your_id_stays_a_stable_hash(self):
         d = self.fresh()
-        with unittest.mock.patch.dict(os.environ, {"LOGBOOK_GITHUB_LOGIN": "Alice-Dev"}):
+        with unittest.mock.patch.object(store, "github_login", lambda root: "Alice-Dev"):
             c = Repo(d).init()
         self.assertEqual((c["github"], c["display"]), ("Alice-Dev", "Alice-Dev"))
         self.assertEqual(c["user"], store.user_id("f@x.io"), "the id is still the hash: refs and the committer trust rule depend on it")
 
     def test_the_login_is_found_without_the_network_from_git_config_or_a_noreply_email(self):
         d = self.fresh("12345+bobby@users.noreply.github.com")
-        with unittest.mock.patch.dict(os.environ):
-            del os.environ["LOGBOOK_GITHUB_LOGIN"]
-            self.assertEqual(store.github_login(d), "bobby")
-            sh("git", "config", "github.user", "robert", cwd=d)
-            self.assertEqual(store.github_login(d), "robert", "an explicit git setting wins")
-            sh("git", "config", "github.user", "not a login!", cwd=d)
-            self.assertEqual(store.github_login(d), "bobby", "a value that is not a GitHub login is ignored")
+        self.assertEqual(_REAL_GITHUB_LOGIN(d), "bobby")
+        sh("git", "config", "github.user", "robert", cwd=d)
+        self.assertEqual(_REAL_GITHUB_LOGIN(d), "robert", "an explicit git setting wins")
+        sh("git", "config", "github.user", "not a login!", cwd=d)
+        self.assertEqual(_REAL_GITHUB_LOGIN(d), "bobby", "a value that is not a GitHub login is ignored")
+        with unittest.mock.patch.dict(os.environ, {"LOGBOOK_GITHUB_LOGIN": "impostor"}):
+            self.assertEqual(_REAL_GITHUB_LOGIN(d), "bobby", "nothing in the environment can set the name teammates see")
 
     def test_with_no_login_anywhere_you_are_shown_by_your_git_name(self):
         d = self.fresh()
