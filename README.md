@@ -203,7 +203,6 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
 | `sync` | allow |
-| `index` | allow |
 | `purge` | ask |
 | `gc` | ask |
 | `trust` | ask |
@@ -241,14 +240,14 @@ CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/
 ## Search by meaning
 
 `logbook ask "why do totals lose a cent"` matches words. It also matches meaning, so it finds "refund rounding drops a cent" without sharing a word. Everything it needs comes with
-`pip install getlogbook` (onnxruntime, tokenizers, huggingface_hub, numpy), and `logbook setup` fetches the model once (all-MiniLM-L6-v2 on the CPU, a 90 MB download). If that
-download fails (no network), `ask` still matches words and `logbook index` tries again. `logbook index` embeds notes written since the last time (`--rebuild` starts over);
+`pip install getlogbook` (onnxruntime, tokenizers, huggingface_hub, numpy), and `logbook install` fetches the model once (all-MiniLM-L6-v2 on the CPU, a 90 MB download). If that
+download fails (no network), `ask` still matches words and the next tidy pass tries again. New notes are embedded by the background tidy pass (there is no separate command for it);
 `logbook config semantic off` turns meaning off, and `ask --exact` is words only for one search.
 
-The vectors live in the local database only (`library.sqlite`), are never published, and can be rebuilt from the notes at any time. They only choose which notes are looked at: every hit
+The vectors live in the local database only (`library.sqlite`), are never published, and are rebuilt by the tidy pass at any time (a different `semantic_model` gets its own set). They only choose which notes are looked at: every hit
 is a stored note and is shown with its author, whether you trust them, whether it carries evidence, and where it is held (`shelf <author>/000000, blob <id>, the same note is in git`, or
 `private to this machine`); a shared hit is re-read from git at the shelf tip it was indexed from, and a difference is reported instead of trusted. Starting the model takes about
-half a second (the first run downloads it), so only `ask` and `index` use it; the lookup that runs on every prompt stays on words. The vectors add 1.5 KB per note to the file (384 numbers). How good the matches are depends on the model; `config semantic_model` names another one that
+half a second (the first run downloads it), so only `ask` and the tidy pass use it; the lookup that runs on every prompt stays on words. The vectors add 1.5 KB per note to the file (384 numbers). How good the matches are depends on the model; `config semantic_model` names another one that
 publishes `tokenizer.json` and `onnx/model.onnx`.
 
 ## How an agent consults it first
