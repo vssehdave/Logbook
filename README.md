@@ -132,7 +132,7 @@ The 0.0.4 names still work: `never` reads as `manual` and `claude` as `ask`. A r
 ## Logs stay on your machine; notes are what is shared
 
 A log (`logbook log`) is the record of a session, and the conversation behind it (what you typed and the agent's final replies, recorded by two hooks with no model; never
-thinking, tool calls or tool output; secrets and emails masked as they are written) is kept with it in `.git/logbook/convo/`. **Neither is ever published.** Only notes go
+thinking, tool calls or tool output; secrets and emails masked as they are written) is kept with it in the local database (`notes.sqlite`; older versions used `.git/logbook/convo/`). **Neither is ever published.** Only notes go
 to the shared ref, so there is nothing of unknown size or content to carry in a public repository. Every note made at a savepoint keeps the id of its log in `sources`: for
 your own notes that is a way in (`logbook ask note:<id>` says `from your log <log id>`, `logbook convo <log id>` prints the conversation, and `logbook cites --json` carries the
 log id for the band); for a teammate's note the log is not on your machine, so it just shows as a note. `logbook config worker off` stops the recording.
@@ -199,6 +199,7 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |
 | `sync` | allow |
+| `index` | allow |
 | `purge` | ask |
 | `gc` | ask |
 | `trust` | ask |
@@ -231,6 +232,20 @@ an interactive session skips the prompt on `allow`, and how a hook `allow` inter
 
 New teammate: clone, then `logbook setup`. A plain `git clone`/`git fetch` does not download logbook refs.
 CI: `git fetch --depth=1 origin '+refs/logbook/log/*:refs/logbook-remote/origin/log/*'` (opt in; off by default).
+
+## Search by meaning (optional)
+
+`logbook ask "why do totals lose a cent"` matches words. With the extra installed it can also match meaning, so it finds "refund rounding drops a cent" without sharing a word:
+
+    pip install "getlogbook[semantic]"      # a small static model (about 30 MB, no GPU); downloaded once
+    logbook index                           # embeds your notes and logs (a few hundred per second); `--rebuild` starts over
+    logbook config semantic on              # `logbook ask` now ranks by words and meaning together; `--exact` is words only
+
+The vectors live in the local database only (`notes.sqlite`), are never published, and can be rebuilt from the notes at any time. They only choose which notes are looked at: every hit
+is a stored note and is shown with its author, whether you trust them, whether it carries evidence, and where it is held (`shelf <author>/000000, blob <id>, the same note is in git`, or
+`private to this machine`); a shared hit is re-read from git at the shelf tip it was indexed from, and a difference is reported instead of trusted. Starting the model takes about
+2.5 s, so only `ask` and `index` use it; the lookup that runs on every prompt stays on words. Measured: a scan of 1,000 vectors takes 4 ms, 10,000 takes 59 ms and 100,000 takes
+about 1 s (numpy, which the extra brings), and the vectors add about 1.4 KB per note to the file. How good the matches are depends on the model; the default one is small.
 
 ## How an agent consults it first
 

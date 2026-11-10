@@ -5,7 +5,7 @@ Two hooks feed it, with no model and no git process: the prompt hook (the person
 (a task notice, a system reminder) is skipped. Everything is redacted before it is written, so a secret pasted into a prompt is not stored at all.
 
     .git/logbook/running/<branch>/talk.jsonl   one line per message, only ever appended
-    .git/logbook/convo/<log id>.jsonl          the messages one savepoint covers, trimmed to fit
+    notes.sqlite, table `convo`                the messages one savepoint covers, trimmed to fit (older versions: .git/logbook/convo/<log id>.jsonl)
 
 All of it stays on this machine, like the log it belongs to: logs and conversations are never published, so nobody else's repository carries them. A conversation too
 long for the cap keeps its beginning and its end and says how many messages were left out.
@@ -18,7 +18,6 @@ import time
 
 from . import running
 from .safety import redact
-from .store import atomic_write
 
 MAX_CONVO = 200_000  # bytes kept of one log's conversation
 MAX_MSG = 6000  # characters of one message kept (the start and the end of it)
@@ -107,16 +106,12 @@ def fit(messages, cap=MAX_CONVO):
     return head + [gap] + tail[::-1]
 
 
-def private_path(repo, log_id):
-    return repo.cdir / "convo" / f"{log_id}.jsonl"
-
-
 def save(repo, log_id, messages):
     """Keep the conversation a savepoint covers, privately. Returns the number of messages stored (0 when there were none)."""
     if not messages:
         return 0
     lines = fit(messages)
-    atomic_write(private_path(repo, log_id), "\n".join(lines) + "\n")
+    repo.db.save_convo(log_id, lines)
     return len(lines)
 
 
@@ -134,7 +129,4 @@ def parse(data):
 
 def load(repo, log_id):
     """The messages of a log's conversation. [] when there is none (a log you did not save here has none)."""
-    try:
-        return parse(private_path(repo, log_id).read_text(encoding="utf-8"))
-    except OSError:
-        return []
+    return parse(repo.db.load_convo(log_id))

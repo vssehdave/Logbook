@@ -12,13 +12,9 @@ from getlogbook.entry import Entry, from_json  # noqa: E402
 from getlogbook.store import Repo  # noqa: E402
 
 
-class DbBase(T.Base):
+class DbBase(T.CliRepo):
     def setUp(self):
         super().setUp()
-        self.d = T.make_repo(self.root, "r", "a@x.io")
-        T.commit(self.d, "base", {"shop/revenue.py": "x = 1\n", "shop/other.py": "y = 1\n"})
-        self.r = Repo(self.d)
-        self.r.init()
         self.addCleanup(lambda: self.r.db._con and self.r.db._con.close())  # a test that reads `db.con` directly leaves it open; Windows cannot delete an open file
 
     def note(self, topic, path="shop/revenue.py", **kw):
@@ -36,13 +32,16 @@ class TestPrivateStore(DbBase):
 
     def test_files_an_older_version_wrote_are_imported_once_and_set_aside(self):
         e = Entry(id="18bcfe5917f-873b8d63", topic="old note", body={"summary": "s", "why": "w"}, provenance="user-written", v=2)
+        log = Entry(id="18bcfe5917f-873b8d64", kind="log", topic="a savepoint", body={"summary": "what the session did"}, v=2)
         self.r.pdir.mkdir(parents=True, exist_ok=True)
-        (self.r.pdir / f"{e.id}.json").write_text(e.to_json(), encoding="utf-8")
+        for x in (e, log):
+            (self.r.pdir / f"{x.id}.json").write_text(x.to_json(), encoding="utf-8")
         fresh = Repo(self.d)  # a new process: nothing has opened the database yet
         self.assertEqual(fresh.get_private(e.id).topic, "old note")
+        self.assertEqual((fresh.get_private(log.id).kind, fresh.get_private(log.id).body["summary"]), ("log", "what the session did"), "a log is kept like any private entry")
         self.assertFalse((self.r.pdir / f"{e.id}.json").exists())
         self.assertTrue((self.r.cdir / "private.imported" / f"{e.id}.json").exists(), "nothing is deleted")
-        self.assertEqual(len(Repo(self.d).load_private()), 1, "a second open does not import again")
+        self.assertEqual(len(Repo(self.d).load_private()), 2, "a second open does not import again")
 
     def test_no_connection_is_held_between_calls(self):
         self.note("x")
