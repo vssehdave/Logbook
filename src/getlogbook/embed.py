@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import importlib.util
 import os
-from array import array
 
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"  # the commit of the default model that was tested; another `semantic_model` follows its main branch
@@ -78,8 +77,3 @@ def load(cfg):
 
     return Embedder(name, encode)
 
-
-def pack(values):
-    """Floats to the packed form, scaled to unit length (for a backend that returns plain lists)."""
-    norm = sum(v * v for v in values) ** 0.5 or 1.0
-    return array("f", [v / norm for v in values]).tobytes()

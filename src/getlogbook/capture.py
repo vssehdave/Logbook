@@ -272,12 +272,6 @@ def claude_snippet(repo, pretool=False):
     return {"hooks": hooks}
 
 
-# 0.0.4 wrote these allow rules into settings.local.json. Permissions now come from the PreToolUse hook (permissions.py), so install removes
-# them again: a leftover rule would let a command through without the hook's say.
-OLD_ALLOW = ("Bash(logbook note:*)", "Bash(logbook ask:*)", "Bash(logbook context:*)", "Bash(logbook cites:*)", "Bash(logbook log:*)",
-         "Bash(logbook status:*)", "Bash(logbook summarize:*)", "Bash(logbook backfill:*)")
-
-
 def install_claude(repo, path=None, pretool=False, write=False, remove=False):
     path = Path(path or repo.root / ".claude" / "settings.local.json")  # local: it holds a machine-specific interpreter path
     try:
@@ -297,16 +291,6 @@ def install_claude(repo, path=None, pretool=False, write=False, remove=False):
             hooks.setdefault(ev, []).extend(entries)
     if not hooks:
         cur.pop("hooks")
-    perms = cur.setdefault("permissions", {})
-    allow = perms.get("allow", [])
-    if isinstance(allow, list):  # the allow list is the person's own: only our old exact entries are touched
-        allow = [x for x in allow if x not in OLD_ALLOW]
-        if allow:
-            perms["allow"] = allow
-        else:
-            perms.pop("allow", None)
-    if not perms:
-        cur.pop("permissions")
     if write:
         path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write(path, json.dumps(cur, indent=2))

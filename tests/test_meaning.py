@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from array import array
 import unittest
 from unittest import mock
 
@@ -15,6 +16,12 @@ GROUPS = [{"cent", "rounding", "refund", "total", "totals", "money", "price"}, {
           {"stall", "hang", "slow", "chunk", "csv", "export"}]
 
 
+def pack(values):
+    """Floats to the packed unit-length form the library stores."""
+    norm = sum(v * v for v in values) ** 0.5 or 1.0
+    return array("f", [v / norm for v in values]).tobytes()
+
+
 def fake_encode(texts):
     """A stand-in for a real model: a word counts toward the topic group it belongs to, so two texts about the same thing are close without sharing a word."""
     out = []
@@ -23,7 +30,7 @@ def fake_encode(texts):
         for w in text.lower().replace(",", " ").split():
             hit = [i for i, g in enumerate(GROUPS) if w in g]
             v[hit[0] if hit else len(GROUPS)] += 1.0 if hit else 0.05
-        out.append(embed.pack(v))
+        out.append(pack(v))
     return out
 
 
@@ -98,18 +105,11 @@ class TestMeaning(DbBase):
 
 
 class TestConversations(DbBase):
-    def test_a_conversation_is_stored_with_the_log_and_an_older_file_is_imported_once(self):
+    def test_a_conversation_is_stored_as_a_log(self):
         from getlogbook import convo
         msgs = [{"role": "user", "text": "first question"}, {"role": "assistant", "text": "first answer"}]
         convo.save(self.r, "18bcfe5917f-873b8d63", msgs)
         self.assertEqual([m["text"] for m in convo.load(self.r, "18bcfe5917f-873b8d63")], ["first question", "first answer"])
-        (self.r.cdir / "convo").mkdir(exist_ok=True)
-        (self.r.cdir / "convo" / "18bcfe5917f-873b8d70.jsonl").write_text(json.dumps({"role": "user", "text": "older"}) + "\n", encoding="utf-8")
-        self.r.db.con.execute("delete from meta where k='convo_imported'")  # as if a version without this table had written the file
-        self.r.db._con.close()
-        self.r.db._con, self.r.db._ready = None, False
-        self.assertEqual([m["text"] for m in convo.load(self.r, "18bcfe5917f-873b8d70")], ["older"])
-        self.assertTrue((self.r.cdir / "convo.imported" / "18bcfe5917f-873b8d70.jsonl").exists(), "set aside, not deleted")
         self.assertEqual(convo.load(self.r, "no-such-log"), [])
 
 

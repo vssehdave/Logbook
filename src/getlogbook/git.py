@@ -71,14 +71,6 @@ def existing_commits(cwd, shas):
     return {l.split()[0] for l in p.stdout.decode("utf-8", "replace").splitlines() if len(l.split()) >= 2 and l.split()[1] == "commit"}
 
 
-def toplevel(cwd):
-    return Path(run(["rev-parse", "--show-toplevel"], cwd).strip())
-
-
-def common_dir(cwd):
-    return Path(run(["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd).strip())
-
-
 def head_sha(cwd):
     rc, out, _ = try_run(["rev-parse", "--verify", "-q", "HEAD"], cwd)
     return out.strip() if rc == 0 else None

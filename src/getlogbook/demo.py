@@ -131,7 +131,7 @@ def run(dir=None):
     rb.init()
     check(g.is_shallow(bob), "Bob's clone is shallow (depth 1)")
     check(not g.try_run(["for-each-ref", "refs/logbook-remote"], bob)[1].strip(), "a plain clone has no logbook refs (this is why `join` exists)")
-    r = sync.sync(rb, fetch_only=True, depth=1)
+    r = sync.sync(rb, depth=1)
     check(r["entries"] >= 2, f"after join/sync Bob sees {r['entries']} entries from {r['writers']} writer(s) even on a depth-1 clone")
     vs, _ = views(rb)
     for v in recall.rank(rb, query="revenue refunds", views=vs)[:3]:
@@ -165,7 +165,7 @@ def run(dir=None):
     sync.push(ra)
     sh("git", "fetch", "-q", "--depth=1", "origin", cwd=bob)
     sh("git", "reset", "-q", "--hard", "origin/" + base, cwd=bob)  # Bob has no local work; a depth-1 fetch has no merge base
-    sync.sync(rb, fetch_only=True, depth=1)
+    sync.sync(rb, depth=1)
     vb = [v for v in views(rb)[0] if v["id"] == e1.id]
     check(bool(vb) and vb[0]["state"] == "rewritten" and vb[0]["rung"] == "PR number",
           "after the squash, an entry for a commit Bob never had is re-anchored by PR number, and the rung is shown")
@@ -180,7 +180,7 @@ def run(dir=None):
                               "wrong": "n/a"}, paths=["src/shop/revenue.py"])
     rm.publish([bad])
     sync.push(rm)
-    sync.sync(rb, fetch_only=True, depth=1)
+    sync.sync(rb, depth=1)
     d2 = recall.digest(rb, "UserPromptSubmit", "why is revenue wrong?", session="bob4")
     check("evil.example" not in d2 and "curl" not in d2, "Mallory has no commits here and Bob has not trusted her: nothing of hers reaches the agent, though her entry is still searchable")
     c = rb.cfg()
@@ -195,7 +195,7 @@ def run(dir=None):
     check(bool(pub), "the entry is on Alice's ref")
     ra.purge(shared.id)
     check(sync.push(ra, force=True)["ok"], "purge force-pushed her own ref (lease-protected)")
-    sync.sync(rb, fetch_only=True, depth=1)
+    sync.sync(rb, depth=1)
     check(shared.id not in {v["id"] for v in views(rb)[0]}, "Bob's next sync no longer shows it (copies in forks/mirrors may remain; rotate secrets)")
 
     head("8. Health")

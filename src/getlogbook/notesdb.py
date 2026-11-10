@@ -20,8 +20,6 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import json
-import shutil
 import sqlite3
 import time
 
@@ -52,7 +50,6 @@ create table if not exists tomb(ref text not null, author text not null, id text
 create index if not exists tomb_ref on tomb(ref);
 create table if not exists supersedes(hidden text not null, author text not null, by_id text not null);
 create index if not exists supersedes_hidden on supersedes(hidden);
-create table if not exists meta(k text primary key, v text);
 create table if not exists chat(
   id text primary key, branch text not null default '', status text not null default 'open', started text not null default '', updated text not null default '',
   seq integer not null default 0);  -- seq goes up each time a chat is touched, so "the latest chat" never depends on clock resolution
@@ -96,13 +93,11 @@ class NoteDB:
     def con(self):
         if self._con is None:
             self.repo.cdir.mkdir(parents=True, exist_ok=True)
-            self._rename_old_file()
             self._con = sqlite3.connect(str(self.path), timeout=15, isolation_level=None)
             self._con.execute("pragma busy_timeout=15000")
             if not self._ready:
                 self._ready = True
                 self._con.execute("pragma journal_mode=wal")
-                self._prepare()
                 self._con.executescript(SCHEMA)
                 self._con.execute("pragma foreign_keys=on")
                 try:
@@ -110,36 +105,9 @@ class NoteDB:
                     self.fts = True
                 except sqlite3.OperationalError:  # this Python's SQLite has no FTS5
                     self.fts = False
-                self._import_private()
-                self._import_convo()
-                self._adopt()
             else:
                 self._con.execute("pragma foreign_keys=on")
         return self._con
-
-    def _rename_old_file(self):
-        """0.0.8rc1-rc3 called this file notes.sqlite: it becomes the library, with its write-ahead files."""
-        old = self.repo.cdir / "notes.sqlite"
-        if old.exists() and not self.path.exists():
-            for suffix in ("", "-wal", "-shm"):
-                with contextlib.suppress(OSError):
-                    (self.repo.cdir / f"notes.sqlite{suffix}").replace(self.repo.cdir / f"library.sqlite{suffix}")
-
-    def _prepare(self):
-        """Before the schema runs, bring a file from before the library to the current shape: its `shelf` table was a cache of git ref tips (the shared mirror is read from
-        git again, so it is emptied) and its notes had no shelf."""
-        c = self._con
-        have = {r[0] for r in c.execute("select name from sqlite_master where type='table'")}
-        if "shelf" in have and "id" not in {r[1] for r in c.execute("pragma table_info(shelf)")}:
-            self.fts = "note_fts" in have
-            with self._tx():
-                for ref, eid in c.execute("select ref, id from note where scope='shared'").fetchall():
-                    self._del("shared", ref, eid)
-                c.execute("delete from tomb")
-                c.execute("drop table shelf")
-            self.fts = None
-        if "note" in have and "shelf_id" not in {r[1] for r in c.execute("pragma table_info(note)")}:
-            c.execute("alter table note add column shelf_id text references shelf(id)")
 
     @_closing
     def usable(self):
@@ -156,10 +124,6 @@ class NoteDB:
             self.con.execute("rollback")
             raise
         self.con.execute("commit")
-
-    def _meta(self, k):
-        r = self.con.execute("select v from meta where k=?", (k,)).fetchone()
-        return r[0] if r else None
 
     # rows ----------------------------------------------------------------------------------------------------------------------
     def _del(self, scope, ref, eid):
@@ -229,34 +193,6 @@ class NoteDB:
             except ValueError:
                 continue
         return out
-
-    def _import_private(self):
-        """One time: the JSON files an older version kept become rows, and the folder is set aside (not deleted)."""
-        if self._meta("private_imported"):
-            return
-        pdir = self.repo.cdir / "private"
-        files = sorted(pdir.glob("*.json")) if pdir.exists() else []
-        with self._tx():
-            if self._meta("private_imported"):
-                return
-            for p in files:
-                try:
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                    if d.get("kind") == "log":  # what the library calls a savepoint note; "log" now means the conversation
-                        d["kind"] = "savepoint"
-                    e = from_json(json.dumps(d))
-                except (OSError, ValueError, AttributeError):
-                    continue
-                self._put(e, "private", self.repo.user, self.repo.device)
-            self.con.execute("insert or replace into meta values('private_imported', ?)", (str(len(files)),))
-        if files:
-            dest = self.repo.cdir / "private.imported"
-            dest.mkdir(exist_ok=True)
-            for p in files:
-                try:
-                    shutil.move(str(p), str(dest / p.name))
-                except OSError:
-                    pass
 
     @_closing
     def mark_published(self, ids, ref):
@@ -418,10 +354,6 @@ class NoteDB:
         return r[0] if r else ""
 
     @_closing
-    def has_log(self, log_id):
-        return self.con.execute("select 1 from log where id=? and n > 0", (log_id,)).fetchone() is not None
-
-    @_closing
     def logs_of_notes(self):
         """{note id: log id} for your own notes that were taken from a log kept here: the log is found through the note's shelf."""
         return dict(self.con.execute("select n.id, s.log_id from note n join shelf s on s.id=n.shelf_id where n.scope='private' and s.log_id is not null"))
@@ -466,66 +398,6 @@ class NoteDB:
     def end_chat(self, chat_id):
         with self._tx():
             self.con.execute("update chat set status='archived', updated=? where id=? and status='open'", (time.strftime("%Y-%m-%dT%H:%M:%S"), chat_id))
-
-    def _import_convo(self):
-        """One time: the conversation files an older version kept become logs, and the folder is set aside (not deleted)."""
-        if self._meta("convo_imported"):
-            return
-        cdir = self.repo.cdir / "convo"
-        files = sorted(cdir.glob("*.jsonl")) if cdir.exists() else []
-        with self._tx():
-            if self._meta("convo_imported"):
-                return
-            for p in files:
-                try:
-                    body = p.read_text(encoding="utf-8")
-                except OSError:
-                    continue
-                self.con.execute("insert or replace into log(id, n, body) values (?,?,?)", (p.stem, len(body.splitlines()), body))
-            self.con.execute("insert or replace into meta values('convo_imported', ?)", (str(len(files)),))
-        if files:
-            dest = self.repo.cdir / "convo.imported"
-            dest.mkdir(exist_ok=True)
-            for p in files:
-                try:
-                    shutil.move(str(p), str(dest / p.name))
-                except OSError:
-                    pass
-
-    def _adopt(self):
-        """One time, for a file from before the library: a saved log was a note of kind `log` and its conversation sat in `convo`. The note becomes a `savepoint` note, the
-        conversation a row of `log`, both get a shelf, and the notes made at that savepoint (they named it in `sources`) go on the shelf."""
-        if self._meta("shelved"):
-            return
-        c = self.con
-        with self._tx():
-            if self._meta("shelved"):
-                return
-            if c.execute("select 1 from sqlite_master where type='table' and name='convo'").fetchone():
-                c.execute("insert or ignore into log(id, n, body) select log_id, n, body from convo")
-                c.execute("drop table convo")
-            for pk, js in c.execute("select pk, json from note where kind='log' and scope='private'").fetchall():
-                try:
-                    d = json.loads(js)
-                except ValueError:
-                    continue
-                d["kind"] = "savepoint"
-                c.execute("update note set kind='savepoint', json=? where pk=?", (json.dumps(d, ensure_ascii=False), pk))
-            for pk, eid, branch, sha, created in c.execute("select pk, id, branch, sha, created from note where kind='savepoint' and scope='private' and shelf_id is null").fetchall():
-                c.execute("insert or ignore into log(id, branch, created) values (?,?,?)", (eid, branch or "", created or ""))
-                c.execute("update log set branch=?, created=? where id=? and branch=''", (branch or "", created or "", eid))
-                c.execute("insert or ignore into shelf(id, scope, author, branch, commit_id, created, log_id) values (?,?,?,?,?,?,?)",
-                          (eid, "private", self.repo.user, branch or "", sha or "", created or "", eid))
-                c.execute("update note set shelf_id=? where pk=?", (eid, pk))
-            shelves = {r[0] for r in c.execute("select id from shelf where scope='private'")}
-            for pk, js in c.execute("select pk, json from note where scope='private' and shelf_id is null").fetchall():
-                try:
-                    home = next((x for x in json.loads(js).get("sources") or [] if x in shelves), None)
-                except (ValueError, AttributeError):
-                    continue
-                if home:
-                    c.execute("update note set shelf_id=? where pk=?", (home, pk))
-            c.execute("insert or replace into meta values('shelved', '1')")
 
     # vectors: search by meaning ---------------------------------------------------------------------------------------------------
     @_closing

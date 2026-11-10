@@ -13,7 +13,7 @@ from . import git as g
 from .entry import BODY_FIELDS, ID_RE, MAX_SUMMARY
 from .safety import digest_hash, inside, looks_tabular, redact, scrub_paths
 from .safety import sanitize as safety_sanitize
-from .store import LEGACY_MODES, PUBLISH_MODES, Repo, github_login, user_id
+from .store import PUBLISH_MODES, Repo, github_login, user_id
 
 SHARE_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale")  # allowlist: evidence is opt-in
 
@@ -90,7 +90,7 @@ def cmd_join(a):
         out(f"  writer {u}{'  (you)' if u == r.user else '  [not trusted: searchable, never auto-injected; `logbook trust ' + u + '`]' if u not in r.trusted() else '  [trusted]'}")
 
 
-_FIELD_KEYS = frozenset(("kind", "topic", "title", "commit", "before_commit", "level", "paths", "sources", "supersedes", *BODY_FIELDS))  # title: what an agent calls the topic
+_FIELD_KEYS = frozenset(("kind", "topic", "title", "commit", "level", "paths", "sources", "supersedes", *BODY_FIELDS))  # title: what an agent calls the topic
 _LIST_KEYS = ("paths", "sources", "supersedes")
 
 
@@ -111,7 +111,6 @@ def _parse_fields(text):
     for k in _LIST_KEYS:
         if k in obj:
             obj[k] = [x for x in re.split(r"[,\s]+", obj[k]) if x]
-    obj.pop("before_commit", None)  # a note is no longer held back for the next commit: the key is accepted and ignored
     return obj
 
 
@@ -384,7 +383,7 @@ def _pick_unpublished(r):
 
 def cmd_sync(a):
     r = need_repo()
-    res = sync.sync(r, a.remote, True, a.depth)
+    res = sync.sync(r, a.remote, depth=a.depth)
     if a.json:
         out(json.dumps(res, indent=2))
     elif res["fetch"].get("skipped"):
@@ -415,7 +414,7 @@ def _embedder(r):
 
 def _meaning_search(r, a, emb):
     """Words and meaning together. Each hit is shown with where it is held and whether git still holds the same note."""
-    caught = r.db.index_vectors(emb, limit=300)  # notes written since the last `logbook index`, a bounded catch-up
+    r.db.index_vectors(emb, limit=300)  # notes written since the last `logbook index`, a bounded catch-up
     left = r.db.vector_missing(emb.name)
     res = recall.hybrid(r, a.q, emb, a.limit)
     if not res:
@@ -655,7 +654,7 @@ def cmd_status(a):
     out(f"observer: {run.pending_bytes()} bytes of tool uses queued, {len(running.own(run))} observation(s) since the last log on {run.branch}")
     if an.shallow:
         out("note: shallow clone; some anchors are unverified")
-    if not shared and (r.cdir / "private").exists():
+    if not shared and any(v["scope"] == "private" for v in vs):
         out("note: nothing shared yet: `logbook publish` then `logbook sync`; or `logbook setup` to fetch teammates' entries")
     stale = [s for s in tree.summaries(vs) if not s["fresh"]]
     if stale:
@@ -723,7 +722,7 @@ def _confirm(a, lines):
     if a.dry_run:
         out("(dry run: nothing written)")
         return False
-    if a.yes or a.write:
+    if a.yes:
         return True
     if sys.stdin.isatty():
         try:
@@ -778,7 +777,7 @@ def cmd_uninstall(a):
 
 
 CONFIG_KEYS = {"tidy_model": "text", "quota_pause": None, "publish": PUBLISH_MODES, "semantic": ("off", "on"), "semantic_model": "text",
-               "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None, "worker_days": None}
+               "worker": ("off", "on"), "tidy": ("manual", "auto"), "worker_calls": None, "worker_chars": None}
 
 
 def cmd_queue(a):
@@ -838,8 +837,6 @@ def cmd_config(a):
         r.save_cfg(c)
         out(f"{a.key} = {a.value}")
         return 0
-    if a.key == "publish":
-        a.value = LEGACY_MODES.get(a.value, a.value)  # never -> manual, claude -> ask
     if allowed and a.value not in allowed:
         raise SystemExit(f"logbook: {a.key} must be one of {', '.join(allowed)}")
     if not allowed and not a.value.isdigit():
@@ -916,7 +913,7 @@ def cmd_tidy(a):
     r = need_repo()
     if not a.no_sync and "origin" in sync.remotes(r):  # first bring in what teammates and your other machines shared; a failure here must not stop the tidy
         try:
-            sync.sync(r, "origin", fetch_only=True)
+            sync.sync(r, "origin")
         except (SystemExit, OSError, ValueError):
             pass
     if a.work:  # the tidy worker's pass: judge, archive junk (what the hooks start in `tidy auto`)
@@ -945,15 +942,6 @@ def cmd_tidy(a):
             out(f"  {b['status_of']}  ->  {b['status']}  ({safety_sanitize(b.get('reason', ''), 160)})")
         for d in drops:
             out(f"  {d['entry']}  ->  archive as {d['verdict']}" + (f" of {d['redundant_of']}" if d.get("redundant_of") else "") + f"  ({safety_sanitize(d.get('reason', ''), 160)})")
-        return 0
-    if a.garbage:  # the worker's private drafts that are no longer worth keeping; --apply moves them to the archive, nothing is deleted
-        junk = tidy.garbage(r, vs)
-        if a.apply:
-            out(f"archived {tidy.archive(r, [c['id'] for c in junk])} worker draft(s) to .git/logbook/archive/")
-            return 0
-        out(f"{len(junk)} worker draft(s) no longer worth keeping (nothing was changed; `tidy --garbage --apply` archives them)")
-        for c in junk:
-            out(f"  {c['id']}  {safety_sanitize(c['topic'], 80)}  ({c['reason']})")
         return 0
     if a.apply:
         done, errors = tidy.apply(r, vs, sys.stdin.read())
@@ -1035,8 +1023,7 @@ def cmd_stats(a):
     rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()] if p.exists() else []
     out(f"injections: {len(rows)}, entries shown: {sum(len(x['ids']) for x in rows)}, chars injected: {sum(x['chars'] for x in rows)}")
     mine = [l.entry for l in r.all_entries() if l.user == r.user]
-    out(f"your notes: {sum(1 for e in mine if e.provenance != 'auto-copied')} written, "
-        f"{sum(1 for e in mine if e.provenance == 'auto-copied')} auto-copied")
+    out(f"your notes: {len(mine)}")
 
 
 def cmd_cites(a):
@@ -1086,7 +1073,6 @@ def build_parser():
     s = add("setup", cmd_setup, "set up this repo: your id, git hook, agent hooks, skill and rules (asks first)")
     s.add_argument("--agent", nargs="+", metavar="AGENT", help="claude-code agents-md copilot gemini cursor, or auto (default)")
     s.add_argument("--yes", action="store_true", help="apply without asking")
-    s.add_argument("--write", action="store_true", help="same as --yes")
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--no-pretool", action="store_true", help="do not add the before-read/edit note lookup")
     s = add("ask", cmd_ask, "search the notes; explain an id, a file or name, or a range (a..b); open a node (repo, branch:x, commit:y, note:z)")
@@ -1132,7 +1118,6 @@ def build_parser():
     s.add_argument("--force", action="store_true", help="publish even if a teammate already shared the same text")
     s = add("sync", cmd_sync, "fetch teammates' entries and merge them in; never pushes (publish does); says what is new")
     s.add_argument("--remote", default="origin")
-    s.add_argument("--fetch-only", action="store_true", help="kept for older scripts: sync never pushes now")
     s.add_argument("--json", action="store_true")
     s.add_argument("--depth", type=int)
     s = add("index", cmd_index, "embed the notes that have no vector yet (search by meaning; the first run downloads the model)")
@@ -1147,7 +1132,6 @@ def build_parser():
     s = add("uninstall", cmd_uninstall, "remove what install added (notes are kept)")
     s.add_argument("--agent", nargs="+", metavar="AGENT")
     s.add_argument("--yes", action="store_true")
-    s.add_argument("--write", action="store_true")
     s.add_argument("--dry-run", action="store_true")
     s = add("summarize", cmd_summarize, "brief an agent on the notes under the repo or a branch so it can write the summary")
     s.add_argument("--repo", action="store_true", help="the whole repo even when on a branch")
@@ -1166,7 +1150,6 @@ def build_parser():
     s.add_argument("--proposals", action="store_true", help="show what the tidy worker proposed and kept for you")
     s.add_argument("--accept", action="store_true", help="store the worker's proposals (each is checked against git again; asks first in Claude Code)")
     s.add_argument("--restore", nargs="+", metavar="ID", help="put archived entries back in the private log")
-    s.add_argument("--garbage", action="store_true", help="list your worker drafts that are no longer worth keeping (with --apply: archive them)")
     s.add_argument("--brief", action="store_true", help="the candidates with the notes' words, for an agent to judge")
     s.add_argument("--apply", action="store_true", help="read approved proposals on stdin and store them as statuses (asks first in Claude Code)")
     s = add("queue", cmd_queue, "show what `logbook publish` will share (the publish queue)")

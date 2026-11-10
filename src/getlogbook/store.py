@@ -28,7 +28,6 @@ _REF_RE = re.compile(r"/(?:branch)?log/([0-9a-f]{6,16})/([0-9a-f]{2,16})$")
 # 0.0.2 readers match it, and git refuses `log/<user>` next to `log/<user>/<device>`, so the path shape cannot change.
 SHELF = "000000"
 PUBLISH_MODES = ("manual", "ask", "auto")  # least to most hands-off
-LEGACY_MODES = {"never": "manual", "claude": "ask"}  # the 0.0.4 names, read as their nearest new mode
 MAX_BLOB = 65536
 MAX_PER_REF = 5000
 DEFAULT_POLICY = {"publish": True, "inject_from": "trusted", "attribution": "named",
@@ -151,8 +150,6 @@ class Repo:
         c.setdefault("transport", "refs")
         c.setdefault("interpreter", __import__("sys").executable)
         self.save_cfg(c)
-        for d in ("private", "seen"):
-            (self.cdir / d).mkdir(parents=True, exist_ok=True)
         return c
 
     @property
@@ -177,11 +174,10 @@ class Repo:
 
     def publish_mode(self):
         """How logs and notes are saved and shared: manual (you run `logbook log` and `logbook publish`), ask (the agent asks you, then runs them; the
-        default), auto (it saves and publishes by itself). A repo policy that turns publishing off wins and reads as "never"; 0.0.4's names still read."""
+        default), auto (it saves and publishes by itself). A repo policy that turns publishing off wins and reads as "never"."""
         if not self.policy().get("publish", True):
             return "never"
         mode = self.cfg().get("publish", "ask")
-        mode = LEGACY_MODES.get(mode, mode)
         return mode if mode in PUBLISH_MODES else "ask"
 
     def committers(self):
@@ -206,38 +202,7 @@ class Repo:
         base = BRANCH_PREFIX if self.cfg().get("transport") == "branches" else PREFIX
         return f"{base}/{self.user}/{SHELF}"
 
-    def legacy_refs(self):
-        """Your own local per-device refs from 0.0.2 (one per clone), which `adopt_legacy` folds into the single shelf."""
-        own = self.own_ref()
-        out = g.try_run(["for-each-ref", "--format=%(refname)", f"{PREFIX}/{self.user}", f"{BRANCH_PREFIX}/{self.user}"], self.root)[1]
-        return [r for r in out.split() if r != own and _REF_RE.search(r)]
-
-    def adopt_legacy(self):
-        """Move entries from old per-device refs into the shelf, then delete the old local refs. Returns the refs that were folded."""
-        old = self.legacy_refs()
-        if not old:
-            return []
-        ref = self.own_ref()
-        tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
-        files = self._tree_files(ref) if tip else {}
-        for r in old:
-            files.update(self._tree_files(r))
-        files = _apply_tombstones(files)
-        self._write_ref(ref, files, "logbook: adopt per-device refs", tip)
-        for r in old:
-            g.run(["update-ref", "-d", r], self.root)
-        c = self.cfg()  # `sync` deletes these names on the remote after the shelf has been pushed
-        c["legacy_remote"] = sorted(set(c.get("legacy_remote", [])) | set(old))
-        self.save_cfg(c)
-        return old
-
     # private log ---------------------------------------------------------
-    @property
-    def pdir(self):
-        """The folder older versions kept private notes in, one JSON file each. Notes live in library.sqlite now (notesdb.py); the first open
-        imports what is here and moves it to private.imported/."""
-        return self.cdir / "private"
-
     @property
     def db(self):
         if self._db is None:
@@ -324,7 +289,6 @@ class Repo:
         """Write notes to your shared ref. A savepoint note is refused here, whoever asks: it and the log behind it stay on this machine."""
         if any(e.kind == "savepoint" for e in entries):
             raise ValueError("a savepoint note stays on this machine; only notes are published")
-        self.adopt_legacy()
         ref = self.own_ref()
         tip = g.try_run(["rev-parse", "--verify", "-q", ref], self.root)[1].strip() or None
         files = self._tree_files(ref) if tip else {}
@@ -341,7 +305,6 @@ class Repo:
 
     def purge(self, eid, reason="author request"):
         """Rewrite own ref as a parentless commit without the entry; leave an id-only tombstone."""
-        self.adopt_legacy()
         ref = self.own_ref()
         files = self._tree_files(ref)
         if f"entries/{eid}.json" not in files:
@@ -355,16 +318,12 @@ class Repo:
 
     def squash_own_ref(self):
         """Parentless commit with the same tree (gc). Caller force-pushes with lease."""
-        self.adopt_legacy()
         ref = self.own_ref()
         files = self._tree_files(ref)
         if not files:
             return None
         self._write_ref(ref, files, "logbook: squash", None)
         return ref
-
-    def refs(self):
-        return [r for _, r in self.ref_tips()]
 
     def ref_tips(self):
         out = g.try_run(["for-each-ref", "--format=%(objectname) %(refname)", "refs/logbook", REMOTE_NS, "refs/heads/logbook"], self.root)[1]
@@ -378,7 +337,7 @@ class Repo:
         """Your private notes that are not on your shared ref yet. Auto-copied entries carry no reason, so they are not offered (or counted in the push reminder). A log is never one of them: logs stay on this machine."""
         shared, _ = self.load_shared()
         done = {l.entry.id for l in shared if l.user == self.user}
-        return [e for e in self.load_private() if e.id not in done and e.provenance != "auto-copied" and e.kind != "savepoint"]
+        return [e for e in self.load_private() if e.id not in done and e.kind != "savepoint"]
 
     def queued(self):
         """The private entries in the publish queue (outbox.py) that are not shared yet: what `logbook publish` shares."""

@@ -103,7 +103,7 @@ class TestEntry(unittest.TestCase):
             from_dict({"id": "../../etc/passwd"})
         e = from_dict({"id": new_id(), "kind": "weird", "topic": "t" * 999, "provenance": "trust-me", "user": "alice", "author": "root",
                        "body": {"why": "w" * 99999, "evil": "x"}, "anchor": {"paths": ["a"] * 500, "sha": 5}, "supersedes": ["nope"]})
-        self.assertEqual((e.kind, e.provenance), ("finding", "auto-copied"))
+        self.assertEqual((e.kind, e.provenance), ("finding", "agent-written"))
         self.assertLessEqual(len(e.topic), 200)
         self.assertLessEqual(len(e.body["why"]), 2000)
         self.assertNotIn("evil", e.body)
@@ -118,17 +118,6 @@ class TestEntry(unittest.TestCase):
         self.assertNotIn("evil", e.obs)
         self.assertNotIn("obs", from_dict({"id": new_id()}).to_dict(), "an ordinary note's file stays as it was")
         self.assertEqual(from_dict(json.loads(e.to_json())).obs, e.obs)
-
-    def test_0_0_1_entry_still_loads(self):
-        """Files written by 0.0.1 carry anchor.models; they must load with the same names under the new key."""
-        old = {"id": new_id(), "kind": "finding", "topic": "late payments", "body": {"summary": "s", "why": "w"},
-               "anchor": {"sha": "a" * 40, "paths": ["models/marts/fct_x.sql"], "models": ["fct_x"], "layers": ["mart"]},
-               "provenance": "agent-written"}
-        e = from_dict(old)
-        self.assertEqual(e.anchor["names"], ["fct_x"])
-        self.assertNotIn("models", e.anchor)
-        self.assertNotIn("layers", e.anchor)
-
 
 class TestSync(Base):
     def setup_alice(self):
@@ -152,11 +141,11 @@ class TestSync(Base):
         rb = Repo(bob)
         rb.init()
         self.assertTrue(g.is_shallow(bob))
-        self.assertEqual(sync.sync(rb, fetch_only=True, depth=1)["entries"], 1)
+        self.assertEqual(sync.sync(rb, depth=1)["entries"], 1)
         self.ra.purge(e.id)
         # the rewritten shelf diverges from the remote: push fetches, merges (the tombstone wins) and pushes with a lease
         self.assertTrue(sync.push(self.ra)["ok"])
-        sync.sync(rb, fetch_only=True, depth=1)
+        sync.sync(rb, depth=1)
         self.assertEqual(rb.all_entries(), [])
 
     def test_committers_are_trusted_other_writers_are_not(self):
@@ -200,7 +189,7 @@ class TestSync(Base):
         carol = make_repo(self.root, "carol", "c@x.io", self.remote)
         rc = Repo(carol)
         rc.init()
-        sync.sync(rc, fetch_only=True)
+        sync.sync(rc)
         self.assertEqual(len(rc.all_entries()), 1)
 
 
@@ -328,7 +317,7 @@ class TestRichNotes(Base):
                          ("c", "d", "o", "3 of 40 rows"))
         self.assertEqual((back.level, back.sources), ("branch", [src]))
         junk = from_dict({"id": new_id(), "level": "galaxy", "sources": ["../x", src], "provenance": "inferred"})
-        self.assertEqual((junk.level, junk.sources, junk.provenance), ("", [src], "auto-copied"))
+        self.assertEqual((junk.level, junk.sources, junk.provenance), ("", [src], "agent-written"))
 
     def test_every_field_survives_publish_and_a_maximal_note_fits_the_default_cap(self):
         d = make_repo(self.root, "r", "a@x.io")
@@ -459,13 +448,6 @@ class TestInstaller(Base):
         self.run_cli("uninstall", "--yes")
         self.assertEqual((ag / "logbook-scribe.md").read_text(), "someone else's agent")
 
-    def test_the_scribe_agent_an_older_install_wrote_is_removed(self):
-        ag = self.d / ".claude" / "agents"
-        ag.mkdir(parents=True)
-        (ag / "logbook-scribe.md").write_text("---\nname: logbook-scribe\nmetadata:\n  managed-by: logbook\n---\nbody\n")
-        self.assertEqual(self.run_cli("setup", "--yes", "--agent", "claude-code")[0], 0)
-        self.assertFalse((ag / "logbook-scribe.md").exists())
-
     def test_symlinked_rules_file_is_written_through(self):
         real = self.root / "shared-claude.md"
         real.write_text("# shared\n")
@@ -486,25 +468,6 @@ class TestInstaller(Base):
         _, after = self.run_cli("status", "--check")
         self.assertRegex(after, r"claude-code\s*: installed")
         self.assertRegex(after, r"git hooks\s*: pre-push installed, post-merge installed, post-commit installed")
-
-
-    def test_setup_replaces_the_old_per_commit_block_and_keeps_the_persons_own(self):
-        self.run_cli("setup", "--yes", "--agent", "agents-md")
-        hooks = Path(g.run(["rev-parse", "--path-format=absolute", "--git-path", "hooks"], self.d).strip())
-        hooks.mkdir(exist_ok=True)
-        old = "#!/bin/sh\necho mine\n" + capture.MARK_BEGIN + "\n\"python\" -m getlogbook post-commit\n" + capture.MARK_END + "\n"
-        (hooks / "post-commit").write_text(old, newline="\n")
-        _, text = self.run_cli("setup", "--dry-run")
-        self.assertRegex(text, r"update\s+git post-commit hook")
-        for _ in range(2):
-            self.run_cli("setup", "--yes")
-        left = (hooks / "post-commit").read_text()
-        self.assertIn("echo mine", left)
-        self.assertEqual(left.count("getlogbook post-commit >/dev/null"), 1, "one block, however often setup runs")
-        self.assertTrue((hooks / "post-merge").exists() and (hooks / "pre-push").exists())
-        self.run_cli("uninstall", "--yes")
-        self.assertNotIn("logbook", (hooks / "post-commit").read_text())
-        self.assertIn("echo mine", (hooks / "post-commit").read_text())
 
 
 class CliRepo(Base):
@@ -533,9 +496,7 @@ class CliRepo(Base):
 class TestSharingQueue(CliRepo):
     def test_queue_lists_unshared_notes_and_publish_all_shares_them_once_confirmed(self):
         keep = capture.make_entry(self.r, "finding", "worth sharing", {"summary": "s", "why": "w"})
-        capture.make_entry(self.r, "finding", "copied", {"summary": "s"}, provenance="auto-copied")
         self.assertIn(keep.id, self.run_cli("queue")[1])
-        self.assertNotIn("copied", self.run_cli("queue")[1])
         self.assertEqual([e.id for e in self.r.unpublished()], [keep.id])
         code, text = self.run_cli("publish", "--all", "--yes")
         self.assertEqual(code or 0, 0, text)
@@ -767,7 +728,7 @@ class TestCliSanitises(Base):
         b = make_repo(self.root, "b", "b@x.io", remote)
         rb = Repo(b)
         rb.init()
-        sync.sync(rb, fetch_only=True)
+        sync.sync(rb)
         self.cd(b)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -1070,15 +1031,6 @@ class TestPublishModes(CliRepo):
             self.run_cli("config", "publish", "sometimes")
         self.assertEqual(json.loads(self.run_cli("cites", "--json")[1])["mode"], "manual")
 
-    def test_the_0_0_4_names_are_read_as_their_nearest_mode(self):
-        c = self.r.cfg()
-        for old, new in (("never", "manual"), ("claude", "ask"), ("ask", "ask"), ("auto", "auto")):
-            c["publish"] = old
-            self.r.save_cfg(c)
-            self.assertEqual(self.r.publish_mode(), new, old)
-        self.mode("claude")
-        self.assertEqual(self.r.cfg()["publish"], "ask", "a name typed the old way is stored the new way")
-
     def test_manual_lets_you_publish_by_hand_and_a_policy_that_turns_publishing_off_refuses(self):
         e = capture.make_entry(self.r, "finding", "t", {"summary": "s", "why": "w"})
         self.mode("manual")
@@ -1152,11 +1104,11 @@ class TestGrounding(CliRepo):
         """Claude Code refuses a shell command holding a brace and a quote (it looks like obfuscation) until a person approves it, so an agent
         cannot save a JSON note unattended. Key: value lines have neither."""
         text = ("kind: finding\ntopic: refund sum\nsummary: `total()` sums rows,\n  and nothing filters refunds\nwhy: no filter\n"
-                "paths: shop/revenue.py, shop/other.py\nevidence: ran total() on a refunded order\nsupersedes:\nbefore_commit: no\n")
+                "paths: shop/revenue.py, shop/other.py\nevidence: ran total() on a refunded order\nsupersedes:\n")
         self.assertNotIn("{", text)
         obj = cli._parse_fields(text)
         self.assertEqual(obj["summary"], "`total()` sums rows,\n  and nothing filters refunds")
-        self.assertEqual((obj["paths"], obj["supersedes"], "before_commit" in obj), (["shop/revenue.py", "shop/other.py"], [], False), "a stale before_commit line is accepted and ignored")
+        self.assertEqual((obj["paths"], obj["supersedes"]), (["shop/revenue.py", "shop/other.py"], []))
         code, out = self.run_cli("note", "--fields", stdin=text)
         self.assertIn("recorded", out)
         (e,) = self.r.load_private()
@@ -1195,11 +1147,7 @@ class TestGrounding(CliRepo):
         bash = [e for e in cur["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]
         self.assertEqual(len(bash), 1)
         self.assertIn("--event Permission", json.dumps(bash))
-        old = json.loads(path.read_text())
-        old["permissions"] = {"allow": list(capture.OLD_ALLOW) + ["Bash(git status:*)"]}  # what 0.0.4 left behind, and the person's own rule
-        path.write_text(json.dumps(old))
         _, after = capture.install_claude(self.r, write=True)
-        self.assertEqual(after["permissions"]["allow"], ["Bash(git status:*)"], "the old rules go, the person's stay")
         self.assertEqual(len([e for e in after["hooks"]["PreToolUse"] if e.get("matcher") == "Bash"]), 1, "installing twice adds nothing")
         _, gone = capture.install_claude(self.r, write=True, remove=True)
         self.assertNotIn("PreToolUse", gone.get("hooks", {}))
@@ -1392,15 +1340,6 @@ class TestTidy(CliRepo):
         b = capture.make_entry(self.r, "finding", "refund sum is wrong", {"summary": "total sums the refunded rows too", "why": "w"}, paths=["shop/revenue.py"])
         (c,) = [c for c in self.candidates() if c["reason"] == "may say the same as another note"]
         self.assertEqual({c["id"], c["detail"][0].split()[0]}, {a.id, b.id})
-
-    def test_an_old_auto_copied_draft_is_listed_and_a_new_one_is_not(self):
-        from getlogbook.entry import Entry, new_id
-        for created in ("2020-01-01T00:00:00", capture.now()):
-            e = Entry(id=new_id(), kind="finding", topic="draft " + created[:4], body={"summary": "the final message"}, provenance="auto-copied", captured_via="claude-code", created=created)
-            e.anchor = tree.anchor_for(self.r, sha=None, paths=[], dirty=False)
-            self.r.add_private(e)
-        (c,) = self.candidates()
-        self.assertEqual((c["topic"], c["reason"].startswith("auto-copied draft")), ("draft 2020", True))
 
     def test_a_commit_id_taken_from_a_note_never_reaches_git_unchecked(self):
         from getlogbook import tidy
@@ -1602,31 +1541,15 @@ class TestTidyWorker(CliRepo):
         got = [c["id"] for c in self.tidy.candidates(self.r, tree.all_views(self.r)[0]) if c["commits"] and c["id"] in (a.id, b.id)]
         self.assertEqual(got, [b.id, a.id])
 
-    def test_a_log_is_never_junk(self):
-        old = capture.make_entry(self.r, "savepoint", "old session", {"what": "w", "summary": "s"}, paths=["shop/revenue.py"], provenance="worker-written")
-        old.created = "2020-01-01T00:00:00"
-        self.r.add_private(old)
-        self.assertEqual(self.tidy.garbage(self.r, tree.all_views(self.r)[0]), [], "a saved log is not a stale draft")
-
-    def test_old_auto_copied_drafts_are_listed_as_junk_and_archived_not_deleted(self):
-        draft = Entry(id=new_id(), kind="finding", topic="Read shop/revenue.py ...", body={"summary": "the final message"}, provenance="auto-copied", created="2020-01-01T00:00:00", v=2)
-        draft.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
-        self.r.add_private(draft)
-        (c,) = [x for x in self.tidy.garbage(self.r, tree.all_views(self.r)[0]) if x["id"] == draft.id]
-        self.assertIn("days old", c["reason"])
-        self.assertIn("archived 1", self.run_cli("tidy", "--garbage", "--apply", "--no-sync")[1])
-        self.assertIsNone(self.r.get_private(draft.id))
-        self.assertTrue((self.r.cdir / "archive" / f"{draft.id}.json").exists())
-
     def test_auto_does_all_of_it_in_one_pass(self):
         self.run_cli("config", "tidy", "auto")
         res = self.tidy.auto(self.r, lambda p: (SAVEPOINT_XML if "savepoint" in p else f"status_of: {self.note.id}\nstatus: resolved\ncommits: {self.later[:8]}\nreason: reworked\n", 0.001, ""))
-        self.assertEqual((res["applied"], res["archived"]), ([self.note.id], 0))
+        self.assertEqual(res["applied"], [self.note.id])
 
     def test_the_pull_hook_starts_the_tidy_pass_in_ask_and_auto_mode_only(self):
         import unittest.mock
         from getlogbook import hookmain
-        for mode, expect in (("manual", ["sync", "--fetch-only"]), ("ask", ["tidy", "--work", "--quiet", "--no-judge"]), ("auto", ["tidy", "--work", "--quiet", "--no-judge"])):
+        for mode, expect in (("manual", ["sync"]), ("ask", ["tidy", "--work", "--quiet", "--no-judge"]), ("auto", ["tidy", "--work", "--quiet", "--no-judge"])):
             self.run_cli("config", "publish", mode)
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 hookmain.run(["post-merge"])
@@ -2157,27 +2080,7 @@ class TestObserver(ObserverBase):
         self.run_cli("config", "worker", "off")
         self.assertNotEqual(self.r.cfg().get("worker"), "on")
         decide = lambda c: (json.loads(permissions.hook_output(c, "auto") or "{}").get("hookSpecificOutput") or {}).get("permissionDecision")
-        self.assertEqual((decide("logbook worker --status"), decide("logbook worker --drain"), decide("logbook tidy --garbage --apply")), ("allow", "ask", "ask"))
-
-    def test_tidy_lists_old_or_dead_worker_drafts_and_archives_nothing_is_deleted(self):
-        from getlogbook import tidy
-        old = Entry(id=new_id(), kind="finding", topic="old draft", body={"summary": "s", "why": "w", "evidence": "e"}, provenance="worker-written", created="2020-01-01T00:00:00", v=2)
-        old.anchor = tree.anchor_for(self.r, sha=None, paths=["shop/revenue.py"], dirty=False)
-        self.r.add_private(old)
-        person = Entry(id=new_id(), kind="finding", topic="old note by a person", body={"summary": "s", "why": "w"}, provenance="user-written", created="2020-01-01T00:00:00", v=2)
-        person.anchor = old.anchor
-        self.r.add_private(person)
-        (c,) = tidy.garbage(self.r, tree.all_views(self.r)[0])
-        self.assertEqual((c["id"], "days old" in c["reason"]), (old.id, True))
-        code, text = self.run_cli("tidy", "--garbage")
-        self.assertIn("1 worker draft(s)", text)
-        self.assertIsNotNone(self.r.get_private(old.id), "listing changes nothing")
-        code, text = self.run_cli("tidy", "--garbage", "--apply")
-        self.assertIn("archived 1", text)
-        self.assertIsNone(self.r.get_private(old.id))
-        self.assertTrue((self.r.cdir / "archive" / f"{old.id}.json").exists(), "moved, still readable")
-        self.assertIsNotNone(self.r.get_private(person.id), "a person's note is never touched")
-
+        self.assertEqual((decide("logbook worker --status"), decide("logbook worker --drain")), ("allow", "ask"))
 
 SAVEPOINT_XML = """<savepoint><title>Refunds no longer counted as revenue</title><request>Find why totals run high.</request>
 <investigated>shop/revenue.py</investigated><learned>total() never read the refunded flag.</learned>
@@ -2294,17 +2197,6 @@ class TestSavepoint(ObserverBase):
             with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
                 self.save()
             self.assertEqual(spawn.call_args.args[0][-4:], ["tidy", "--work", "--quiet", "--no-judge"], mode)
-
-    def test_a_note_about_a_file_that_was_later_deleted_is_history_and_tidy_does_not_garbage_it(self):
-        self.observe()
-        self.save()
-        draft = capture.make_entry(self.r, "finding", "an old per-turn draft", {"summary": "s", "why": "w"}, paths=["shop/revenue.py"], provenance="worker-written")
-        sh("git", "rm", "-q", "shop/revenue.py", cwd=self.d)
-        commit(self.d, "remove revenue", {})
-        listed = {c["id"]: c["reason"] for c in tidy.garbage(self.r, tree.all_views(self.r)[0])}
-        self.assertEqual(listed, {draft.id: "every file it is about is gone"}, "a draft with no obs record still goes; the savepoint note stays")
-        (note,) = self.notes()
-        self.assertTrue(note.obs, "it is the savepoint note that was kept")
 
     def test_a_savepoint_note_keeps_no_path_outside_the_repository_in_its_text_fields_or_lists(self):
         inside_abs = (self.r.root / "shop" / "revenue.py").as_posix()
@@ -2661,7 +2553,7 @@ class TestPublishByBranch(CliRepo):
         self.run_cli("config", "publish", "manual")
         with unittest.mock.patch.object(capture, "spawn_detached") as spawn:
             hookmain.run(["post-merge"])
-        self.assertEqual(spawn.call_args.args[0][-2:], ["sync", "--fetch-only"], "a pull never pushes")
+        self.assertEqual(spawn.call_args.args[0][-1:], ["sync"], "a pull never pushes")
         self.run_cli("uninstall", "--yes", "--agent", "claude-code")
         self.assertFalse((hooks / "post-merge").exists() or (hooks / "post-rewrite").exists())
 
@@ -2669,7 +2561,7 @@ class TestPublishByBranch(CliRepo):
         import unittest.mock
         with unittest.mock.patch.object(sync, "remotes", lambda r: ["origin"]), unittest.mock.patch.object(sync, "sync") as run:
             self.run_cli("tidy")
-            self.assertEqual(run.call_args.kwargs, {"fetch_only": True}, "pull-only")
+            self.assertEqual(run.call_args.args[1:], ("origin",), "tidy fetches first; a sync never pushes")
             run.reset_mock()
             self.run_cli("tidy", "--no-sync")
             self.assertEqual(run.call_count, 0)
@@ -2731,7 +2623,7 @@ class TestShelf(Base):
     def reader(self):
         r = Repo(make_repo(self.root, "carol", "c@x.io", self.remote))
         r.init()
-        sync.sync(r, fetch_only=True)
+        sync.sync(r)
         return {l.entry.id for l in r.all_entries()}
 
     def test_two_machines_of_one_person_share_one_shelf_and_merge(self):
@@ -2759,17 +2651,6 @@ class TestShelf(Base):
         desk.publish([e2])
         self.assertTrue(sync.push(desk)["ok"])
         self.assertEqual(self.reader(), {e2.id}, "the purged note must not come back through the other machine")
-
-    def test_old_per_device_refs_are_folded_into_the_shelf(self):
-        lap, _ = self.clones()
-        e = capture.make_entry(lap, "finding", "old", {"summary": "s", "why": "w"})
-        old = f"refs/logbook/log/{lap.user}/abc123"
-        lap._write_ref(old, {f"entries/{e.id}.json": e.to_json().encode()}, "0.0.2 style", None)
-        self.assertEqual(lap.legacy_refs(), [old])
-        lap.adopt_legacy()
-        self.assertEqual(lap.legacy_refs(), [])
-        self.assertEqual([l.entry.id for l in lap.load_shared()[0]], [e.id])
-        self.assertEqual(lap.cfg()["legacy_remote"], [old])
 
 
 class TestPublishMoves(CliRepo):
@@ -3191,7 +3072,7 @@ class TestConvo(ObserverBase):
         self.assertEqual(self.run_cli("queue")[1].count(log), 0, "a log is never queued")
         with self.assertRaises(ValueError):
             self.r.publish([self.r.get_private(log)])
-        self.assertTrue(self.r.db.has_log(log))
+        self.assertTrue(self.r.db.load_log(log).strip())
         self.assertIn("stay on this machine", self.run_cli("publish", log, "--yes")[1])
 
     def test_a_note_made_at_a_savepoint_points_at_its_log_for_its_author_only(self):

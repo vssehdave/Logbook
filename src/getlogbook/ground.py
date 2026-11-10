@@ -136,7 +136,7 @@ def overlaps(views, topic, summary, files, limit=3):
     mine, want = _words(topic + " " + summary), set(files)
     scored = []
     for v in views:
-        if v["kind"] == "summary" or v["provenance"] == "auto-copied" or not (want & set(v["paths"])):
+        if v["kind"] == "summary" or not (want & set(v["paths"])):
             continue
         theirs = _words(v["topic"] + " " + v["body"].get("summary", ""))
         sim = len(mine & theirs) / len(mine | theirs) if mine and theirs else 0
