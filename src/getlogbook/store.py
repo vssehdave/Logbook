@@ -54,11 +54,9 @@ _NOREPLY_RE = re.compile(r"^(?:\d+\+)?([A-Za-z0-9-]+)@users\.noreply\.github\.co
 
 
 def github_login(root):
-    """Your GitHub login, or '' when it cannot be found. In order: LOGBOOK_GITHUB_LOGIN (an override, empty means "none"), `git config github.user`, a
-    users.noreply.github.com commit email, then `gh api user` when the gh CLI is signed in (the only one that touches the network, once, at setup)."""
-    if "LOGBOOK_GITHUB_LOGIN" in os.environ:
-        found = os.environ["LOGBOOK_GITHUB_LOGIN"].strip()
-        return found if _LOGIN_RE.match(found) else ""
+    """Your GitHub login, or '' when it cannot be found. In order: `git config github.user`, a users.noreply.github.com commit email, then `gh api user` when the
+    gh CLI is signed in. Only that last one touches the network (one request to GitHub, from your own gh, for your own login, once, at setup); nothing in the
+    environment can set the name teammates see."""
     found = g.config_get(root, "github.user").strip()
     if not _LOGIN_RE.match(found):
         m = _NOREPLY_RE.match(g.config_get(root, "user.email").strip())
