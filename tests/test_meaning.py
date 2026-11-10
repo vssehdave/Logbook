@@ -98,18 +98,11 @@ class TestMeaning(DbBase):
 
 
 class TestConversations(DbBase):
-    def test_a_conversation_is_stored_with_the_log_and_an_older_file_is_imported_once(self):
+    def test_a_conversation_is_stored_as_a_log(self):
         from getlogbook import convo
         msgs = [{"role": "user", "text": "first question"}, {"role": "assistant", "text": "first answer"}]
         convo.save(self.r, "18bcfe5917f-873b8d63", msgs)
         self.assertEqual([m["text"] for m in convo.load(self.r, "18bcfe5917f-873b8d63")], ["first question", "first answer"])
-        (self.r.cdir / "convo").mkdir(exist_ok=True)
-        (self.r.cdir / "convo" / "18bcfe5917f-873b8d70.jsonl").write_text(json.dumps({"role": "user", "text": "older"}) + "\n", encoding="utf-8")
-        self.r.db.con.execute("delete from meta where k='convo_imported'")  # as if a version without this table had written the file
-        self.r.db._con.close()
-        self.r.db._con, self.r.db._ready = None, False
-        self.assertEqual([m["text"] for m in convo.load(self.r, "18bcfe5917f-873b8d70")], ["older"])
-        self.assertTrue((self.r.cdir / "convo.imported" / "18bcfe5917f-873b8d70.jsonl").exists(), "set aside, not deleted")
         self.assertEqual(convo.load(self.r, "no-such-log"), [])
 
 

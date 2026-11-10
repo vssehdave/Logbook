@@ -3191,7 +3191,7 @@ class TestConvo(ObserverBase):
         self.assertEqual(self.run_cli("queue")[1].count(log), 0, "a log is never queued")
         with self.assertRaises(ValueError):
             self.r.publish([self.r.get_private(log)])
-        self.assertTrue(self.r.db.has_log(log))
+        self.assertTrue(self.r.db.load_log(log).strip())
         self.assertIn("stay on this machine", self.run_cli("publish", log, "--yes")[1])
 
     def test_a_note_made_at_a_savepoint_points_at_its_log_for_its_author_only(self):
