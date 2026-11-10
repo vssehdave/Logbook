@@ -97,10 +97,10 @@ NO_EVIDENCE = "no evidence: add an `evidence:` line with what you ran or read (a
 MIN_LINES, MAX_LINES = 3, 9
 
 
-def size_problems(kind, body):
-    """Why a finding or change note is the wrong size: a note is 3 to 9 non-empty lines of the real work. A summary note is a different shape."""
+def size_problems(body):
+    """Why a finding or change note is the wrong size: a note is 3 to 9 non-empty lines of the real work."""
     n = sum(1 for k in BODY_FIELDS for ln in (body.get(k) or "").splitlines() if ln.strip())
-    if kind == "summary" or MIN_LINES <= n <= MAX_LINES:
+    if MIN_LINES <= n <= MAX_LINES:
         return []
     if n < MIN_LINES:
         return [f"{n} line{'s' if n != 1 else ''}: a note is {MIN_LINES} to {MAX_LINES} lines. Add the summary (2 to 4 sentences), why, evidence, "
@@ -136,7 +136,7 @@ def overlaps(views, topic, summary, files, limit=3):
     mine, want = _words(topic + " " + summary), set(files)
     scored = []
     for v in views:
-        if v["kind"] == "summary" or not (want & set(v["paths"])):
+        if not (want & set(v["paths"])):
             continue
         theirs = _words(v["topic"] + " " + v["body"].get("summary", ""))
         sim = len(mine & theirs) / len(mine | theirs) if mine and theirs else 0

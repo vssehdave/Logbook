@@ -12,7 +12,7 @@ import shlex
 
 # subcommand -> decision. "mode" means: follow the publish mode (see `decide`). Not listed: no opinion.
 TABLE = {
-    "note": "allow", "ask": "allow", "cites": "allow", "convo": "allow", "log": "allow", "queue": "allow", "status": "allow", "summarize": "allow",
+    "note": "allow", "ask": "allow", "cites": "allow", "convo": "allow", "log": "allow", "queue": "allow", "status": "allow",
     "tidy": "allow", "worker": "allow", "publish": "mode", "sync": "allow", "index": "allow",
     "purge": "ask", "gc": "ask", "trust": "ask", "config": "ask", "setup": "ask", "install": "ask", "uninstall": "ask",
 }

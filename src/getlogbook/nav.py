@@ -1,8 +1,7 @@
 """The repo as a tree you can walk: repo -> branch -> commit -> note.
 
 The shape comes from git and from where each note is anchored, so building it costs no model call and gives the same tree for the
-same history. The summaries at the repo and branch level are written by the agent (see `logbook summarize`) and go stale when the
-notes under them change. Nothing is copied out of git: every commit node points back at `git show <sha>`, every note keeps its text.
+same history. Nothing is copied out of git: every commit node points back at `git show <sha>`, every note keeps its text.
 
 Addresses: `repo`, `branch:<name>`, `commit:<sha prefix>`, `note:<id prefix>`.
 """
@@ -14,15 +13,13 @@ from . import tree
 KINDS = ("branch", "commit", "note")
 
 
-def _node(addr, kind, title, parent, children=(), summary=None, view=None, sha=""):
-    return {"addr": addr, "kind": kind, "title": title, "parent": parent, "children": list(children), "summary": summary,
-            "view": view, "sha": sha}
+def _node(addr, kind, title, parent, children=(), view=None, sha=""):
+    return {"addr": addr, "kind": kind, "title": title, "parent": parent, "children": list(children), "view": view, "sha": sha}
 
 
 def build(repo):
-    """{address: node}. A node's `children` are addresses; `summary` is the stored summary dict (with `fresh`) or None."""
+    """{address: node}. A node's `children` are addresses."""
     t = tree.build(repo)
-    by_branch = {(s["level"], s["branch"]): s for s in t["summaries"]}
     nodes = {}
     here = t["branch"] or "(detached)"
 
@@ -55,16 +52,13 @@ def build(repo):
                 kids.append(f"note:{v['id']}")
             nodes[f"note:{v['id']}"] = _node(f"note:{v['id']}", "note", v["topic"], parent, view=v)
         branches[u["branch"]] = kids + branches.get(u["branch"], [])
-    for (level, b), _s in by_branch.items():
-        if level == "branch":
-            branches.setdefault(b, [])
     for b, kids in branches.items():
         addr = f"branch:{b}"
-        nodes[addr] = _node(addr, "branch", b, "repo", kids, summary=by_branch.get(("branch", b)))
+        nodes[addr] = _node(addr, "branch", b, "repo", kids)
         for k in kids:
             if nodes[k]["parent"] != addr:
                 nodes[k]["parent"] = addr
-    nodes["repo"] = _node("repo", "repo", repo.root.name, "", [f"branch:{b}" for b in branches], summary=by_branch.get(("repo", "")))
+    nodes["repo"] = _node("repo", "repo", repo.root.name, "", [f"branch:{b}" for b in branches])
     return nodes
 
 

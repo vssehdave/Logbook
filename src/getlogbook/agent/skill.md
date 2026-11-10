@@ -14,7 +14,7 @@ Logbook keeps what was learned on each branch next to git history. It watches th
 Before you answer a "why" or "how did this happen" question, or search the code for a cause:
 
 1. `logbook ask "<topic>"` ranks notes by file, name and words. `logbook ask <file|id>` shows everything known about one file or note, with age and how well it is tied to the code.
-2. Notes are filed in a tree: `repo` > `branch:<name>` > `commit:<sha>` > `note:<id>`. Each result names its node. `logbook ask repo` shows the repo summary and its branches; `logbook ask branch:<name>` or `commit:<sha>` goes one level down, with the path from the root. The original is always `git show <sha>`. Start at the top and go down only as far as the question needs.
+2. Notes are filed in a tree: `repo` > `branch:<name>` > `commit:<sha>` > `note:<id>`. Each result names its node. `logbook ask repo` shows its branches; `logbook ask branch:<name>` or `commit:<sha>` goes one level down, with the path from the root. The original is always `git show <sha>`. Start at the top and go down only as far as the question needs.
 
 When an answer uses a note, cite it. Each injected note has a number in square brackets, kept for the whole chat; write that number as a superscript right after the claim (note [2] is cited as ², note [11] as ¹¹). Cite only what you used, and never invent a number. `logbook cites` prints the numbered sources for this chat; a note a teammate shared comes with a link, their name and the date. If a note has no commit, say who added it and when only if the user asks.
 
@@ -72,10 +72,6 @@ Put long research, a trail of dead ends or a summary of a whole piece of work on
 ## Check before you save
 
 Run the same note through `logbook note --fields --check` first. It looks up every file, name in backticks and commit id the note mentions, in the repo as it is now, and prints `grounding: files 2/2, names 3/4, commits 1/1, evidence yes`, with each thing it could not find after a `!`. A name that is not in the code means the note is wrong, vague or about something that has changed: fix the note, do not save it as it is. A finding or change with no `evidence` line, or with fewer than 3 or more than 9 lines, is refused, and `--check` says so after a `!`. It also lists notes on the same files that say much the same, after a `~`: if your note replaces one of yours, add a line `supersedes: <id>`; if both stand, say why in the note. The check only shows that what you name exists; whether what you say is true is still on you, so cite what you ran or read in `evidence`.
-
-## Summaries
-
-A summary is a short note about a whole node: the repo, or a branch. Teammates' agents are shown a fresh one at the start of a session, so it saves them reading every note. When the user asks for an overview, or `logbook status` says a summary is out of date, run `logbook summarize`. It lists the notes under that node; write 4 to 8 sentences from them (what is known, decided and open) and record it with `logbook note --fields` using `kind: summary`, the `level:` it gave you and the `sources` it listed. Add nothing the notes do not support. A summary goes stale as soon as a covered note is added, and a stale one is not shown.
 
 ## Keeping notes true
 

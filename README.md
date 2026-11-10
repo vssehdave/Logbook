@@ -13,9 +13,8 @@ particular stack.
 
 **Status: alpha.** The engine, git-ref storage, sharing and the Claude Code integration work and are tested on Linux,
 macOS and Windows. Notes are followed through a merge, a rebase and (when written at the branch tip) a squash; a note written before
-its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Summaries of the repo
-or a branch are written by your agent on request and go stale when a note is added. Hooks exist only for Claude Code; other agents
-get a rules file. The only measurements so far are two small smoke tests on a toy repo.
+its branch's first commit stays with the branch until a merge named for it appears, and is lost to a squash. Claude Code is the only
+agent supported. The only measurements so far are two small smoke tests on a toy repo.
 
 ## Try it (no credentials, about 30 seconds)
 
@@ -200,7 +199,6 @@ own prompt runs. `ask` lets that normal prompt run. The publish mode is the one 
 | `log` | allow |
 | `queue` | allow |
 | `status` | allow |
-| `summarize` | allow |
 | `tidy` | allow; `--apply`, `--accept`, `--work`, `--restore` asks |
 | `worker` | allow; `--drain` asks |
 | `publish` | never: deny, manual: deny, ask: ask, auto: allow |

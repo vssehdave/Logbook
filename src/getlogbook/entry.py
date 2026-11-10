@@ -12,7 +12,7 @@ import time
 
 ID_RE = re.compile(r"^[0-9a-f]{11}-[0-9a-f]{8}$")
 HEX_RE = re.compile(r"^[0-9a-f]{4,64}$")  # a commit, tree or parent id: never anything git could read as an option
-KINDS = ("change", "finding", "summary", "savepoint")  # savepoint: the summary note a savepoint (`logbook log`) files on its shelf; it is never published
+KINDS = ("change", "finding", "savepoint")  # savepoint: the summary note a savepoint (`logbook log`) files on its shelf; it is never published
 PROVENANCE = ("agent-written", "user-written", "user-edited", "worker-written")  # who really wrote a note; anything else a file claims reads as agent-written
 LEVELS = ("", "commit", "branch", "repo", "path")  # which node a note is about; "" means: wherever its anchor places it
 BODY_FIELDS = ("summary", "context", "what", "why", "wrong", "fix", "decided", "open", "scale", "evidence")
