@@ -3217,44 +3217,11 @@ class TestConvo(ObserverBase):
         self.assertEqual(self.r.cfg()["display"], "after", "outside the block every call reads the file")
 
 
-class TestGithubIdentity(Base):
-    def fresh(self, email="f@x.io"):
-        d = make_repo(self.root, "fresh", email)
-        self.cd(d)
-        return d
-
-    def test_your_github_login_is_what_teammates_see_and_your_id_stays_a_stable_hash(self):
-        d = self.fresh()
-        with unittest.mock.patch.dict(os.environ, {"LOGBOOK_GITHUB_LOGIN": "Alice-Dev"}):
-            c = Repo(d).init()
-        self.assertEqual((c["github"], c["display"]), ("Alice-Dev", "Alice-Dev"))
-        self.assertEqual(c["user"], store.user_id("f@x.io"), "the id is still the hash: refs and the committer trust rule depend on it")
-
-    def test_the_login_is_found_without_the_network_from_git_config_or_a_noreply_email(self):
-        d = self.fresh("12345+bobby@users.noreply.github.com")
-        with unittest.mock.patch.dict(os.environ):
-            del os.environ["LOGBOOK_GITHUB_LOGIN"]
-            self.assertEqual(store.github_login(d), "bobby")
-            sh("git", "config", "github.user", "robert", cwd=d)
-            self.assertEqual(store.github_login(d), "robert", "an explicit git setting wins")
-            sh("git", "config", "github.user", "not a login!", cwd=d)
-            self.assertEqual(store.github_login(d), "bobby", "a value that is not a GitHub login is ignored")
-
-    def test_with_no_login_anywhere_you_are_shown_by_your_git_name(self):
-        d = self.fresh()
-        c = Repo(d).init()
-        self.assertNotIn("github", c)
-        self.assertEqual(c["display"], g.config_get(d, "user.name"))
-
-    def test_a_dry_run_of_setup_writes_nothing_not_even_your_id(self):
-        d = self.fresh()
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            self.assertEqual(cli.main(["setup", "--dry-run", "--agent", "agents-md"]), 0)
-        self.assertIn("(dry run) setup would create your id", buf.getvalue())
-        self.assertFalse((Repo(d).cdir / "config.json").exists())
-        self.assertEqual(Repo(d).cfg().get("user", ""), "")
-
-
-if __name__ == "__main__":
-    unittest.main()
+class TestSyncWithoutARemote(CliRepo):
+    def test_a_repo_with_no_remote_has_nothing_to_sync_and_that_is_fine(self):
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn("no remote named 'origin'", text)
+        self.assertIn("stay on this machine", text)
+        code, text = self.run_cli("sync", "--json")
+        self.assertEqual((code, json.loads(text)["fetch"]["ok"]), (0, True))

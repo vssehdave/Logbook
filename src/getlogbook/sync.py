@@ -32,6 +32,8 @@ def ensure_fetch_config(repo, remote="origin"):
 
 
 def fetch(repo, remote="origin", depth=None):
+    if remote not in remotes(repo):  # a repo that was never pushed anywhere has nobody to fetch from: that is not a failure
+        return {"ok": True, "error": "", "skipped": f"no remote named {remote!r}"}
     args = ["fetch", "--no-tags", "--quiet"] + ([f"--depth={depth}"] if depth else []) + [remote, *fetch_specs(remote)]
     rc, _, err = g.try_run(args, repo.root)
     return {"ok": rc == 0, "error": err.strip() if rc else ""}
@@ -141,10 +143,11 @@ def sync(repo, remote="origin", fetch_only=True, depth=None):
     from . import news
     repo.adopt_legacy()
     out = {"fetch": fetch(repo, remote, depth)}
-    if out["fetch"]["ok"]:
+    fetched = out["fetch"]["ok"] and not out["fetch"].get("skipped")
+    if fetched:
         out["merge"] = merge_remote(repo, remote)[0]
     shared, _ = repo.load_shared()
-    out["news"] = news.update(repo) if out["fetch"]["ok"] else []
+    out["news"] = news.update(repo) if fetched else []
     out["writers"] = len({l.user for l in shared})
     out["entries"] = len(shared)
     return out

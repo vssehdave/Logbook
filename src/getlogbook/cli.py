@@ -387,6 +387,8 @@ def cmd_sync(a):
     res = sync.sync(r, a.remote, True, a.depth)
     if a.json:
         out(json.dumps(res, indent=2))
+    elif res["fetch"].get("skipped"):
+        out(f"{res['fetch']['skipped']}: nothing to fetch, and your notes stay on this machine until you add one (git remote add {a.remote} <url>).")
     elif not res["fetch"]["ok"]:
         out("logbook: could not fetch from " + a.remote + ": " + res["fetch"]["error"][:200])
     else:
