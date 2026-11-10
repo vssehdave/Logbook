@@ -3216,5 +3216,15 @@ class TestConvo(ObserverBase):
         self.assertEqual(self.r.cfg()["display"], "after", "outside the block every call reads the file")
 
 
+class TestSyncWithoutARemote(CliRepo):
+    def test_a_repo_with_no_remote_has_nothing_to_sync_and_that_is_fine(self):
+        code, text = self.run_cli("sync")
+        self.assertEqual(code, 0, text)
+        self.assertIn("no remote named 'origin'", text)
+        self.assertIn("stay on this machine", text)
+        code, text = self.run_cli("sync", "--json")
+        self.assertEqual((code, json.loads(text)["fetch"]["ok"]), (0, True))
+
+
 if __name__ == "__main__":
     unittest.main()
