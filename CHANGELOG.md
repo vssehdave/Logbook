@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.0.7 (2026-11-09)
+
+A savepoint now turns every observation it covers into a note of its own, logs and conversations stay on your machine while notes are shared, tidy checks and keeps what is true, and `sync` (fetch and merge) is split from `publish` (push). Read the bullets from the bottom of this section up for the order they were built in.
 
 - **Fixed: tidy judged same-second notes oldest first.** Tidy checks the newest notes first, but sorted them by `created`, which is whole seconds, so on a fast machine notes made in the same second kept their oldest-first order and a newer note could be left out of a batch ahead of an older one. Ties now go by id (which is time-ordered). This was also the cause of the simulated-day test that failed now and then on fast Linux runners, where the fake model resolves only the first note it is shown.
 - **No path outside the repository goes into a note, private or shared.** Stricter than the entry below. When a note is made (a savepoint, `logbook note`, a status record), the repository's own folder is taken off every path in its text (`C:/Users/ann/proj/src/a.py` becomes `src/a.py`), every other absolute path (a drive, the home folder, `/tmp` and the other system roots, `~/`) is replaced with `[outside path]`, and the files it read and changed (`obs`, `anchor.paths`) keep only paths inside the repo; a web address is not a file. The evidence check no longer records a fragment of an outside path in `checks.unsupported`. A publish still scrubs the shared copy, which covers notes written by older versions. The raw records of a session (the queue archive, the conversation, the log) are not notes and are unchanged; they stay on the machine.
@@ -65,6 +67,10 @@ The rescope: Logbook now remembers a session per branch (an observer records it,
 - **Fixed: an automatic savepoint could save nothing, silently.** A pass holds the worker lock across its model calls, but a savepoint waited only 5 seconds for it and then gave up, and the lock helper treated any lock older than 10 seconds as abandoned, so a long pass could be taken over and run twice at once. Passes now keep their lock for as long as a model call can take (300 s), a savepoint waits for a running pass (up to 150 s) and then does its own observing, and says so if it still cannot get the lock. Found by a real Claude session on the TestPyPI build; `tests/test_day.py` now runs passes in parallel against a slow fake model to keep it fixed.
 - **Fixed: `claude` is looked up with `which` before it is run**, so a `claude.cmd` shim (an npm install on Windows) works as well as an executable.
 - **The band's mode selector in the plugin shows `manual ask auto`** and the plugin version moves with the package, so an installed copy updates.
+
+## 0.0.5 (never released)
+
+No final 0.0.5 was published. It exists only as release candidates on TestPyPI (`0.0.5rc1`, `rc3`, `rc4`, `rc5`; the `v0.0.5rc2` tag published nothing). Its changes shipped in 0.0.6 and are listed there; entries that 0.0.5 and earlier wrote from a transcript or a commit are the `auto-copied` ones.
 
 ## 0.0.4
 
